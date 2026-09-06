@@ -78,10 +78,39 @@ jobs:
           core_exports="$(x86_64-w64-mingw32-objdump -p d3d11on12core.dll)"
           grep -q 'WineD3D11On12GetABIVersion' <<<"$core_exports"
           grep -q 'WineD3D11On12CreateDeviceV1' <<<"$core_exports"
+          grep -q 'WineD3D11On12GetInterface' <<<"$core_exports"
           exports="$(x86_64-w64-mingw32-objdump -p d3d11shim.dll)"
           grep -q 'D3D11CreateDevice' <<<"$exports"
           grep -q 'D3D11CreateDeviceAndSwapChain' <<<"$exports"
           grep -q 'D3D11On12CreateDevice' <<<"$exports"
+          python3 - <<'PY'
+          import re
+          import subprocess
+
+          expected = {
+              "d3d11shim.dll": {
+                  1: "D3D11CreateDevice",
+                  2: "D3D11CreateDeviceAndSwapChain",
+                  3: "D3D11On12CreateDevice",
+              },
+              "d3d11on12core.dll": {
+                  1: "WineD3D11On12GetABIVersion",
+                  2: "WineD3D11On12CreateDeviceV1",
+                  3: "WineD3D11On12GetInterface",
+              },
+          }
+          for path, wanted in expected.items():
+              output = subprocess.check_output(
+                  ["x86_64-w64-mingw32-objdump", "-p", path], text=True)
+              base = int(re.search(r"Ordinal Base\s+(\d+)", output).group(1))
+              names = output.split("[Ordinal/Name Pointer] Table", 1)[1]
+              actual = {
+                  base + int(index): name
+                  for index, name in re.findall(r"\[\s*(\d+)\]\s+(\S+)", names)
+              }
+              if actual != wanted:
+                  raise SystemExit(f"{path}: exports {actual}, expected {wanted}")
+          PY
           if x86_64-w64-mingw32-objdump -p \
               d3d11shim.dll d3d11on12core.dll \
               | grep -Eiq 'libstdc\+\+|libgcc_s'; then
@@ -89,10 +118,13 @@ jobs:
             exit 1
           fi
 
-      - name: Upload D3D11-on-12 conformance probe
+      - name: Upload D3D11-on-12 development artifacts
         uses: actions/upload-artifact@v4
         with:
           name: d3d11on12probe-${{ github.event.pull_request.head.sha || github.sha }}
-          path: d3d11on12probe.exe
+          path: |
+            d3d11on12probe.exe
+            d3d11shim.dll
+            d3d11on12core.dll
           if-no-files-found: error
           retention-days: 14

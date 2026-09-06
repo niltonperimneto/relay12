@@ -9,5 +9,7 @@ D3D11-on-12 path. Until that core implements the real D3D11 runtime/DDI host,
 the public entry point returns `DXGI_ERROR_UNSUPPORTED` with initialized output
 parameters.
 
-The versioned C ABI is intentional: C++ exceptions, allocation ownership and
+The core publishes a size/versioned `WineD3D11On12Interface` function table.
+The router rejects unknown versions, unexpected structure sizes and missing
+required entry points. C++ exceptions, allocation ownership and
 implementation-specific C++ types must never cross the module boundary.
