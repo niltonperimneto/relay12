@@ -51,6 +51,11 @@ struct mock_device
     const D3D_FEATURE_LEVEL *expected_levels;
     UINT expected_level_count;
     int bad_feature_request;
+    /* Answer an IID_IUnknown query with S_OK and no pointer, the way the
+     * D3DMetal payload is known to.  The typed interfaces stay correct: this
+     * is the object that defeats an identity comparison which only checks the
+     * HRESULT, because two of them compare equal to each other. */
+    int lie_about_identity;
 };
 
 static struct mock_device *impl_from_device(ID3D12Device *iface)
@@ -65,6 +70,11 @@ static HRESULT STDMETHODCALLTYPE mock_device_QueryInterface(ID3D12Device *iface,
 
     if (!out)
         return E_POINTER;
+    if (IsEqualGUID(riid, &IID_IUnknown) && device->lie_about_identity)
+    {
+        *out = NULL;
+        return S_OK;
+    }
     if (IsEqualGUID(riid, &IID_IUnknown)
             || IsEqualGUID(riid, &IID_ID3D12Device))
     {
@@ -567,11 +577,78 @@ static void test_contract_violating_objects(void)
     queues[0] = (IUnknown *)&queue.ID3D12CommandQueue_iface;
     hr = call_create((IUnknown *)&device.ID3D12Device_iface, NULL, 0, queues, 1,
             0, &out);
-    check_hr("queue reporting success without its device", hr, E_INVALIDARG);
+    /* Success with no interface is the same contract violation wherever it
+     * comes from, so it gets the same answer as a rejected QueryInterface. */
+    check_hr("queue reporting success without its device", hr, E_NOINTERFACE);
     check_cleared("queue reporting success without its device", &out);
     queue.lie_about_device = 0;
 
+    queue.device = NULL;
+    hr = call_create((IUnknown *)&device.ID3D12Device_iface, NULL, 0, queues, 1,
+            0, &out);
+    check_hr("a failed GetDevice is propagated", hr, E_FAIL);
+    check_cleared("a failed GetDevice is propagated", &out);
+    queue.device = &device;
+
     check_balanced("contract-violating objects", &device, &queue);
+}
+
+/* An object whose typed interfaces are correct but whose IUnknown query
+ * returns success without a pointer.  Comparing two such answers yields
+ * NULL == NULL, so an identity check that only tested the HRESULT accepted a
+ * queue belonging to a different device.  These cases fail before that fix. */
+static void test_identity_of_contract_violating_devices(void)
+{
+    struct mock_device device, other_device;
+    struct mock_queue queue, foreign_queue;
+    IUnknown *queues[1];
+    struct outputs out;
+    HRESULT hr;
+
+    mock_device_init(&device);
+    mock_device_init(&other_device);
+    device.lie_about_identity = 1;
+    other_device.lie_about_identity = 1;
+    mock_queue_init(&queue, &device, D3D12_COMMAND_LIST_TYPE_DIRECT);
+    mock_queue_init(&foreign_queue, &other_device,
+            D3D12_COMMAND_LIST_TYPE_DIRECT);
+
+    /* The defect this closes: a foreign queue must not be accepted just
+     * because neither device would identify itself. */
+    queues[0] = (IUnknown *)&foreign_queue.ID3D12CommandQueue_iface;
+    hr = call_create((IUnknown *)&device.ID3D12Device_iface, NULL, 0, queues, 1,
+            0, &out);
+    check_hr("foreign queue with unidentifiable devices", hr, E_NOINTERFACE);
+    check_cleared("foreign queue with unidentifiable devices", &out);
+    check_balanced("foreign queue with unidentifiable devices", &device,
+            &foreign_queue);
+    check_balanced("foreign queue with unidentifiable devices", &other_device,
+            NULL);
+
+    /* And the cost that must not be paid for it: a payload whose only defect
+     * is the IUnknown query is still usable, because two equal ID3D12Device
+     * pointers answer the question without it. */
+    queues[0] = (IUnknown *)&queue.ID3D12CommandQueue_iface;
+    hr = call_create((IUnknown *)&device.ID3D12Device_iface, NULL, 0, queues, 1,
+            0, &out);
+    check_hr("own queue with an unidentifiable device", hr,
+            DXGI_ERROR_UNSUPPORTED);
+    check_cleared("own queue with an unidentifiable device", &out);
+    check_balanced("own queue with an unidentifiable device", &device, &queue);
+
+    /* One side identifying itself and the other not is still indeterminate,
+     * and indeterminate is a rejection. */
+    other_device.lie_about_identity = 0;
+    queues[0] = (IUnknown *)&foreign_queue.ID3D12CommandQueue_iface;
+    hr = call_create((IUnknown *)&device.ID3D12Device_iface, NULL, 0, queues, 1,
+            0, &out);
+    check_hr("foreign queue with one unidentifiable device", hr,
+            E_NOINTERFACE);
+    check_cleared("foreign queue with one unidentifiable device", &out);
+    check_balanced("foreign queue with one unidentifiable device", &device,
+            &foreign_queue);
+    check_balanced("foreign queue with one unidentifiable device",
+            &other_device, NULL);
 }
 
 static void test_feature_levels(void)
@@ -729,6 +806,7 @@ int main(void)
     test_argument_validation();
     test_interface_validation();
     test_contract_violating_objects();
+    test_identity_of_contract_violating_devices();
     test_feature_levels();
     test_fail_closed();
     test_optional_outputs();
