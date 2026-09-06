@@ -111,7 +111,9 @@ static HRESULT STDMETHODCALLTYPE mock_device_CheckFeatureSupport(
     return device->feature_hr;
 }
 
-static const ID3D12DeviceVtbl mock_device_vtbl =
+/* Not const: the widl C interface declares lpVtbl as a pointer to
+ * non-const. */
+static ID3D12DeviceVtbl mock_device_vtbl =
 {
     .QueryInterface = mock_device_QueryInterface,
     .AddRef = mock_device_AddRef,
@@ -201,7 +203,9 @@ static D3D12_COMMAND_QUEUE_DESC * STDMETHODCALLTYPE mock_queue_GetDesc(
     return ret;
 }
 
-static const ID3D12CommandQueueVtbl mock_queue_vtbl =
+/* Not const: the widl C interface declares lpVtbl as a pointer to
+ * non-const. */
+static ID3D12CommandQueueVtbl mock_queue_vtbl =
 {
     .QueryInterface = mock_queue_QueryInterface,
     .AddRef = mock_queue_AddRef,
@@ -259,7 +263,9 @@ static ULONG STDMETHODCALLTYPE mock_unknown_Release(IUnknown *iface)
     return InterlockedDecrement(&impl_from_unknown(iface)->refcount);
 }
 
-static const IUnknownVtbl mock_unknown_vtbl =
+/* Not const: the widl C interface declares lpVtbl as a pointer to
+ * non-const. */
+static IUnknownVtbl mock_unknown_vtbl =
 {
     .QueryInterface = mock_unknown_QueryInterface,
     .AddRef = mock_unknown_AddRef,
@@ -296,7 +302,9 @@ static ULONG STDMETHODCALLTYPE mock_liar_Release(IUnknown *iface)
     return InterlockedDecrement(&impl_from_unknown(iface)->refcount);
 }
 
-static const IUnknownVtbl mock_liar_vtbl =
+/* Not const: the widl C interface declares lpVtbl as a pointer to
+ * non-const. */
+static IUnknownVtbl mock_liar_vtbl =
 {
     .QueryInterface = mock_liar_QueryInterface,
     .AddRef = mock_liar_AddRef,
