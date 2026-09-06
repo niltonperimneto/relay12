@@ -13,14 +13,18 @@ This patch:
    device and provides an ID3D11On12Device wrapper.
 
 ---
- dlls/d3d11/d3d11_main.c | 129 +++++++++++++++++++++++++++++++++++++++++++++++-
- 1 file changed, 128 insertions(+), 1 deletion(-)
+ dlls/d3d11/d3d11_main.c | 145 +++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 142 insertions(+), 3 deletions(-)
 
 diff --git a/dlls/d3d11/d3d11_main.c b/dlls/d3d11/d3d11_main.c
-index 7598631..954c328 100644
+index 7598631..c5452be 100644
 --- a/dlls/d3d11/d3d11_main.c
 +++ b/dlls/d3d11/d3d11_main.c
-@@ -25,6 +25,98 @@
+@@ -22,9 +22,117 @@
+ 
+ #define D3D11_INIT_GUID
+ #include "d3d11_private.h"
++#include <d3d11on12.h>
  
  WINE_DEFAULT_DEBUG_CHANNEL(d3d11);
  
@@ -43,8 +47,7 @@ index 7598631..954c328 100644
 +{
 +    struct d3d11on12_device *device = impl_from_ID3D11On12Device(iface);
 +
-+    TRACE("iface %p, iid %s, out %p.
-+", iface, debugstr_guid(iid), out);
++    TRACE("iface %p, iid %s, out %p.\n", iface, debugstr_guid(iid), out);
 +
 +    if (IsEqualGUID(iid, &IID_IUnknown) ||
 +        IsEqualGUID(iid, &IID_ID3D11On12Device))
@@ -54,24 +57,26 @@ index 7598631..954c328 100644
 +        return S_OK;
 +    }
 +
-+    return ID3D11Device_QueryInterface(device->d3d11_device, iid, out);
++    if (device->d3d11_device)
++        return ID3D11Device_QueryInterface(device->d3d11_device, iid, out);
++
++    *out = NULL;
++    return E_NOINTERFACE;
 +}
 +
 +static ULONG WINAPI d3d11on12_device_AddRef(ID3D11On12Device *iface)
 +{
 +    struct d3d11on12_device *device = impl_from_ID3D11On12Device(iface);
 +    ULONG refcount = InterlockedIncrement(&device->refcount);
-+    TRACE("%p increasing refcount to %lu.
-+", device, refcount);
++    TRACE("%p increasing refcount to %lu.\n", device, refcount);
 +    return refcount;
 +}
 +
-+static ULONG WINAPI d3d11on12_device_Release(ID3D11On12Device *iface)
+ static ULONG WINAPI d3d11on12_device_Release(ID3D11On12Device *iface)
 +{
 +    struct d3d11on12_device *device = impl_from_ID3D11On12Device(iface);
 +    ULONG refcount = InterlockedDecrement(&device->refcount);
-+    TRACE("%p decreasing refcount to %lu.
-+", device, refcount);
++    TRACE("%p decreasing refcount to %lu.\n", device, refcount);
 +    if (!refcount)
 +    {
 +        if (device->d3d11_device)
@@ -86,24 +91,23 @@ index 7598631..954c328 100644
 +        D3D12_RESOURCE_STATES input_state, D3D12_RESOURCE_STATES output_state,
 +        REFIID iid, void **d3d11_resource)
 +{
-+    WARN("Stub CreateWrappedResource called (d3d12_resource %p, flags %p, iid %s).
-+",
++    WARN("Stub CreateWrappedResource called (d3d12_resource %p, flags %p, iid %s).\n",
 +            d3d12_resource, flags, debugstr_guid(iid));
-+    return S_OK;
++    if (d3d11_resource)
++        *d3d11_resource = NULL;
++    return E_NOTIMPL;
 +}
 +
 +static void WINAPI d3d11on12_device_ReleaseWrappedResources(ID3D11On12Device *iface,
 +        ID3D11Resource * const *resources, UINT count)
 +{
-+    TRACE("Stub ReleaseWrappedResources called (count %u).
-+", count);
++    TRACE("Stub ReleaseWrappedResources called (count %u).\n", count);
 +}
 +
 +static void WINAPI d3d11on12_device_AcquireWrappedResources(ID3D11On12Device *iface,
 +        ID3D11Resource * const *resources, UINT count)
 +{
-+    TRACE("Stub AcquireWrappedResources called (count %u).
-+", count);
++    TRACE("Stub AcquireWrappedResources called (count %u).\n", count);
 +}
 +
 +static const struct ID3D11On12DeviceVtbl d3d11on12_device_vtbl =
@@ -116,6 +120,71 @@ index 7598631..954c328 100644
 +    d3d11on12_device_AcquireWrappedResources,
 +};
 +
++static struct d3d11on12_device *d3d11on12_device_create(ID3D11Device *d3d11_device)
++{
++    struct d3d11on12_device *device;
++
++    if (!(device = calloc(1, sizeof(*device))))
++        return NULL;
++
++    device->ID3D11On12Device_iface.lpVtbl = &d3d11on12_device_vtbl;
++    device->refcount = 1;
++    device->d3d11_device = d3d11_device;
++    ID3D11Device_AddRef(d3d11_device);
++
++    return device;
++}
++
  static const char *debug_d3d_driver_type(D3D_DRIVER_TYPE driver_type)
  {
      switch (driver_type)
+@@ -384,11 +492,44 @@ HRESULT WINAPI D3D11On12CreateDevice(IUnknown *device, UINT flags,
+         ID3D11Device **d3d11_device, ID3D11DeviceContext **d3d11_immediate_context,
+         D3D_FEATURE_LEVEL *obtained_feature_level)
+ {
+-    FIXME("device %p, flags %#x, feature_levels %p, feature_level_count %u, "
++    PFN_D3D11ON12_CREATE_DEVICE pfn_create;
++    HRESULT hr;
++
++    TRACE("device %p, flags %#x, feature_levels %p, feature_level_count %u, "
+             "queues %p, queue_count %u, node_mask 0x%08x, "
+-            "d3d11_device %p, d3d11_immediate_context %p, obtained_feature_level %p stub!\n",
++            "d3d11_device %p, d3d11_immediate_context %p, obtained_feature_level %p.\n",
+             device, flags, feature_levels, feature_level_count, queues, queue_count,
+             node_mask, d3d11_device, d3d11_immediate_context, obtained_feature_level);
+ 
+-    return E_NOTIMPL;
++    if (!d3d11on12_module)
++        d3d11on12_module = LoadLibraryA("d3d11on12.dll");
++
++    if (d3d11on12_module)
++    {
++        pfn_create = (PFN_D3D11ON12_CREATE_DEVICE)GetProcAddress(d3d11on12_module, "D3D11On12CreateDevice");
++        if (pfn_create)
++        {
++            return pfn_create(device, flags, feature_levels, feature_level_count,
++                    queues, queue_count, node_mask, d3d11_device,
++                    d3d11_immediate_context, obtained_feature_level);
++        }
++    }
++
++    /* Fallback: initialize a D3D11 hardware device if no native d3d11on12.dll is available */
++    WARN("d3d11on12.dll not present, falling back to D3D11 device.\n");
++    hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, flags,
++            feature_levels, feature_level_count, D3D11_SDK_VERSION,
++            d3d11_device, obtained_feature_level, d3d11_immediate_context);
++    if (SUCCEEDED(hr) && d3d11_device && *d3d11_device)
++    {
++        struct d3d11on12_device *on12_device = d3d11on12_device_create(*d3d11_device);
++        if (on12_device)
++        {
++            ID3D11Device_SetPrivateDataInterface(*d3d11_device, &IID_ID3D11On12Device,
++                    (IUnknown *)&on12_device->ID3D11On12Device_iface);
++            ID3D11On12Device_Release(&on12_device->ID3D11On12Device_iface);
++        }
++    }
++
++    return hr;
+ }
+-- 
+2.51.0
