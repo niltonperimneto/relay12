@@ -118,6 +118,38 @@ jobs:
             echo 'unexpected C++ runtime dependency' >&2
             exit 1
           fi
+          python3 - <<'PY'
+          import re
+          import subprocess
+
+          allowed = {
+              "d3d11shim.dll": {"kernel32.dll", "msvcrt.dll"},
+              "d3d11on12core.dll": {"kernel32.dll", "msvcrt.dll"},
+          }
+          for path, wanted in allowed.items():
+              output = subprocess.check_output(
+                  ["x86_64-w64-mingw32-objdump", "-p", path], text=True)
+              actual = {
+                  name.lower()
+                  for name in re.findall(r"DLL Name:\s+(\S+)", output)
+              }
+              if actual != wanted:
+                  raise SystemExit(f"{path}: imports {actual}, expected {wanted}")
+          PY
+
+      - name: Verify reproducible source package
+        run: |
+          set -euo pipefail
+          sh scripts/package-d3d11on12-source.sh source-one.tar.gz
+          sh scripts/package-d3d11on12-source.sh source-two.tar.gz
+          cmp source-one.tar.gz source-two.tar.gz
+          mv source-one.tar.gz d3d11on12-source.tar.gz
+          tar -tzf d3d11on12-source.tar.gz \
+            | grep -q '^winecx-gptk/third_party/D3D11On12/LICENSE$'
+          tar -tzf d3d11on12-source.tar.gz \
+            | grep -q '^winecx-gptk/third_party/D3D12TranslationLayer/LICENSE$'
+          tar -tzf d3d11on12-source.tar.gz \
+            | grep -q '^winecx-gptk/third_party/DirectX-Headers/LICENSE$'
 
       - name: Upload D3D11-on-12 development artifacts
         uses: actions/upload-artifact@v4
@@ -127,5 +159,6 @@ jobs:
             d3d11on12probe.exe
             d3d11shim.dll
             d3d11on12core.dll
+            d3d11on12-source.tar.gz
           if-no-files-found: error
           retention-days: 14
