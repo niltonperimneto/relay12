@@ -30,6 +30,18 @@ struct Backend
 INIT_ONCE initOnce = INIT_ONCE_STATIC_INIT;
 Backend backend = {};
 
+template<typename Function>
+Function resolve(HMODULE module, const char *name) noexcept
+{
+    const FARPROC address = GetProcAddress(module, name);
+    Function function = nullptr;
+
+    static_assert(sizeof(function) == sizeof(address),
+            "Win32 function and FARPROC pointers must have equal size");
+    __builtin_memcpy(&function, &address, sizeof(function));
+    return function;
+}
+
 BOOL CALLBACK initializeBackend(PINIT_ONCE, PVOID, PVOID *) noexcept
 {
     /* These are Wine builtin modules installed in the prefix's system32.
@@ -38,11 +50,10 @@ BOOL CALLBACK initializeBackend(PINIT_ONCE, PVOID, PVOID *) noexcept
     backend.apple = LoadLibraryW(L"d3d11mt.dll");
     if (backend.apple)
     {
-        backend.createDevice = reinterpret_cast<CreateDeviceFn>(
-                GetProcAddress(backend.apple, "D3D11CreateDevice"));
-        backend.createDeviceAndSwapChain =
-                reinterpret_cast<CreateDeviceAndSwapChainFn>(GetProcAddress(
-                backend.apple, "D3D11CreateDeviceAndSwapChain"));
+        backend.createDevice = resolve<CreateDeviceFn>(backend.apple,
+                "D3D11CreateDevice");
+        backend.createDeviceAndSwapChain = resolve<CreateDeviceAndSwapChainFn>(
+                backend.apple, "D3D11CreateDeviceAndSwapChain");
     }
 
     /* This module is deliberately optional.  The router is safe to deploy
@@ -50,8 +61,8 @@ BOOL CALLBACK initializeBackend(PINIT_ONCE, PVOID, PVOID *) noexcept
      * an object with false D3D11On12 semantics. */
     backend.on12 = LoadLibraryW(L"d3d11on12core.dll");
     if (backend.on12)
-        backend.createOn12Device = reinterpret_cast<On12CreateDeviceFn>(
-                GetProcAddress(backend.on12, "WineD3D11On12CreateDeviceV1"));
+        backend.createOn12Device = resolve<On12CreateDeviceFn>(backend.on12,
+                "WineD3D11On12CreateDeviceV1");
 
     return TRUE;
 }
