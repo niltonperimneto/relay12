@@ -1122,6 +1122,15 @@ jobs:
           fi
           echo "graphics payloads: ok"
 
+          # D3DMetal itself is user-supplied and cannot run in CI, but ship a
+          # strict probe with the runtime so an imported payload can be tested
+          # against the D3D11-on-12 contract on the target Mac.
+          mkdir -p Libraries/Tests
+          x86_64-w64-mingw32-gcc -O2 -Wall -Werror \
+            -o Libraries/Tests/d3d11on12probe.exe tests/d3d11on12probe.c \
+            -ld3d11 -ld3d12 -ldxgi -ldxguid -luuid
+          echo "d3d11-on-12 conformance probe: built"
+
           # and the media half: winedmo builds whether or not ffmpeg was there,
           # it just does nothing without it
           otool -L Libraries/Wine/lib/wine/x86_64-unix/winedmo.so \
