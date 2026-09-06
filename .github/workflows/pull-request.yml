@@ -1,0 +1,42 @@
+name: pull request validation
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-d3d11on12:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MinGW-w64 GCC
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gcc-mingw-w64-x86-64
+
+      - name: Verify Wine patches
+        env:
+          WINECX_REPO: https://github.com/dappermint/winecx.git
+          WINECX_COMMIT: 7dbc5b5322a6ef3fb04bdc643c64b188fd641149
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none "$WINECX_REPO" winecx
+          git -C winecx checkout --detach "$WINECX_COMMIT"
+          for patch in "$PWD"/patches/*.patch; do
+            [ -e "$patch" ] || break
+            git -C winecx apply --check "$patch"
+            git -C winecx apply "$patch"
+          done
+
+      - name: Compile D3D11-on-12 conformance probe
+        run: |
+          set -euo pipefail
+          x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -Werror \
+            -o d3d11on12probe.exe tests/d3d11on12probe.c \
+            -ld3d11 -ld3d12 -ldxgi -ldxguid -luuid
+          x86_64-w64-mingw32-objdump -p d3d11on12probe.exe \
+            | grep -q D3D11On12CreateDevice
