@@ -23,7 +23,7 @@ struct Backend
     HMODULE on12;
     CreateDeviceFn createDevice;
     CreateDeviceAndSwapChainFn createDeviceAndSwapChain;
-    WineD3D11On12CreateDeviceFn createOn12Device;
+    WineD3D11On12Interface on12Interface;
 };
 
 INIT_ONCE initOnce = INIT_ONCE_STATIC_INIT;
@@ -61,11 +61,15 @@ BOOL CALLBACK initializeBackend(PINIT_ONCE, PVOID, PVOID *) noexcept
     backend.on12 = LoadLibraryW(L"d3d11on12core.dll");
     if (backend.on12)
     {
-        const auto getVersion = resolve<WineD3D11On12GetABIVersionFn>(
-                backend.on12, "WineD3D11On12GetABIVersion");
-        if (getVersion && getVersion() == WINE_D3D11ON12_ABI_VERSION)
-            backend.createOn12Device = resolve<WineD3D11On12CreateDeviceFn>(
-                    backend.on12, "WineD3D11On12CreateDeviceV1");
+        const auto getInterface = resolve<WineD3D11On12GetInterfaceFn>(
+                backend.on12, "WineD3D11On12GetInterface");
+        if (!getInterface || FAILED(getInterface(WINE_D3D11ON12_ABI_VERSION,
+                sizeof(backend.on12Interface), &backend.on12Interface))
+                || backend.on12Interface.size != sizeof(backend.on12Interface)
+                || backend.on12Interface.version != WINE_D3D11ON12_ABI_VERSION
+                || !backend.on12Interface.createDevice)
+            ZeroMemory(&backend.on12Interface,
+                    sizeof(backend.on12Interface));
     }
 
     return TRUE;
@@ -127,10 +131,10 @@ extern "C" HRESULT WINAPI shimD3D11On12CreateDevice(IUnknown *device12,
         return E_INVALIDARG;
 
     initialize();
-    if (!backend.createOn12Device)
+    if (!backend.on12Interface.createDevice)
         return DXGI_ERROR_UNSUPPORTED;
 
-    return backend.createOn12Device(device12, flags, featureLevels,
+    return backend.on12Interface.createDevice(device12, flags, featureLevels,
             featureLevelCount, commandQueues, queueCount, nodeMask, device11,
             immediateContext, chosenFeatureLevel);
 }

@@ -62,6 +62,24 @@ extern "C" UINT WINAPI WineD3D11On12GetABIVersion() noexcept
     return WINE_D3D11ON12_ABI_VERSION;
 }
 
+extern "C" HRESULT WINAPI WineD3D11On12GetInterface(UINT requestedVersion,
+        UINT interfaceSize, WineD3D11On12Interface *interfaceOut) noexcept
+{
+    if (!interfaceOut || interfaceSize != sizeof(*interfaceOut))
+        return E_INVALIDARG;
+
+    ZeroMemory(interfaceOut, sizeof(*interfaceOut));
+    interfaceOut->size = sizeof(*interfaceOut);
+    interfaceOut->version = WINE_D3D11ON12_ABI_VERSION;
+
+    if (requestedVersion != WINE_D3D11ON12_ABI_VERSION)
+        return E_NOINTERFACE;
+
+    interfaceOut->capabilities = WINE_D3D11ON12_CAP_VALIDATION;
+    interfaceOut->createDevice = WineD3D11On12CreateDeviceV1;
+    return S_OK;
+}
+
 extern "C" HRESULT WINAPI WineD3D11On12CreateDeviceV1(IUnknown *deviceObject,
         UINT, const D3D_FEATURE_LEVEL *featureLevels, UINT featureLevelCount,
         IUnknown *const *queueObjects, UINT queueCount, UINT nodeMask,
