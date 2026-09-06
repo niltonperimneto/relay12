@@ -838,23 +838,32 @@ jobs:
           x86_64-w64-mingw32-g++ -shared -std=c++17 -O2 \
             -Wall -Wextra -Werror -fno-exceptions -fno-rtti \
             -fno-threadsafe-statics -fno-use-cxa-atexit \
+            -o Libraries/Wine/lib/gptk-d3d11/d3d11on12core.dll \
+            "$GITHUB_WORKSPACE/gptk-d3d11/d3d11on12core.cpp" \
+            "$GITHUB_WORKSPACE/gptk-d3d11/d3d11on12core.def" \
+            -I"$GITHUB_WORKSPACE/gptk-d3d11" -ld3d12 -ldxgi -luuid
+          x86_64-w64-mingw32-g++ -shared -std=c++17 -O2 \
+            -Wall -Wextra -Werror -fno-exceptions -fno-rtti \
+            -fno-threadsafe-statics -fno-use-cxa-atexit \
             -o Libraries/Wine/lib/gptk-d3d11/d3d11shim.dll \
             "$GITHUB_WORKSPACE/gptk-d3d11/d3d11shim.cpp" \
             "$GITHUB_WORKSPACE/gptk-d3d11/d3d11shim.def" \
             -ld3d11 -ldxgi
 
-          python3 - Libraries/Wine/lib/gptk-d3d11/d3d11shim.dll <<'EOF'
+          python3 - Libraries/Wine/lib/gptk-d3d11/d3d11shim.dll \
+              Libraries/Wine/lib/gptk-d3d11/d3d11on12core.dll <<'EOF'
           import struct, sys
-          p = sys.argv[1]
-          d = bytearray(open(p, 'rb').read())
-          if struct.unpack_from('<I', d, 0x3c)[0] < 0x60:
-              raise SystemExit('pe header overlaps the builtin marker')
-          d[0x40:0x60] = b'Wine builtin DLL' + b'\0' * 16
-          open(p, 'wb').write(bytes(d))
+          for p in sys.argv[1:]:
+              d = bytearray(open(p, 'rb').read())
+              if struct.unpack_from('<I', d, 0x3c)[0] < 0x60:
+                  raise SystemExit('pe header overlaps the builtin marker')
+              d[0x40:0x60] = b'Wine builtin DLL' + b'\0' * 16
+              open(p, 'wb').write(bytes(d))
           EOF
 
           if x86_64-w64-mingw32-objdump -p \
               Libraries/Wine/lib/gptk-d3d11/d3d11shim.dll \
+              Libraries/Wine/lib/gptk-d3d11/d3d11on12core.dll \
               | grep -Eiq 'libstdc\+\+|libgcc_s'; then
             echo 'd3d11 shim acquired a C++ runtime dependency' >&2
             exit 1
