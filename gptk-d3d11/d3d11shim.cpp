@@ -11,21 +11,19 @@
 #include <d3d11.h>
 #include <d3d11on12.h>
 
+#include "d3d11on12core.h"
+
 namespace
 {
 using CreateDeviceFn = decltype(&D3D11CreateDevice);
 using CreateDeviceAndSwapChainFn = decltype(&D3D11CreateDeviceAndSwapChain);
-using On12CreateDeviceFn = HRESULT (WINAPI *)(IUnknown *, UINT,
-        const D3D_FEATURE_LEVEL *, UINT, IUnknown *const *, UINT, UINT,
-        ID3D11Device **, ID3D11DeviceContext **, D3D_FEATURE_LEVEL *);
-
 struct Backend
 {
     HMODULE apple;
     HMODULE on12;
     CreateDeviceFn createDevice;
     CreateDeviceAndSwapChainFn createDeviceAndSwapChain;
-    On12CreateDeviceFn createOn12Device;
+    WineD3D11On12CreateDeviceFn createOn12Device;
 };
 
 INIT_ONCE initOnce = INIT_ONCE_STATIC_INIT;
@@ -62,8 +60,13 @@ BOOL CALLBACK initializeBackend(PINIT_ONCE, PVOID, PVOID *) noexcept
      * an object with false D3D11On12 semantics. */
     backend.on12 = LoadLibraryW(L"d3d11on12core.dll");
     if (backend.on12)
-        backend.createOn12Device = resolve<On12CreateDeviceFn>(backend.on12,
-                "WineD3D11On12CreateDeviceV1");
+    {
+        const auto getVersion = resolve<WineD3D11On12GetABIVersionFn>(
+                backend.on12, "WineD3D11On12GetABIVersion");
+        if (getVersion && getVersion() == WINE_D3D11ON12_ABI_VERSION)
+            backend.createOn12Device = resolve<WineD3D11On12CreateDeviceFn>(
+                    backend.on12, "WineD3D11On12CreateDeviceV1");
+    }
 
     return TRUE;
 }

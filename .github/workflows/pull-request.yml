@@ -68,13 +68,22 @@ jobs:
           x86_64-w64-mingw32-g++ -shared -std=c++17 -O2 \
             -Wall -Wextra -Werror -fno-exceptions -fno-rtti \
             -fno-threadsafe-statics -fno-use-cxa-atexit \
+            -o d3d11on12core.dll gptk-d3d11/d3d11on12core.cpp \
+            gptk-d3d11/d3d11on12core.def -ld3d12 -ldxgi -luuid
+          x86_64-w64-mingw32-g++ -shared -std=c++17 -O2 \
+            -Wall -Wextra -Werror -fno-exceptions -fno-rtti \
+            -fno-threadsafe-statics -fno-use-cxa-atexit \
             -o d3d11shim.dll gptk-d3d11/d3d11shim.cpp \
             gptk-d3d11/d3d11shim.def -ld3d11 -ldxgi
+          core_exports="$(x86_64-w64-mingw32-objdump -p d3d11on12core.dll)"
+          grep -q 'WineD3D11On12GetABIVersion' <<<"$core_exports"
+          grep -q 'WineD3D11On12CreateDeviceV1' <<<"$core_exports"
           exports="$(x86_64-w64-mingw32-objdump -p d3d11shim.dll)"
           grep -q 'D3D11CreateDevice' <<<"$exports"
           grep -q 'D3D11CreateDeviceAndSwapChain' <<<"$exports"
           grep -q 'D3D11On12CreateDevice' <<<"$exports"
-          if x86_64-w64-mingw32-objdump -p d3d11shim.dll \
+          if x86_64-w64-mingw32-objdump -p \
+              d3d11shim.dll d3d11on12core.dll \
               | grep -Eiq 'libstdc\+\+|libgcc_s'; then
             echo 'unexpected C++ runtime dependency' >&2
             exit 1
