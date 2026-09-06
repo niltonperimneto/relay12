@@ -1,4 +1,5 @@
-/* D3DMetal d3d11.dll router.
+/* SPDX-License-Identifier: GPL-3.0-only
+ * D3DMetal d3d11.dll router.
  *
  * Normal D3D11 creation remains owned by Apple's forwarder, renamed to
  * d3d11mt.dll at deployment time.  D3D11On12CreateDevice is routed to an
