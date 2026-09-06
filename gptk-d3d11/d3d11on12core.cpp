@@ -42,6 +42,14 @@ void clearOutputs(ID3D11Device **device, ID3D11DeviceContext **context,
         *featureLevel = static_cast<D3D_FEATURE_LEVEL>(0);
 }
 
+/* The core is an ordinary PE module rather than a Wine builtin, so Wine's
+ * ERR and TRACE macros are unavailable here.  OutputDebugStringA reaches the
+ * same debug output and imports only from kernel32. */
+void reportDiagnostic(const char *message) noexcept
+{
+    OutputDebugStringA(message);
+}
+
 bool sameComObject(IUnknown *left, IUnknown *right) noexcept
 {
     ComRef<IUnknown> leftIdentity;
@@ -95,26 +103,39 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateDeviceV1(IUnknown *deviceObject,
     if (nodeMask && (nodeMask & (nodeMask - 1)))
         return E_INVALIDARG;
 
+    /* Propagate the QueryInterface result.  A caller that passed something
+     * which is not a D3D12 device or queue must be told E_NOINTERFACE rather
+     * than a generic argument error. */
+    /* A success code with a null pointer breaks the COM contract, but this
+     * boundary faces a proprietary payload: treat it as no interface rather
+     * than dereferencing it. */
     ComRef<ID3D12Device> device12;
     HRESULT hr = deviceObject->QueryInterface(IID_ID3D12Device,
             reinterpret_cast<void **>(device12.put()));
-    if (FAILED(hr))
-        // TODO: PR Review Point 3 - Consider propagating 'hr' (E_NOINTERFACE) instead of masking it with E_INVALIDARG.
-        return E_INVALIDARG;
+    if (FAILED(hr) || !device12.get())
+    {
+        reportDiagnostic("d3d11on12core: the supplied device object does not "
+                "implement ID3D12Device.\n");
+        return FAILED(hr) ? hr : E_NOINTERFACE;
+    }
 
     ComRef<ID3D12CommandQueue> queue;
     hr = queueObjects[0]->QueryInterface(IID_ID3D12CommandQueue,
             reinterpret_cast<void **>(queue.put()));
-    if (FAILED(hr))
-        // TODO: PR Review Point 3 - Consider propagating 'hr' (E_NOINTERFACE) instead of masking it with E_INVALIDARG.
-        return E_INVALIDARG;
+    if (FAILED(hr) || !queue.get())
+    {
+        reportDiagnostic("d3d11on12core: the supplied queue object does not "
+                "implement ID3D12CommandQueue.\n");
+        return FAILED(hr) ? hr : E_NOINTERFACE;
+    }
     if (queue.get()->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_DIRECT)
         return E_INVALIDARG;
 
     ComRef<ID3D12Device> queueDevice;
     hr = queue.get()->GetDevice(IID_ID3D12Device,
             reinterpret_cast<void **>(queueDevice.put()));
-    if (FAILED(hr) || !sameComObject(device12.get(), queueDevice.get()))
+    if (FAILED(hr) || !queueDevice.get()
+            || !sameComObject(device12.get(), queueDevice.get()))
         return E_INVALIDARG;
 
     if (featureLevelCount)
@@ -131,6 +152,8 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateDeviceV1(IUnknown *deviceObject,
     /* The next milestone constructs the Wine D3D11 runtime/DDI host here.
      * Never return success until genuine ID3D11Device and context objects are
      * backed by the supplied device and queue. */
-    // TODO: PR Review Point 1 - Add a diagnostic trace here stating D3D11On12 is intentionally stubbed for this milestone.
+    reportDiagnostic("d3d11on12core: device and queue accepted, but no D3D11 "
+            "runtime/DDI host is implemented in this milestone; returning "
+            "DXGI_ERROR_UNSUPPORTED instead of a fabricated device.\n");
     return DXGI_ERROR_UNSUPPORTED;
 }
