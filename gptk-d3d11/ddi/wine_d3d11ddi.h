@@ -28,6 +28,7 @@
  *      not a compile error.
  *   4. Declare only the single DDI interface version this project selects and
  *      freezes.  Do not add speculative versions.
+ *   5. Do not change the packing.  See the frozen binary contract below.
  *
  * A privately authorized WDK job may compare generated metadata against these
  * declarations, but it must never upload or echo WDK content.
@@ -36,6 +37,33 @@
 #define WINE_D3D11DDI_H
 
 #include <windows.h>
+
+/*
+ * The frozen binary contract.
+ *
+ * Every offset asserted in this header is the Win64 x86_64 ABI at natural
+ * alignment, which is what MSVC's default /Zp8 produces for this DDI: no
+ * field here has an alignment above 8, so MinGW-w64 GCC and MSVC agree
+ * already.
+ *
+ * #pragma pack is prohibited in this header, and CI rejects it.  These
+ * structures are not packed.  pack(1) would break every offset below, and
+ * pack(8) would change nothing while hiding the real alignment from
+ * WINE_DDI_ASSERT_ALIGN, whose job is to record it.  The assertions are the
+ * mitigation: they are compile-time and fail the build under any ABI where a
+ * layout diverges, which a pragma forcing one answer cannot do.
+ *
+ * An ABI other than this one must re-derive its offsets from the
+ * specification and assert them.  It must not inherit these, so building for
+ * one is an error rather than a silent reinterpretation.  For ARM in
+ * particular, note that packing is not what differs: the offsets of integer,
+ * enum, handle, and pointer fields are the same under the ARM64 Windows ABI,
+ * and the real exposure is calling convention and ARM64EC thunking at the
+ * exported boundary.
+ */
+#if !defined(_WIN64) || !(defined(__x86_64__) || defined(_M_X64))
+# error "the D3D11 DDI declarations are frozen for the Win64 x86_64 ABI"
+#endif
 
 #ifdef __cplusplus
 # include <cstddef>
