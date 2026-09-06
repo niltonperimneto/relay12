@@ -11,8 +11,6 @@ jobs:
   validate-d3d11on12:
     runs-on: ubuntu-24.04
     env:
-      # Kept outside the workspace so the prefix is never packaged or uploaded.
-      WINEPREFIX: /tmp/wine-d3d11on12
       WINEDEBUG: -all
       # The tests are console programs; never wait on a mono or gecko install.
       WINEDLLOVERRIDES: mscoree,mshtml=
@@ -42,10 +40,15 @@ jobs:
 
       - name: Install MinGW-w64 GCC and Wine
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install --yes gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \
             wine
-          wineboot --init
+          # Wine refuses to create a prefix under a directory it does not own,
+          # and the prefix stays out of the workspace so it is never packaged
+          # or uploaded.
+          echo "WINEPREFIX=$HOME/.wine-d3d11on12" >> "$GITHUB_ENV"
+          WINEPREFIX="$HOME/.wine-d3d11on12" wineboot --init
 
       - name: Verify Wine patches
         env:
