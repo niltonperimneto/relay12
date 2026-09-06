@@ -1,5 +1,9 @@
 # winecx-gptk
 
+The D3D11On12 architecture, verified payload behavior, implementation status,
+and production-readiness criteria are documented in
+[`docs/D3D11ON12.md`](docs/D3D11ON12.md).
+
 ci build of a gptk-capable wine runtime for the [frankea/Whisky](https://github.com/frankea/Whisky) fork: codeweavers' crossover 26.3 wine changes, rebased onto upstream wine 11.16.
 
 why: apple's game porting toolkit / d3dmetal payload only executes on crossover-derived wine builds, it patches their unixcall internals at load time. details in [frankea/Whisky#163](https://github.com/frankea/Whisky/issues/163), importer app-side in [frankea/Whisky#164](https://github.com/frankea/Whisky/pull/164).
