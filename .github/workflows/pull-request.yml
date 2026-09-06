@@ -10,6 +10,12 @@ permissions:
 jobs:
   validate-d3d11on12:
     runs-on: ubuntu-24.04
+    env:
+      # Kept outside the workspace so the prefix is never packaged or uploaded.
+      WINEPREFIX: /tmp/wine-d3d11on12
+      WINEDEBUG: -all
+      # The tests are console programs; never wait on a mono or gecko install.
+      WINEDLLOVERRIDES: mscoree,mshtml=
     steps:
       - uses: actions/checkout@v5
         with:
@@ -34,10 +40,12 @@ jobs:
             exit 1
           fi
 
-      - name: Install MinGW-w64 GCC
+      - name: Install MinGW-w64 GCC and Wine
         run: |
           sudo apt-get update
-          sudo apt-get install --yes gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+          sudo apt-get install --yes gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \
+            wine
+          wineboot --init
 
       - name: Verify Wine patches
         env:
@@ -137,6 +145,59 @@ jobs:
                   raise SystemExit(f"{path}: imports {actual}, expected {wanted}")
           PY
 
+      - name: Run D3D11-on-12 core validation tests
+        run: |
+          set -euo pipefail
+          x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Werror \
+            -fno-exceptions -fno-rtti -fno-threadsafe-statics \
+            -fno-use-cxa-atexit \
+            -c -o d3d11on12core.o gptk-d3d11/d3d11on12core.cpp
+          x86_64-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
+            -Igptk-d3d11 -c -o d3d11on12coretest.o tests/d3d11on12coretest.c
+          # Linking with the C driver keeps the no-C++-runtime rule honest: if
+          # the core ever needs libstdc++, this link fails.
+          x86_64-w64-mingw32-gcc -o d3d11on12coretest.exe \
+            d3d11on12coretest.o d3d11on12core.o -ld3d12 -ldxgi -ldxguid -luuid
+          if x86_64-w64-mingw32-objdump -p d3d11on12coretest.exe \
+              | grep -Eiq 'libstdc\+\+|libgcc_s'; then
+            echo 'unexpected C++ runtime dependency' >&2
+            exit 1
+          fi
+          wine d3d11on12coretest.exe
+
+      - name: Validate the clean-room DDI layout harness
+        run: |
+          set -euo pipefail
+          # The Wine D3D11 frontend is C and the host will be C++, so the DDI
+          # declarations must be valid and identical in both languages.
+          # -static so both binaries run in a bare prefix with no toolchain
+          # DLLs beside them.
+          x86_64-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wextra -Werror -static \
+            -Igptk-d3d11/ddi -o d3d11ddilayout.exe tests/d3d11ddilayout.c
+          x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Werror -static \
+            -fno-exceptions -fno-rtti -Igptk-d3d11/ddi -x c++ \
+            -o d3d11ddilayoutxx.exe tests/d3d11ddilayout.c
+          wine d3d11ddilayout.exe
+          wine d3d11ddilayoutxx.exe
+          python3 - <<'PY'
+          import pathlib
+
+          errors = []
+          for path in sorted(pathlib.Path("gptk-d3d11/ddi").rglob("*.h")):
+              lines = path.read_text().splitlines()
+              for number, line in enumerate(lines, start=1):
+                  if "* Group:" not in line:
+                      continue
+                  block = "\n".join(lines[number - 1:number + 3])
+                  if "* Specification:" in block and "* Retrieved:" in block:
+                      continue
+                  errors.append(f"{path}:{number}: a DDI declaration group "
+                                "needs Specification and Retrieved provenance")
+          if errors:
+              raise SystemExit("\n".join(errors))
+          print("ddi provenance gate: ok")
+          PY
+
       - name: Verify reproducible source package
         run: |
           set -euo pipefail
@@ -157,6 +218,8 @@ jobs:
           name: d3d11on12probe-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             d3d11on12probe.exe
+            d3d11on12coretest.exe
+            d3d11ddilayout.exe
             d3d11shim.dll
             d3d11on12core.dll
             d3d11on12-source.tar.gz
