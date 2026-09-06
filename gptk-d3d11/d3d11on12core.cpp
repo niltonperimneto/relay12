@@ -99,12 +99,14 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateDeviceV1(IUnknown *deviceObject,
     HRESULT hr = deviceObject->QueryInterface(IID_ID3D12Device,
             reinterpret_cast<void **>(device12.put()));
     if (FAILED(hr))
+        // TODO: PR Review Point 3 - Consider propagating 'hr' (E_NOINTERFACE) instead of masking it with E_INVALIDARG.
         return E_INVALIDARG;
 
     ComRef<ID3D12CommandQueue> queue;
     hr = queueObjects[0]->QueryInterface(IID_ID3D12CommandQueue,
             reinterpret_cast<void **>(queue.put()));
     if (FAILED(hr))
+        // TODO: PR Review Point 3 - Consider propagating 'hr' (E_NOINTERFACE) instead of masking it with E_INVALIDARG.
         return E_INVALIDARG;
     if (queue.get()->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_DIRECT)
         return E_INVALIDARG;
@@ -129,5 +131,6 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateDeviceV1(IUnknown *deviceObject,
     /* The next milestone constructs the Wine D3D11 runtime/DDI host here.
      * Never return success until genuine ID3D11Device and context objects are
      * backed by the supplied device and queue. */
+    // TODO: PR Review Point 1 - Add a diagnostic trace here stating D3D11On12 is intentionally stubbed for this milestone.
     return DXGI_ERROR_UNSUPPORTED;
 }

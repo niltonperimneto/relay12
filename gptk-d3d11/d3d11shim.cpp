@@ -47,6 +47,7 @@ BOOL CALLBACK initializeBackend(PINIT_ONCE, PVOID, PVOID *) noexcept
      * Plain LoadLibrary is required so Wine's builtin-module lookup participates
      * in resolution, matching the existing D3D12 and DXGI interposers. */
     backend.apple = LoadLibraryW(L"d3d11mt.dll");
+    // TODO: PR Review Point 1 - Add Wine diagnostic logging (e.g., ERR/WINE_TRACE) if backend.apple is null so failures aren't silent.
     if (backend.apple)
     {
         backend.createDevice = resolve<CreateDeviceFn>(backend.apple,
