@@ -104,6 +104,7 @@ jobs:
                   ["x86_64-w64-mingw32-objdump", "-p", path], text=True)
               base = int(re.search(r"Ordinal Base\s+(\d+)", output).group(1))
               names = output.split("[Ordinal/Name Pointer] Table", 1)[1]
+              names = names.split("\n\n", 1)[0]
               actual = {
                   base + int(index): name
                   for index, name in re.findall(r"\[\s*(\d+)\]\s+(\S+)", names)
