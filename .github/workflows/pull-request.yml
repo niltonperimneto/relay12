@@ -144,12 +144,12 @@ jobs:
           sh scripts/package-d3d11on12-source.sh source-two.tar.gz
           cmp source-one.tar.gz source-two.tar.gz
           mv source-one.tar.gz d3d11on12-source.tar.gz
-          tar -tzf d3d11on12-source.tar.gz \
-            | grep -q '^winecx-gptk/third_party/D3D11On12/LICENSE$'
-          tar -tzf d3d11on12-source.tar.gz \
-            | grep -q '^winecx-gptk/third_party/D3D12TranslationLayer/LICENSE$'
-          tar -tzf d3d11on12-source.tar.gz \
-            | grep -q '^winecx-gptk/third_party/DirectX-Headers/LICENSE$'
+          tar -tzf d3d11on12-source.tar.gz > source-files.txt
+          grep -q '^winecx-gptk/third_party/D3D11On12/LICENSE$' source-files.txt
+          grep -q '^winecx-gptk/third_party/D3D12TranslationLayer/LICENSE$' \
+            source-files.txt
+          grep -q '^winecx-gptk/third_party/DirectX-Headers/LICENSE$' \
+            source-files.txt
 
       - name: Upload D3D11-on-12 development artifacts
         uses: actions/upload-artifact@v4
