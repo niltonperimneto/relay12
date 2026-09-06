@@ -10,11 +10,31 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <d3d11on12.h>
+#include <cstdio>
 
 #include "d3d11on12core.h"
 
 namespace
 {
+/* The router is an ordinary PE module rather than a Wine builtin, so Wine's
+ * ERR and TRACE macros are unavailable here.  OutputDebugStringA reaches the
+ * same debug output and imports only from kernel32. */
+void reportDiagnostic(const char *message) noexcept
+{
+    OutputDebugStringA(message);
+}
+
+void reportLoadFailure(const char *module, DWORD error) noexcept
+{
+    char message[192];
+
+    std::snprintf(message, sizeof(message),
+            "d3d11shim: LoadLibraryW(%s) failed with error %lu; the D3D11 "
+            "entry points it provides will report ERROR_PROC_NOT_FOUND.\n",
+            module, static_cast<unsigned long>(error));
+    OutputDebugStringA(message);
+}
+
 using CreateDeviceFn = decltype(&D3D11CreateDevice);
 using CreateDeviceAndSwapChainFn = decltype(&D3D11CreateDeviceAndSwapChain);
 struct Backend
@@ -47,13 +67,22 @@ BOOL CALLBACK initializeBackend(PINIT_ONCE, PVOID, PVOID *) noexcept
      * Plain LoadLibrary is required so Wine's builtin-module lookup participates
      * in resolution, matching the existing D3D12 and DXGI interposers. */
     backend.apple = LoadLibraryW(L"d3d11mt.dll");
-    // TODO: PR Review Point 1 - Add Wine diagnostic logging (e.g., ERR/WINE_TRACE) if backend.apple is null so failures aren't silent.
     if (backend.apple)
     {
         backend.createDevice = resolve<CreateDeviceFn>(backend.apple,
                 "D3D11CreateDevice");
         backend.createDeviceAndSwapChain = resolve<CreateDeviceAndSwapChainFn>(
                 backend.apple, "D3D11CreateDeviceAndSwapChain");
+        if (!backend.createDevice || !backend.createDeviceAndSwapChain)
+            reportDiagnostic("d3d11shim: d3d11mt.dll is missing an expected "
+                    "D3D11 creation export; the deployment is not Apple's "
+                    "renamed forwarder.\n");
+    }
+    else
+    {
+        /* A missing renamed forwarder means deployment went wrong.  Failing
+         * silently here would look like an application bug. */
+        reportLoadFailure("d3d11mt.dll", GetLastError());
     }
 
     /* This module is deliberately optional.  The router is safe to deploy
@@ -69,8 +98,20 @@ BOOL CALLBACK initializeBackend(PINIT_ONCE, PVOID, PVOID *) noexcept
                 || backend.on12Interface.size != sizeof(backend.on12Interface)
                 || backend.on12Interface.version != WINE_D3D11ON12_ABI_VERSION
                 || !backend.on12Interface.createDevice)
+        {
+            /* An incompatible core is worse than an absent one: it is a
+             * mismatched deployment, and it must not be called. */
+            reportDiagnostic("d3d11shim: d3d11on12core.dll does not publish a "
+                    "compatible WineD3D11On12Interface; D3D11On12CreateDevice "
+                    "will report DXGI_ERROR_UNSUPPORTED.\n");
             ZeroMemory(&backend.on12Interface,
                     sizeof(backend.on12Interface));
+        }
+    }
+    else
+    {
+        reportDiagnostic("d3d11shim: no d3d11on12core.dll in this prefix; "
+                "D3D11On12CreateDevice will report DXGI_ERROR_UNSUPPORTED.\n");
     }
 
     return TRUE;
