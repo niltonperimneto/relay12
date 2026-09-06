@@ -3,6 +3,7 @@
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <initguid.h>
 #include <d3d12.h>
 
 #include "d3d11on12core.h"
