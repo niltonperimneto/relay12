@@ -2,7 +2,9 @@
 
 The D3D11On12 architecture, verified payload behavior, implementation status,
 and production-readiness criteria are documented in
-[`docs/D3D11ON12.md`](docs/D3D11ON12.md).
+[`docs/D3D11ON12.md`](docs/D3D11ON12.md). The method for authoring the
+clean-room D3D11 DDI declarations that work depends on is in
+[`docs/CLEANROOM-DDI.md`](docs/CLEANROOM-DDI.md).
 
 ci build of a gptk-capable wine runtime for the [frankea/Whisky](https://github.com/frankea/Whisky) fork: codeweavers' crossover 26.3 wine changes, rebased onto upstream wine 11.16.
 
