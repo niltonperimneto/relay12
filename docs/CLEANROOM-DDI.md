@@ -222,6 +222,7 @@ misinterpretation; `--check` defends against structural *drift* across 178+ slot
 | Adapter tables | `D3D10DDI_ADAPTERFUNCS`, `D3D10_2DDI_ADAPTERFUNCS`, `D3D10DDIARG_OPENADAPTER`, 6 `PFN` typedefs | 24 / 40 / 40 |
 | Version arithmetic | `D3D11_DDI_MAJOR_VERSION`, composition and extraction macros | n/a |
 | Device creation | `D3D10DDI_HDEVICE`, `HRTDEVICE`, `HRTCORELAYER`, `PFND3D10DDI_RETRIEVESUBOBJECT`, `DXGI_DDI_BASE_ARGS`, `D3D10DDIARG_CREATEDEVICE`, flag constants | 8 each / 16 / 88 |
+| Core-layer callbacks | `D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS`, 46 `PFN` typedefs, `D3DWDDM2_2DDI_HRTCACHESESSION` | 376 / 8 |
 
 #### Key constraints in `D3D10DDIARG_CREATEDEVICE` (88 bytes)
 
@@ -243,16 +244,44 @@ Per rule 4, only the union arms read by the pinned driver are declared.
 `gen_ddi_layout.py` models both published and declared arms and ensures exact
 offset agreement.
 
+#### Constraints in `D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS` (376 bytes)
+
+All 47 slots are function pointers at 8-byte stride, so the layout is
+uninteresting and the signatures are the whole content. Three findings are
+worth carrying forward.
+
+**Base and Count swap between the two eras.** The D3D10-era pages document
+`(hRuntimeDevice, Count, Base)`; the D3D11-era pages document
+`(hRuntimeDevice, Base, Count)`. Both are `UINT`. No layout assertion, and
+nothing in the ABI, can distinguish a host that implements one family with the
+other's order, so the parameter names in the declarations are load-bearing.
+
+**Two slots have no published signature.** The structure page names
+`PFND3DWDDM2_2DDI_SHADERCACHE_GET_VALUE_CB` and
+`PFND3DWDDM2_6DDI_QUERY_SCANOUT_CAPS_CB` but prints no link for either where
+it links every other member, and both surfaces return 404. Under rule 3 that
+halts authoring for those two rather than the group: they take
+`PFNWINE_D3D11DDI_UNDECLARED_CB`, a `void (*)(void)`, which holds the offset
+exactly and cannot be called without an explicit cast. Note the neighbouring
+`store_value` and `addref_release` pages *do* exist, so this is a gap in the
+published set rather than a whole undocumented feature.
+
+**Two spellings that look like mistakes and are not.**
+`pfnDisableDeferredStagingResourceDestruction` carries no `Cb` suffix, and
+`pfnShaderCacheAddRefCb` and `pfnShaderCacheReleaseCb` share one type,
+`PFND3DWDDM2_2DDI_SHADERCACHE_ADDREF_RELEASE_CB`. Both surfaces agree on both,
+and `tests/d3d11ddilayout.c` pins the shared type by fitting one
+implementation to both slots.
+
 ### Remaining groups roadmap
 
 | # | Group | Scope | Rationale and dependencies |
 | :--- | :--- | :--- | :--- |
-| 1 | Core-layer callbacks | `D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS`, signature-complete | 47 slots (376 bytes). Urgent: host fills this, driver invokes it |
-| 2 | Kernel callbacks | `D3DDDI_DEVICECALLBACKS` | Only members invoked by D3D11On12. Host fills |
-| 3 | Device function table | `D3DWDDM2_6DDI_DEVICEFUNCS`, full layout, placeholder slots | 178 slots (1424 bytes). Driver fills, host calls |
-| 4 | Surface discovery | MIT tree test build against clean-room header | Turns remaining clean-room work into a measurable compiler worklist |
-| 5 | Signature promotion | Promote slots in `D3DWDDM2_6DDI_DEVICEFUNCS` | 138 distinct callback types, prioritized by host call sites |
-| 6 | DXGI DDI interop | `DXGI_DDI_BASE_CALLBACKS`, `DXGI1_6_1_DDI_BASE_FUNCTIONS` | Required by `DXGIBaseDDI` pointers in creation arguments |
+| 1 | Kernel callbacks | `D3DDDI_DEVICECALLBACKS` | Only members invoked by D3D11On12. Host fills |
+| 2 | Device function table | `D3DWDDM2_6DDI_DEVICEFUNCS`, full layout, placeholder slots | 178 slots (1424 bytes). Driver fills, host calls |
+| 3 | Surface discovery | MIT tree test build against clean-room header | Turns remaining clean-room work into a measurable compiler worklist |
+| 4 | Signature promotion | Promote slots in `D3DWDDM2_6DDI_DEVICEFUNCS` | 138 distinct callback types, prioritized by host call sites |
+| 5 | DXGI DDI interop | `DXGI_DDI_BASE_CALLBACKS`, `DXGI1_6_1_DDI_BASE_FUNCTIONS` | Required by `DXGIBaseDDI` pointers in creation arguments |
 
 ## Open questions
 
@@ -264,3 +293,9 @@ offset agreement.
 - **Value of `D3D11DDI_CREATEDEVICE_FLAG_IS_XBOX`**: Checked by the driver in
   `IsXboxCreateFlags`, but omitted from public documentation. Left undefined as
   the host never targets Xbox execution.
+- **Whether the pinned driver ever calls the two undeclared core-layer slots**:
+  if `pfnShaderCacheGetValueCb` or `pfnQueryScanoutCapsCb` is invoked, the host
+  needs their real signatures and the published set does not have them. Group 3
+  (Surface discovery) answers this the same way it answers the `d3dkmthk.h`
+  question, by compiling the MIT tree against the clean-room header. Until then
+  the placeholder type is what stops a guess from being called.
