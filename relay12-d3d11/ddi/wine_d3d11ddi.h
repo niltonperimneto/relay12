@@ -382,6 +382,14 @@ typedef HRESULT (*PFND3D10DDI_OPENADAPTER)(
  * What is publicly specified is the arithmetic, so that is what is captured,
  * parameterised.  These carry the WINE_ prefix deliberately: they are not the
  * WDK's fixed-name object-like macros, and must not be mistaken for them.
+ *
+ * The decomposition below is the inverse of the published composition rather
+ * than a quotation from it, and is recorded as derived.  It is needed because
+ * the host is the runtime: it reads supported-version words out of the
+ * driver's GetSupportedVersions as data and passes the high 32 bits of its
+ * selection back as D3D10DDIARG_CREATEDEVICE.Interface.  Without these, every
+ * call site would open-code that shift, and a shift open-coded in several
+ * places is a shift that will eventually disagree with itself.
  */
 #define D3D11_DDI_MAJOR_VERSION 11
 
@@ -391,9 +399,21 @@ typedef HRESULT (*PFND3D10DDI_OPENADAPTER)(
 #define WINE_D3D11_DDI_SUPPORTED(interface_version, build_version) \
     ((((UINT64)(interface_version)) << 32) | (((UINT64)(build_version)) << 16))
 
-/* The composition is the whole content of this group, so it is asserted
- * rather than trusted.  The operands are arbitrary and carry no claim about
- * any real DDI version. */
+#define WINE_D3D11_DDI_INTERFACE_FROM_SUPPORTED(supported) \
+    ((UINT)(((UINT64)(supported)) >> 32))
+
+#define WINE_D3D11_DDI_BUILD_FROM_SUPPORTED(supported) \
+    ((UINT)((((UINT64)(supported)) >> 16) & 0xffffu))
+
+#define WINE_D3D11_DDI_MAJOR_FROM_INTERFACE(interface_version) \
+    ((UINT)((((UINT)(interface_version)) >> 16) & 0xffffu))
+
+#define WINE_D3D11_DDI_MINOR_FROM_INTERFACE(interface_version) \
+    ((UINT)(((UINT)(interface_version)) & 0xffffu))
+
+/* The arithmetic is the whole content of this group, so it is asserted rather
+ * than trusted.  The operands are arbitrary and carry no claim about any real
+ * DDI version. */
 WINE_DDI_STATIC_ASSERT(D3D11_DDI_MAJOR_VERSION == 11,
         "the D3D11 DDI major version is 11");
 WINE_DDI_STATIC_ASSERT(WINE_D3D11_DDI_INTERFACE_VERSION(3) == 0x000b0003,
@@ -402,6 +422,52 @@ WINE_DDI_STATIC_ASSERT(
         WINE_D3D11_DDI_SUPPORTED(0x000b0003, 0x0007) == 0x000b000300070000ULL,
         "a supported-version word is the interface version in the high 32 "
         "bits and the build version in the next 16");
+
+/* Decomposition, asserted against the composition at the ends of each field's
+ * range rather than in the middle.  A mask that is one bit too wide or a shift
+ * that is one bit off reads correctly for a small minor and build number,
+ * which is exactly what a real DDI version looks like, so the interesting
+ * operands are 0 and 0xffff. */
+WINE_DDI_STATIC_ASSERT(
+        WINE_D3D11_DDI_MAJOR_FROM_INTERFACE(WINE_D3D11_DDI_INTERFACE_VERSION(0))
+        == D3D11_DDI_MAJOR_VERSION
+        && WINE_D3D11_DDI_MINOR_FROM_INTERFACE(
+                WINE_D3D11_DDI_INTERFACE_VERSION(0)) == 0,
+        "an interface version with no minor number round-trips");
+WINE_DDI_STATIC_ASSERT(
+        WINE_D3D11_DDI_MAJOR_FROM_INTERFACE(
+                WINE_D3D11_DDI_INTERFACE_VERSION(0xffff))
+        == D3D11_DDI_MAJOR_VERSION
+        && WINE_D3D11_DDI_MINOR_FROM_INTERFACE(
+                WINE_D3D11_DDI_INTERFACE_VERSION(0xffff)) == 0xffff,
+        "the largest minor number does not reach the major number's field");
+WINE_DDI_STATIC_ASSERT(
+        WINE_D3D11_DDI_INTERFACE_FROM_SUPPORTED(
+                WINE_D3D11_DDI_SUPPORTED(0x000b0003, 0)) == 0x000b0003
+        && WINE_D3D11_DDI_BUILD_FROM_SUPPORTED(
+                WINE_D3D11_DDI_SUPPORTED(0x000b0003, 0)) == 0,
+        "a supported-version word with no build number round-trips");
+WINE_DDI_STATIC_ASSERT(
+        WINE_D3D11_DDI_INTERFACE_FROM_SUPPORTED(
+                WINE_D3D11_DDI_SUPPORTED(0x000b0003, 0xffff)) == 0x000b0003
+        && WINE_D3D11_DDI_BUILD_FROM_SUPPORTED(
+                WINE_D3D11_DDI_SUPPORTED(0x000b0003, 0xffff)) == 0xffff,
+        "the largest build number does not reach the interface version");
+/* The interface version occupies the high half of a 64-bit word, so a
+ * decomposition that went through a signed type would sign-extend a version
+ * whose top bit is set.  No real D3D11 version does, and relying on that is
+ * how the bug would survive to the day one does. */
+WINE_DDI_STATIC_ASSERT(
+        WINE_D3D11_DDI_INTERFACE_FROM_SUPPORTED(0xffffffff00000000ULL)
+        == 0xffffffffu,
+        "decomposing a supported-version word must not sign-extend");
+/* The low 16 bits are the runtime's revision number.  Neither accessor claims
+ * them, and neither may quietly fold them into the build number. */
+WINE_DDI_STATIC_ASSERT(
+        WINE_D3D11_DDI_BUILD_FROM_SUPPORTED(
+                WINE_D3D11_DDI_SUPPORTED(0x000b0003, 0x0007) | 0xffffULL)
+        == 0x0007,
+        "the revision bits are not part of the build number");
 
 /*
  * Group: device creation
