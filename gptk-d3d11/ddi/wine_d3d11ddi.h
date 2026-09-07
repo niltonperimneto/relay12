@@ -114,15 +114,18 @@
  *
  * Authored here so far:
  *
- *   - driver and runtime object handles (adapter and resource);
+ *   - driver and runtime object handles (adapter, resource, device, and core
+ *     layer);
  *   - adapter function tables and the OpenAdapter argument structure;
- *   - the version negotiation arithmetic.
+ *   - the version negotiation arithmetic;
+ *   - the CreateDevice argument structure, its embedded DXGI base arguments,
+ *     and the create-device flags.
  *
  * Still required by docs/D3D11ON12.md, each to land with its own provenance
  * block and layout assertions:
  *
- *   - device and context handle types;
- *   - runtime callback tables;
+ *   - context handle types;
+ *   - runtime callback tables, both the core layer's and the kernel's;
  *   - device function tables;
  *   - resource, view, shader, state, query, and command structures;
  *   - the literal DDI version numbers, which the public specification elides;
@@ -152,10 +155,12 @@
  * contract, and that the specification does determine: one pointer, asserted
  * below.
  *
- * Device and context handles are deliberately absent.  They belong to the
- * device group, which is not authored yet; naming their members from
+ * Context handles are deliberately absent.  They belong to the deferred
+ * context group, which is not authored yet; naming their members from
  * recollection would put an unverified declaration behind a provenance block,
- * which is the one thing this header exists to prevent.
+ * which is the one thing this header exists to prevent.  The device and
+ * core-layer handles are declared with the device-creation group below, whose
+ * argument structure is what names them.
  */
 typedef struct D3D10DDI_HADAPTER
 {
@@ -211,9 +216,19 @@ WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_HRTRESOURCE, handle, 8);
  * when its own group lands, under its own provenance block.
  */
 typedef struct D3D10DDIARG_CALCPRIVATEDEVICESIZE D3D10DDIARG_CALCPRIVATEDEVICESIZE;
-typedef struct D3D10DDIARG_CREATEDEVICE D3D10DDIARG_CREATEDEVICE;
 typedef struct D3D10_2DDIARG_GETCAPS D3D10_2DDIARG_GETCAPS;
 typedef struct _D3DDDI_ADAPTERCALLBACKS D3DDDI_ADAPTERCALLBACKS;
+
+/* D3D10DDIARG_CREATEDEVICE is completed by the device-creation group at the
+ * end of this header; the adapter table below needs only its name.  The
+ * tables and callback blocks its members point at stay incomplete, and each
+ * is the subject of a group of its own. */
+typedef struct D3D10DDIARG_CREATEDEVICE D3D10DDIARG_CREATEDEVICE;
+typedef struct _D3DDDI_DEVICECALLBACKS D3DDDI_DEVICECALLBACKS;
+typedef struct D3DWDDM2_6DDI_DEVICEFUNCS D3DWDDM2_6DDI_DEVICEFUNCS;
+typedef struct D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS;
+typedef struct DXGI_DDI_BASE_CALLBACKS DXGI_DDI_BASE_CALLBACKS;
+typedef struct DXGI1_6_1_DDI_BASE_FUNCTIONS DXGI1_6_1_DDI_BASE_FUNCTIONS;
 
 /*
  * Group: adapter function tables and OpenAdapter arguments
@@ -387,5 +402,192 @@ WINE_DDI_STATIC_ASSERT(
         WINE_D3D11_DDI_SUPPORTED(0x000b0003, 0x0007) == 0x000b000300070000ULL,
         "a supported-version word is the interface version in the high 32 "
         "bits and the build version in the next 16");
+
+/*
+ * Group: device creation
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_createdevice
+ * Retrieved: 2026-09-07
+ *
+ * Companion specifications, all retrieved 2026-09-07:
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/dxgiddi/ns-dxgiddi-dxgi_ddi_base_args
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_retrievesubobject
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/display/direct3d-version-10-runtime-and-driver-handles
+ *
+ * This is the structure the host fills and hands to the driver's CreateDevice,
+ * so it is the whole device-level boundary in one declaration.  Both
+ * documentation surfaces were cross-validated before it was written: the
+ * rendered syntax block and the markdown mirror agree on 23 members in the
+ * same order.
+ *
+ * Only the union arms the pinned D3D11On12 source reads are declared, as rule
+ * 4 requires.  The specification prints nine device-function arms
+ * (pDeviceFuncs, p10_1DeviceFuncs, p11DeviceFuncs, p11_1DeviceFuncs,
+ * pWDDM1_3DeviceFuncs, pWDDM2_0DeviceFuncs, pWDDM2_1DeviceFuncs,
+ * pWDDM2_2DeviceFuncs, pWDDM2_6DeviceFuncs) and five core-layer arms
+ * (pUMCallbacks, p11UMCallbacks, pWDDM2_0UMCallbacks, pWDDM2_2UMCallbacks,
+ * pWDDM2_6UMCallbacks).  The pinned driver's GetDeviceFuncsFromCreateArgs
+ * returns pWDDM2_6DeviceFuncs and its DeviceBase constructor reads
+ * pWDDM2_6UMCallbacks, unconditionally and for both versions it advertises, so
+ * those are the two declared here.  The full arm lists are recorded above so
+ * the omission is a declaration choice rather than a transcription loss; every
+ * arm is a pointer at the same offset, and scripts/gen_ddi_layout.swift models
+ * both arm sets and checks they agree on every offset and on the size.
+ *
+ * The device handle's member name is quoted from the pinned MIT driver, which
+ * constructs its device with "new (pArgs->hDrvDevice.pDrvPrivate) Device".
+ * The two runtime handles' member names follow the documented convention, as
+ * the adapter pair's do, and that is a derivation rather than a quotation.
+ * What the host depends on is one wrapped pointer each, and that is asserted.
+ *
+ * DXGI_DDI_BASE_ARGS is embedded by value, so it is declared first.  Its
+ * function-table union has seven published arms; the pinned driver reads
+ * pDXGIDDIBaseFunctions6_1, so that is the one declared.  DXGI1_6_1_DDI_BASE_-
+ * FUNCTIONS has no reference page of its own in the published set; the name is
+ * quoted from the DXGI_DDI_BASE_ARGS syntax block and used only as an
+ * incomplete type behind a pointer, which is all this group needs it for.
+ *
+ * ppfnRetrieveSubObject is a pointer to a function pointer: the runtime
+ * supplies the storage and the driver writes its implementation into it, which
+ * the pinned driver does as "*pArgs->ppfnRetrieveSubObject = RetrieveSubObject".
+ * So the host must point it at a writable slot it owns, not at a null.
+ */
+typedef struct D3D10DDI_HDEVICE
+{
+    void *pDrvPrivate;
+} D3D10DDI_HDEVICE;
+
+typedef struct D3D10DDI_HRTDEVICE
+{
+    void *handle;
+} D3D10DDI_HRTDEVICE;
+
+typedef struct D3D10DDI_HRTCORELAYER
+{
+    void *handle;
+} D3D10DDI_HRTCORELAYER;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_HDEVICE);
+WINE_DDI_ASSERT_SIZE(D3D10DDI_HDEVICE, 8);
+WINE_DDI_ASSERT_ALIGN(D3D10DDI_HDEVICE, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_HDEVICE, pDrvPrivate, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_HDEVICE, pDrvPrivate, 8);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_HRTDEVICE);
+WINE_DDI_ASSERT_SIZE(D3D10DDI_HRTDEVICE, 8);
+WINE_DDI_ASSERT_ALIGN(D3D10DDI_HRTDEVICE, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_HRTDEVICE, handle, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_HRTDEVICE, handle, 8);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_HRTCORELAYER);
+WINE_DDI_ASSERT_SIZE(D3D10DDI_HRTCORELAYER, 8);
+WINE_DDI_ASSERT_ALIGN(D3D10DDI_HRTCORELAYER, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_HRTCORELAYER, handle, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_HRTCORELAYER, handle, 8);
+
+/* The runtime allocates the slot and the driver writes its function pointer
+ * into it, so the host owns the storage this points at. */
+typedef HRESULT (*PFND3D10DDI_RETRIEVESUBOBJECT)(
+        D3D10DDI_HDEVICE hDevice,
+        UINT32 SubDeviceID,
+        SIZE_T ParamSize,
+        void *pParams,
+        SIZE_T OutputParamSize,
+        void *pOutputParamsBuffer);
+
+typedef struct DXGI_DDI_BASE_ARGS
+{
+    DXGI_DDI_BASE_CALLBACKS *pDXGIBaseCallbacks;
+    union
+    {
+        DXGI1_6_1_DDI_BASE_FUNCTIONS *pDXGIDDIBaseFunctions6_1;
+    };
+} DXGI_DDI_BASE_ARGS;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(DXGI_DDI_BASE_ARGS);
+WINE_DDI_ASSERT_SIZE(DXGI_DDI_BASE_ARGS, 16);
+WINE_DDI_ASSERT_ALIGN(DXGI_DDI_BASE_ARGS, 8);
+WINE_DDI_ASSERT_FIELD(DXGI_DDI_BASE_ARGS, pDXGIBaseCallbacks, 0);
+WINE_DDI_ASSERT_FIELD(DXGI_DDI_BASE_ARGS, pDXGIDDIBaseFunctions6_1, 8);
+
+struct D3D10DDIARG_CREATEDEVICE
+{
+    D3D10DDI_HRTDEVICE             hRTDevice;
+    UINT                           Interface;
+    UINT                           Version;
+    const D3DDDI_DEVICECALLBACKS   *pKTCallbacks;
+    union
+    {
+        D3DWDDM2_6DDI_DEVICEFUNCS *pWDDM2_6DeviceFuncs;
+    };
+    D3D10DDI_HDEVICE               hDrvDevice;
+    DXGI_DDI_BASE_ARGS             DXGIBaseDDI;
+    D3D10DDI_HRTCORELAYER          hRTCoreLayer;
+    union
+    {
+        const D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS *pWDDM2_6UMCallbacks;
+    };
+    UINT                           Flags;
+    PFND3D10DDI_RETRIEVESUBOBJECT  *ppfnRetrieveSubObject;
+};
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDIARG_CREATEDEVICE);
+WINE_DDI_ASSERT_SIZE(D3D10DDIARG_CREATEDEVICE, 88);
+WINE_DDI_ASSERT_ALIGN(D3D10DDIARG_CREATEDEVICE, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEDEVICE, hRTDevice, 0);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEDEVICE, Interface, 8);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDIARG_CREATEDEVICE, Interface, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEDEVICE, Version, 12);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDIARG_CREATEDEVICE, Version, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEDEVICE, pKTCallbacks, 16);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEDEVICE, pWDDM2_6DeviceFuncs, 24);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEDEVICE, hDrvDevice, 32);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEDEVICE, DXGIBaseDDI, 40);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDIARG_CREATEDEVICE, DXGIBaseDDI, 16);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEDEVICE, hRTCoreLayer, 56);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEDEVICE, pWDDM2_6UMCallbacks, 64);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEDEVICE, Flags, 72);
+/* Flags is four bytes at 72 and the next member is eight-byte aligned, so
+ * there are four bytes of padding here that no member names.  The runtime
+ * allocates this structure, and a driver reading uninitialized padding is a
+ * bug the host cannot see, so the host must zero the whole structure rather
+ * than assign member by member. */
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDIARG_CREATEDEVICE, Flags, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEDEVICE, ppfnRetrieveSubObject, 80);
+
+/*
+ * The create-device flags.
+ *
+ * Quoted from the Flags member's table and remarks on the group's
+ * specification page.  Only these are published: the pinned driver also tests
+ * D3D11DDI_CREATEDEVICE_FLAG_IS_XBOX, whose value appears in no public
+ * document, so it is not defined here.  Nothing is lost by that — the host
+ * would never set it — but a host that needs to must record where the value
+ * came from, under a group of its own.
+ *
+ * The 3-D pipeline level occupies the three bits the mask covers.  Extracting
+ * it needs the D3D11DDI_3DPIPELINELEVEL enumeration, which belongs to the
+ * GetCaps group and is not authored; the pinned driver never reads those bits
+ * on this path, so the mask is declared and the extraction is not.  What the
+ * mask is for here is knowing that bits 1 through 3 of Flags are not free.
+ */
+#define D3D10DDI_CREATEDEVICE_FLAG_DISABLE_EXTRA_THREAD_CREATION 0x1
+#define D3D11DDI_CREATEDEVICE_FLAG_SINGLETHREADED 0x10
+
+#define D3D11DDI_CREATEDEVICE_FLAG_3DPIPELINESUPPORT_SHIFT (0x1)
+#define D3D11DDI_CREATEDEVICE_FLAG_3DPIPELINESUPPORT_MASK \
+    (0x7 << D3D11DDI_CREATEDEVICE_FLAG_3DPIPELINESUPPORT_SHIFT)
+
+/* The page states the pipeline level occupies the 0xE mask and separately
+ * gives the shift and mask as code.  Asserting that the two agree, and that
+ * neither named flag lands inside the mask, is the only check available
+ * against a transcription error in a set of literals. */
+WINE_DDI_STATIC_ASSERT(D3D11DDI_CREATEDEVICE_FLAG_3DPIPELINESUPPORT_MASK
+        == 0xe, "the 3-D pipeline level occupies the 0xE mask");
+WINE_DDI_STATIC_ASSERT(
+        (D3D10DDI_CREATEDEVICE_FLAG_DISABLE_EXTRA_THREAD_CREATION
+                & D3D11DDI_CREATEDEVICE_FLAG_3DPIPELINESUPPORT_MASK) == 0
+        && (D3D11DDI_CREATEDEVICE_FLAG_SINGLETHREADED
+                & D3D11DDI_CREATEDEVICE_FLAG_3DPIPELINESUPPORT_MASK) == 0,
+        "no create-device flag may overlap the 3-D pipeline level mask");
 
 #endif /* WINE_D3D11DDI_H */
