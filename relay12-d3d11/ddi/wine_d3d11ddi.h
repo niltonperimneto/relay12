@@ -119,13 +119,15 @@
  *   - adapter function tables and the OpenAdapter argument structure;
  *   - the version negotiation arithmetic;
  *   - the CreateDevice argument structure, its embedded DXGI base arguments,
- *     and the create-device flags.
+ *     and the create-device flags;
+ *   - the core-layer device callback table, signature-complete except for the
+ *     two slots the public set does not document.
  *
  * Still required by docs/D3D11ON12.md, each to land with its own provenance
  * block and layout assertions:
  *
  *   - context handle types;
- *   - runtime callback tables, both the core layer's and the kernel's;
+ *   - the kernel callback table;
  *   - device function tables;
  *   - resource, view, shader, state, query, and command structures;
  *   - the literal DDI version numbers, which the public specification elides;
@@ -219,10 +221,11 @@ typedef struct D3D10DDIARG_CALCPRIVATEDEVICESIZE D3D10DDIARG_CALCPRIVATEDEVICESI
 typedef struct D3D10_2DDIARG_GETCAPS D3D10_2DDIARG_GETCAPS;
 typedef struct _D3DDDI_ADAPTERCALLBACKS D3DDDI_ADAPTERCALLBACKS;
 
-/* D3D10DDIARG_CREATEDEVICE is completed by the device-creation group at the
- * end of this header; the adapter table below needs only its name.  The
- * tables and callback blocks its members point at stay incomplete, and each
- * is the subject of a group of its own. */
+/* D3D10DDIARG_CREATEDEVICE is completed by the device-creation group below,
+ * and D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS by the core-layer group at the
+ * end of this header; the adapter table below needs only their names.  The
+ * remaining tables its members point at stay incomplete, and each is the
+ * subject of a group of its own. */
 typedef struct D3D10DDIARG_CREATEDEVICE D3D10DDIARG_CREATEDEVICE;
 typedef struct _D3DDDI_DEVICECALLBACKS D3DDDI_DEVICECALLBACKS;
 typedef struct D3DWDDM2_6DDI_DEVICEFUNCS D3DWDDM2_6DDI_DEVICEFUNCS;
@@ -496,7 +499,7 @@ WINE_DDI_STATIC_ASSERT(
  * pWDDM2_6UMCallbacks, unconditionally and for both versions it advertises, so
  * those are the two declared here.  The full arm lists are recorded above so
  * the omission is a declaration choice rather than a transcription loss; every
- * arm is a pointer at the same offset, and scripts/gen_ddi_layout.swift models
+ * arm is a pointer at the same offset, and scripts/gen_ddi_layout.py models
  * both arm sets and checks they agree on every offset and on the size.
  *
  * The device handle's member name is quoted from the pinned MIT driver, which
@@ -663,5 +666,413 @@ WINE_DDI_STATIC_ASSERT(
         && (D3D11DDI_CREATEDEVICE_FLAG_SINGLETHREADED
                 & D3D11DDI_CREATEDEVICE_FLAG_3DPIPELINESUPPORT_MASK) == 0,
         "no create-device flag may overlap the 3-D pipeline level mask");
+
+/*
+ * Group: core-layer device callbacks
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3dwddm2_6ddi_corelayer_devicecallbacks
+ * Retrieved: 2026-09-07
+ *
+ * This is the table the host fills and the driver calls, which is why it is
+ * authored signature-complete rather than as bare slots.  Every other table so
+ * far is filled by the driver and called by the host, so an unpromoted slot
+ * there is simply never invoked; here the driver invokes the host on its own
+ * schedule and with its own arguments, and a slot whose signature is wrong is
+ * a corrupted call frame rather than a missing feature.
+ *
+ * Both documentation surfaces were cross-validated before it was written: the
+ * rendered syntax block and the markdown mirror agree on 47 members in the
+ * same order.  46 of the member types are distinct;
+ * PFND3DWDDM2_2DDI_SHADERCACHE_ADDREF_RELEASE_CB is the one type used twice,
+ * for pfnShaderCacheAddRefCb and pfnShaderCacheReleaseCb.
+ *
+ * Note that pfnDisableDeferredStagingResourceDestruction is the one member
+ * with no Cb suffix.  Both surfaces spell it that way; it is not a typo here.
+ *
+ * Companion specifications, all retrieved 2026-09-07, each the page
+ * https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/<slug>
+ * for the slug listed:
+ *
+ *   nc-d3d10umddi-pfnd3d10ddi_seterror_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_vs_constbuf_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_ps_srv_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_ps_shader_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_ps_sampler_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_vs_shader_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_ps_constbuf_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_ia_inputlayout_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_ia_vertexbuf_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_ia_indexbuf_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_gs_constbuf_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_gs_shader_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_ia_primitive_topology_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_vs_srv_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_vs_sampler_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_gs_srv_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_gs_sampler_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_om_rendertargets_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_om_blendstate_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_om_depthstate_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_rs_raststate_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_so_targets_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_rs_viewports_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_rs_scissor_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_disable_deferred_staging_resource_destruction_cb
+ *   nc-d3d10umddi-pfnd3d10ddi_state_textfiltersize_cb
+ *   nc-d3d10umddi-pfnd3d11ddi_state_hs_srv_cb
+ *   nc-d3d10umddi-pfnd3d11ddi_state_hs_shader_cb
+ *   nc-d3d10umddi-pfnd3d11ddi_state_hs_sampler_cb
+ *   nc-d3d10umddi-pfnd3d11ddi_state_hs_constbuf_cb
+ *   nc-d3d10umddi-pfnd3d11ddi_state_ds_srv_cb
+ *   nc-d3d10umddi-pfnd3d11ddi_state_ds_shader_cb
+ *   nc-d3d10umddi-pfnd3d11ddi_state_ds_sampler_cb
+ *   nc-d3d10umddi-pfnd3d11ddi_state_ds_constbuf_cb
+ *   nc-d3d10umddi-pfnd3d11ddi_perform_amortized_processing_cb
+ *   nc-d3d10umddi-pfnd3d11ddi_state_cs_srv_cb
+ *   nc-d3d10umddi-pfnd3d11ddi_state_cs_uav_cb
+ *   nc-d3d10umddi-pfnd3d11ddi_state_cs_shader_cb
+ *   nc-d3d10umddi-pfnd3d11ddi_state_cs_sampler_cb
+ *   nc-d3d10umddi-pfnd3d11ddi_state_cs_constbuf_cb
+ *   nc-d3d10umddi-pfnd3dwddm2_2ddi_shadercache_store_value_cb
+ *   nc-d3d10umddi-pfnd3dwddm2_2ddi_shadercache_addref_release_cb
+ *
+ * and, for the two context-creation slots, whose own typedef names have no
+ * page and whose documentation the structure page points at instead:
+ *
+ *   https://learn.microsoft.com/en-us/previous-versions/ff568895(v=vs.85)
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/nc-d3dumddi-pfnd3dddi_createcontextvirtualcb
+ *
+ * Base and Count are not in the same order in both halves of this table, and
+ * that is quoted, not a transcription slip.  The D3D10-era pages document
+ * (hRuntimeDevice, Count, Base); the D3D11-era pages document
+ * (hRuntimeDevice, Base, Count).  Both parameters are UINT, so nothing about
+ * the ABI distinguishes them and no assertion here can catch a host that
+ * implements one family with the other's order.  The parameter names below
+ * are therefore load-bearing documentation rather than decoration.
+ *
+ * Two slots are declared without a signature.  The structure page names their
+ * types but the public set contains no page for either
+ * PFND3DWDDM2_2DDI_SHADERCACHE_GET_VALUE_CB or
+ * PFND3DWDDM2_6DDI_QUERY_SCANOUT_CAPS_CB: both surfaces return 404, and the
+ * structure page prints no link for them where it links every other member.
+ * Rule 1 forbids reconstructing what is not published, so they take the
+ * undeclared-slot type below.  Their offsets are exact, which is what the
+ * table's layout depends on; what is missing is only the ability to implement
+ * them, and a host that needs to must record where the signature came from
+ * under a group of its own.
+ *
+ * D3DWDDM2_2DDI_HRTCACHESESSION is a runtime handle, and its name is quoted
+ * from the shader-cache syntax blocks above.  Its contents follow the
+ * documented runtime-handle convention, exactly as the adapter pair's do, and
+ * that is a derivation rather than a quotation.  The argument structures the
+ * remaining slots point at stay incomplete, each the subject of a group of its
+ * own: what this group needs from them is a pointer.
+ *
+ * No calling convention is written on these pointers, for the reason the
+ * adapter tables record.  The archived pfnCreateContextCb page does print
+ * APIENTRY CALLBACK, but this header is frozen to Win64 x86_64, where that
+ * expands to the one calling convention there is.
+ */
+typedef struct D3DWDDM2_2DDI_HRTCACHESESSION
+{
+    void *handle;
+} D3DWDDM2_2DDI_HRTCACHESESSION;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3DWDDM2_2DDI_HRTCACHESESSION);
+WINE_DDI_ASSERT_SIZE(D3DWDDM2_2DDI_HRTCACHESESSION, 8);
+WINE_DDI_ASSERT_ALIGN(D3DWDDM2_2DDI_HRTCACHESESSION, 8);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_2DDI_HRTCACHESESSION, handle, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3DWDDM2_2DDI_HRTCACHESESSION, handle, 8);
+
+typedef struct D3DWDDM2_2DDI_SHADERCACHE_HASH D3DWDDM2_2DDI_SHADERCACHE_HASH;
+typedef struct _D3DDDICB_CREATECONTEXT D3DDDICB_CREATECONTEXT;
+typedef struct _D3DDDICB_CREATECONTEXTVIRTUAL D3DDDICB_CREATECONTEXTVIRTUAL;
+
+/* A slot whose signature the public specification does not give.  It is a
+ * function pointer, so its size and every offset after it are exact, but it
+ * takes no arguments and returns nothing, so calling it as though its real
+ * contract were known does not compile without an explicit cast.  That is the
+ * point: an undeclared contract must be impossible to invoke by accident. */
+typedef void (*PFNWINE_D3D11DDI_UNDECLARED_CB)(void);
+
+/* The one callback that reports a driver-side failure to the runtime.  Every
+ * DDI entry point that returns void uses this instead. */
+typedef VOID (*PFND3D10DDI_SETERROR_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice,
+        HRESULT hResult);
+
+/* The D3D10-era state refresh callbacks that name no range: the runtime
+ * refreshes the whole of the state in question. */
+typedef void (*PFND3D10DDI_STATE_PS_SHADER_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice);
+typedef void (*PFND3D10DDI_STATE_VS_SHADER_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice);
+typedef void (*PFND3D10DDI_STATE_GS_SHADER_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice);
+typedef void (*PFND3D10DDI_STATE_IA_INPUTLAYOUT_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice);
+typedef void (*PFND3D10DDI_STATE_IA_INDEXBUF_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice);
+typedef void (*PFND3D10DDI_STATE_IA_PRIMITIVE_TOPOLOGY_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice);
+typedef void (*PFND3D10DDI_STATE_OM_RENDERTARGETS_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice);
+typedef void (*PFND3D10DDI_STATE_OM_BLENDSTATE_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice);
+typedef void (*PFND3D10DDI_STATE_OM_DEPTHSTATE_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice);
+typedef void (*PFND3D10DDI_STATE_RS_RASTSTATE_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice);
+typedef void (*PFND3D10DDI_STATE_SO_TARGETS_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice);
+typedef void (*PFND3D10DDI_STATE_RS_VIEWPORTS_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice);
+typedef void (*PFND3D10DDI_STATE_RS_SCISSOR_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice);
+typedef void (*PFND3D10DDI_STATE_TEXTFILTERSIZE_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice);
+typedef void (*PFND3D10DDI_DISABLE_DEFERRED_STAGING_RESOURCE_DESTRUCTION_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice);
+
+/* The D3D10-era state refresh callbacks that name a range, as (Count, Base).
+ * Count may be passed as -1, which asks the runtime to substitute its own
+ * high-water mark, so a host must not treat it as an unsigned array length. */
+typedef void (*PFND3D10DDI_STATE_VS_CONSTBUF_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice, UINT Count, UINT Base);
+typedef void (*PFND3D10DDI_STATE_PS_CONSTBUF_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice, UINT Count, UINT Base);
+typedef void (*PFND3D10DDI_STATE_GS_CONSTBUF_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice, UINT Count, UINT Base);
+typedef void (*PFND3D10DDI_STATE_VS_SRV_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice, UINT Count, UINT Base);
+typedef void (*PFND3D10DDI_STATE_PS_SRV_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice, UINT Count, UINT Base);
+typedef void (*PFND3D10DDI_STATE_GS_SRV_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice, UINT Count, UINT Base);
+typedef void (*PFND3D10DDI_STATE_VS_SAMPLER_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice, UINT Count, UINT Base);
+typedef void (*PFND3D10DDI_STATE_PS_SAMPLER_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice, UINT Count, UINT Base);
+typedef void (*PFND3D10DDI_STATE_GS_SAMPLER_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice, UINT Count, UINT Base);
+typedef void (*PFND3D10DDI_STATE_IA_VERTEXBUF_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice, UINT Count, UINT Base);
+
+/* The D3D11-era state refresh callbacks.  Same two UINTs, documented in the
+ * opposite order: (Base, Count). */
+typedef void (*PFND3D11DDI_STATE_HS_SHADER_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice);
+typedef void (*PFND3D11DDI_STATE_DS_SHADER_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice);
+typedef void (*PFND3D11DDI_STATE_CS_SHADER_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice);
+typedef void (*PFND3D11DDI_PERFORM_AMORTIZED_PROCESSING_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice);
+typedef void (*PFND3D11DDI_STATE_HS_SRV_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice, UINT Base, UINT Count);
+typedef void (*PFND3D11DDI_STATE_HS_SAMPLER_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice, UINT Base, UINT Count);
+typedef void (*PFND3D11DDI_STATE_HS_CONSTBUF_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice, UINT Base, UINT Count);
+typedef void (*PFND3D11DDI_STATE_DS_SRV_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice, UINT Base, UINT Count);
+typedef void (*PFND3D11DDI_STATE_DS_SAMPLER_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice, UINT Base, UINT Count);
+typedef void (*PFND3D11DDI_STATE_DS_CONSTBUF_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice, UINT Base, UINT Count);
+typedef void (*PFND3D11DDI_STATE_CS_SRV_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice, UINT Base, UINT Count);
+typedef void (*PFND3D11DDI_STATE_CS_UAV_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice, UINT Base, UINT Count);
+typedef void (*PFND3D11DDI_STATE_CS_SAMPLER_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice, UINT Base, UINT Count);
+typedef void (*PFND3D11DDI_STATE_CS_CONSTBUF_CB)(
+        D3D10DDI_HRTCORELAYER hRuntimeDevice, UINT Base, UINT Count);
+
+/* The kernel-facing slots.  These take the display device handle rather than
+ * the core-layer handle, because they reach past the runtime into the display
+ * kernel; docs/D3D11ON12.md lists the display-kernel paths as disabled for
+ * this port, so the host is expected to refuse rather than forward them. */
+typedef HRESULT (*PFND3DWDDM2_0DDI_CREATECONTEXT_CB)(
+        HANDLE hDevice,
+        D3DDDICB_CREATECONTEXT *pData);
+typedef HRESULT (*PFND3DWDDM2_0DDI_CREATECONTEXTVIRTUAL_CB)(
+        HANDLE hDevice,
+        D3DDDICB_CREATECONTEXTVIRTUAL *pData);
+
+/* The shader cache.  Get is undeclared above; store and the shared
+ * addref/release entry point are published. */
+typedef HRESULT (*PFND3DWDDM2_2DDI_SHADERCACHE_STORE_VALUE_CB)(
+        D3DWDDM2_2DDI_HRTCACHESESSION hCacheSession,
+        const D3DWDDM2_2DDI_SHADERCACHE_HASH *pPrecomputedHash,
+        const void *pKey,
+        SIZE_T KeyLen,
+        const void *pValue,
+        SIZE_T ValueLen);
+typedef void (*PFND3DWDDM2_2DDI_SHADERCACHE_ADDREF_RELEASE_CB)(
+        D3DWDDM2_2DDI_HRTCACHESESSION hCacheSession);
+
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB
+        PFND3DWDDM2_2DDI_SHADERCACHE_GET_VALUE_CB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB
+        PFND3DWDDM2_6DDI_QUERY_SCANOUT_CAPS_CB;
+
+struct D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS
+{
+    PFND3D10DDI_SETERROR_CB                    pfnSetErrorCb;
+    PFND3D10DDI_STATE_VS_CONSTBUF_CB           pfnStateVsConstBufCb;
+    PFND3D10DDI_STATE_PS_SRV_CB                pfnStatePsSrvCb;
+    PFND3D10DDI_STATE_PS_SHADER_CB             pfnStatePsShaderCb;
+    PFND3D10DDI_STATE_PS_SAMPLER_CB            pfnStatePsSamplerCb;
+    PFND3D10DDI_STATE_VS_SHADER_CB             pfnStateVsShaderCb;
+    PFND3D10DDI_STATE_PS_CONSTBUF_CB           pfnStatePsConstBufCb;
+    PFND3D10DDI_STATE_IA_INPUTLAYOUT_CB        pfnStateIaInputLayoutCb;
+    PFND3D10DDI_STATE_IA_VERTEXBUF_CB          pfnStateIaVertexBufCb;
+    PFND3D10DDI_STATE_IA_INDEXBUF_CB           pfnStateIaIndexBufCb;
+    PFND3D10DDI_STATE_GS_CONSTBUF_CB           pfnStateGsConstBufCb;
+    PFND3D10DDI_STATE_GS_SHADER_CB             pfnStateGsShaderCb;
+    PFND3D10DDI_STATE_IA_PRIMITIVE_TOPOLOGY_CB pfnStateIaPrimitiveTopologyCb;
+    PFND3D10DDI_STATE_VS_SRV_CB                pfnStateVsSrvCb;
+    PFND3D10DDI_STATE_VS_SAMPLER_CB            pfnStateVsSamplerCb;
+    PFND3D10DDI_STATE_GS_SRV_CB                pfnStateGsSrvCb;
+    PFND3D10DDI_STATE_GS_SAMPLER_CB            pfnStateGsSamplerCb;
+    PFND3D10DDI_STATE_OM_RENDERTARGETS_CB      pfnStateOmRenderTargetsCb;
+    PFND3D10DDI_STATE_OM_BLENDSTATE_CB         pfnStateOmBlendStateCb;
+    PFND3D10DDI_STATE_OM_DEPTHSTATE_CB         pfnStateOmDepthStateCb;
+    PFND3D10DDI_STATE_RS_RASTSTATE_CB          pfnStateRsRastStateCb;
+    PFND3D10DDI_STATE_SO_TARGETS_CB            pfnStateSoTargetsCb;
+    PFND3D10DDI_STATE_RS_VIEWPORTS_CB          pfnStateRsViewportsCb;
+    PFND3D10DDI_STATE_RS_SCISSOR_CB            pfnStateRsScissorCb;
+    PFND3D10DDI_DISABLE_DEFERRED_STAGING_RESOURCE_DESTRUCTION_CB
+                                               pfnDisableDeferredStagingResourceDestruction;
+    PFND3D10DDI_STATE_TEXTFILTERSIZE_CB        pfnStateTextFilterSizeCb;
+    PFND3D11DDI_STATE_HS_SRV_CB                pfnStateHsSrvCb;
+    PFND3D11DDI_STATE_HS_SHADER_CB             pfnStateHsShaderCb;
+    PFND3D11DDI_STATE_HS_SAMPLER_CB            pfnStateHsSamplerCb;
+    PFND3D11DDI_STATE_HS_CONSTBUF_CB           pfnStateHsConstBufCb;
+    PFND3D11DDI_STATE_DS_SRV_CB                pfnStateDsSrvCb;
+    PFND3D11DDI_STATE_DS_SHADER_CB             pfnStateDsShaderCb;
+    PFND3D11DDI_STATE_DS_SAMPLER_CB            pfnStateDsSamplerCb;
+    PFND3D11DDI_STATE_DS_CONSTBUF_CB           pfnStateDsConstBufCb;
+    PFND3D11DDI_PERFORM_AMORTIZED_PROCESSING_CB pfnPerformAmortizedProcessingCb;
+    PFND3D11DDI_STATE_CS_SRV_CB                pfnStateCsSrvCb;
+    PFND3D11DDI_STATE_CS_UAV_CB                pfnStateCsUavCb;
+    PFND3D11DDI_STATE_CS_SHADER_CB             pfnStateCsShaderCb;
+    PFND3D11DDI_STATE_CS_SAMPLER_CB            pfnStateCsSamplerCb;
+    PFND3D11DDI_STATE_CS_CONSTBUF_CB           pfnStateCsConstBufCb;
+    PFND3DWDDM2_0DDI_CREATECONTEXT_CB          pfnCreateContextCb;
+    PFND3DWDDM2_0DDI_CREATECONTEXTVIRTUAL_CB   pfnCreateContextVirtualCb;
+    PFND3DWDDM2_2DDI_SHADERCACHE_GET_VALUE_CB  pfnShaderCacheGetValueCb;
+    PFND3DWDDM2_2DDI_SHADERCACHE_STORE_VALUE_CB pfnShaderCacheStoreValueCb;
+    PFND3DWDDM2_2DDI_SHADERCACHE_ADDREF_RELEASE_CB pfnShaderCacheAddRefCb;
+    PFND3DWDDM2_2DDI_SHADERCACHE_ADDREF_RELEASE_CB pfnShaderCacheReleaseCb;
+    PFND3DWDDM2_6DDI_QUERY_SCANOUT_CAPS_CB     pfnQueryScanoutCapsCb;
+};
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS);
+WINE_DDI_ASSERT_SIZE(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS, 376);
+WINE_DDI_ASSERT_ALIGN(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS, 8);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnSetErrorCb, 0);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateVsConstBufCb, 8);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStatePsSrvCb, 16);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStatePsShaderCb, 24);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStatePsSamplerCb, 32);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateVsShaderCb, 40);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStatePsConstBufCb, 48);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateIaInputLayoutCb, 56);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateIaVertexBufCb, 64);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateIaIndexBufCb, 72);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateGsConstBufCb, 80);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateGsShaderCb, 88);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateIaPrimitiveTopologyCb, 96);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateVsSrvCb, 104);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateVsSamplerCb, 112);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateGsSrvCb, 120);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateGsSamplerCb, 128);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateOmRenderTargetsCb, 136);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateOmBlendStateCb, 144);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateOmDepthStateCb, 152);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateRsRastStateCb, 160);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateSoTargetsCb, 168);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateRsViewportsCb, 176);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateRsScissorCb, 184);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnDisableDeferredStagingResourceDestruction, 192);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateTextFilterSizeCb, 200);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateHsSrvCb, 208);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateHsShaderCb, 216);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateHsSamplerCb, 224);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateHsConstBufCb, 232);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateDsSrvCb, 240);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateDsShaderCb, 248);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateDsSamplerCb, 256);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateDsConstBufCb, 264);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnPerformAmortizedProcessingCb, 272);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateCsSrvCb, 280);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateCsUavCb, 288);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateCsShaderCb, 296);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateCsSamplerCb, 304);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnStateCsConstBufCb, 312);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnCreateContextCb, 320);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnCreateContextVirtualCb, 328);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnShaderCacheGetValueCb, 336);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnShaderCacheStoreValueCb, 344);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnShaderCacheAddRefCb, 352);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnShaderCacheReleaseCb, 360);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnQueryScanoutCapsCb, 368);
+
+/* Every slot is a function pointer, so the table is exactly its member count
+ * times the pointer size.  Asserting that as arithmetic rather than as another
+ * literal is what catches a member being dropped and its offsets renumbered to
+ * match, which is the one mistake the per-field assertions above cannot see. */
+WINE_DDI_STATIC_ASSERT(
+        sizeof(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS)
+        == 47 * sizeof(void (*)(void)),
+        "the core-layer callback table is 47 function pointers");
 
 #endif /* WINE_D3D11DDI_H */

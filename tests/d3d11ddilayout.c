@@ -280,6 +280,210 @@ static void check_create_device(void)
     }
 }
 
+/* Stand-ins for the host's own core-layer callbacks.  Declaring them with the
+ * declared signatures and assigning them into the table is what makes this
+ * group's claim to be signature-complete mean something: a typedef that
+ * disagreed with an implementable function would not compile, and neither
+ * the compile-time offsets nor the run-time walk below would notice. */
+static int callback_calls;
+
+static void stub_state_refresh(D3D10DDI_HRTCORELAYER hRuntimeDevice)
+{
+    (void)hRuntimeDevice;
+    ++callback_calls;
+}
+
+static void stub_state_range_10(D3D10DDI_HRTCORELAYER hRuntimeDevice,
+        UINT Count, UINT Base)
+{
+    (void)hRuntimeDevice;
+    (void)Count;
+    (void)Base;
+    ++callback_calls;
+}
+
+static void stub_state_range_11(D3D10DDI_HRTCORELAYER hRuntimeDevice,
+        UINT Base, UINT Count)
+{
+    (void)hRuntimeDevice;
+    (void)Base;
+    (void)Count;
+    ++callback_calls;
+}
+
+static VOID stub_set_error(D3D10DDI_HRTCORELAYER hRuntimeDevice, HRESULT hr)
+{
+    (void)hRuntimeDevice;
+    (void)hr;
+    ++callback_calls;
+}
+
+static HRESULT stub_create_context(HANDLE hDevice,
+        D3DDDICB_CREATECONTEXT *pData)
+{
+    (void)hDevice;
+    (void)pData;
+    return 0;
+}
+
+static HRESULT stub_create_context_virtual(HANDLE hDevice,
+        D3DDDICB_CREATECONTEXTVIRTUAL *pData)
+{
+    (void)hDevice;
+    (void)pData;
+    return 0;
+}
+
+static HRESULT stub_shader_cache_store(
+        D3DWDDM2_2DDI_HRTCACHESESSION hCacheSession,
+        const D3DWDDM2_2DDI_SHADERCACHE_HASH *pPrecomputedHash,
+        const void *pKey, SIZE_T KeyLen, const void *pValue, SIZE_T ValueLen)
+{
+    (void)hCacheSession;
+    (void)pPrecomputedHash;
+    (void)pKey;
+    (void)KeyLen;
+    (void)pValue;
+    (void)ValueLen;
+    return 0;
+}
+
+static void stub_shader_cache_addref_release(
+        D3DWDDM2_2DDI_HRTCACHESESSION hCacheSession)
+{
+    (void)hCacheSession;
+    ++callback_calls;
+}
+
+/* The two slots whose signature the specification does not publish.  They can
+ * only be filled through their declared placeholder type, which is the whole
+ * reason that type exists. */
+static void stub_undeclared(void)
+{
+    ++callback_calls;
+}
+
+/* The table the host fills and the driver calls.  Every slot is a function
+ * pointer, so a member dropped anywhere above shifts every one after it and
+ * the driver calls the wrong host routine with the wrong frame. */
+static void check_corelayer_callbacks(void)
+{
+    D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS callbacks;
+    D3D10DDI_HRTCORELAYER core_layer;
+
+    memset(&callbacks, 0, sizeof(callbacks));
+    memset(&core_layer, 0, sizeof(core_layer));
+
+#define CHECK_CB(field) \
+    CHECK_FIELD(callbacks, D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS, field)
+
+    CHECK_CB(pfnSetErrorCb);
+    CHECK_CB(pfnStateVsConstBufCb);
+    CHECK_CB(pfnStatePsSrvCb);
+    CHECK_CB(pfnStatePsShaderCb);
+    CHECK_CB(pfnStatePsSamplerCb);
+    CHECK_CB(pfnStateVsShaderCb);
+    CHECK_CB(pfnStatePsConstBufCb);
+    CHECK_CB(pfnStateIaInputLayoutCb);
+    CHECK_CB(pfnStateIaVertexBufCb);
+    CHECK_CB(pfnStateIaIndexBufCb);
+    CHECK_CB(pfnStateGsConstBufCb);
+    CHECK_CB(pfnStateGsShaderCb);
+    CHECK_CB(pfnStateIaPrimitiveTopologyCb);
+    CHECK_CB(pfnStateVsSrvCb);
+    CHECK_CB(pfnStateVsSamplerCb);
+    CHECK_CB(pfnStateGsSrvCb);
+    CHECK_CB(pfnStateGsSamplerCb);
+    CHECK_CB(pfnStateOmRenderTargetsCb);
+    CHECK_CB(pfnStateOmBlendStateCb);
+    CHECK_CB(pfnStateOmDepthStateCb);
+    CHECK_CB(pfnStateRsRastStateCb);
+    CHECK_CB(pfnStateSoTargetsCb);
+    CHECK_CB(pfnStateRsViewportsCb);
+    CHECK_CB(pfnStateRsScissorCb);
+    CHECK_CB(pfnDisableDeferredStagingResourceDestruction);
+    CHECK_CB(pfnStateTextFilterSizeCb);
+    CHECK_CB(pfnStateHsSrvCb);
+    CHECK_CB(pfnStateHsShaderCb);
+    CHECK_CB(pfnStateHsSamplerCb);
+    CHECK_CB(pfnStateHsConstBufCb);
+    CHECK_CB(pfnStateDsSrvCb);
+    CHECK_CB(pfnStateDsShaderCb);
+    CHECK_CB(pfnStateDsSamplerCb);
+    CHECK_CB(pfnStateDsConstBufCb);
+    CHECK_CB(pfnPerformAmortizedProcessingCb);
+    CHECK_CB(pfnStateCsSrvCb);
+    CHECK_CB(pfnStateCsUavCb);
+    CHECK_CB(pfnStateCsShaderCb);
+    CHECK_CB(pfnStateCsSamplerCb);
+    CHECK_CB(pfnStateCsConstBufCb);
+    CHECK_CB(pfnCreateContextCb);
+    CHECK_CB(pfnCreateContextVirtualCb);
+    CHECK_CB(pfnShaderCacheGetValueCb);
+    CHECK_CB(pfnShaderCacheStoreValueCb);
+    CHECK_CB(pfnShaderCacheAddRefCb);
+    CHECK_CB(pfnShaderCacheReleaseCb);
+    CHECK_CB(pfnQueryScanoutCapsCb);
+
+#undef CHECK_CB
+
+    check_size("D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS", 376,
+            (unsigned long)sizeof(callbacks));
+
+    /* One slot of every declared shape, filled and then called through the
+     * table.  Assignment alone proves the signatures are implementable;
+     * calling them proves the frame the driver would build actually lands. */
+    callbacks.pfnSetErrorCb = stub_set_error;
+    callbacks.pfnStatePsShaderCb = stub_state_refresh;
+    callbacks.pfnStatePsSrvCb = stub_state_range_10;
+    callbacks.pfnStateHsShaderCb = stub_state_refresh;
+    callbacks.pfnStateHsSrvCb = stub_state_range_11;
+    callbacks.pfnDisableDeferredStagingResourceDestruction = stub_state_refresh;
+    callbacks.pfnPerformAmortizedProcessingCb = stub_state_refresh;
+    callbacks.pfnCreateContextCb = stub_create_context;
+    callbacks.pfnCreateContextVirtualCb = stub_create_context_virtual;
+    callbacks.pfnShaderCacheStoreValueCb = stub_shader_cache_store;
+    callbacks.pfnShaderCacheAddRefCb = stub_shader_cache_addref_release;
+    callbacks.pfnShaderCacheReleaseCb = stub_shader_cache_addref_release;
+    callbacks.pfnShaderCacheGetValueCb = stub_undeclared;
+    callbacks.pfnQueryScanoutCapsCb = stub_undeclared;
+
+    callback_calls = 0;
+    callbacks.pfnSetErrorCb(core_layer, 0);
+    callbacks.pfnStatePsShaderCb(core_layer);
+    callbacks.pfnStatePsSrvCb(core_layer, 4, 0);
+    callbacks.pfnStateHsSrvCb(core_layer, 0, 4);
+    callbacks.pfnShaderCacheGetValueCb();
+    callbacks.pfnQueryScanoutCapsCb();
+
+    if (callback_calls == 6)
+    {
+        printf("[ ok ] the core-layer callback slots are callable as "
+                "declared\n");
+    }
+    else
+    {
+        printf("[fail] %d of 6 core-layer callbacks reached their "
+                "implementation\n", callback_calls);
+        ++failures;
+    }
+
+    /* The two shader-cache reference-count slots are one type used twice, so
+     * a single implementation has to fit both.  If they ever diverged, the
+     * host would need two and would not be told. */
+    if (callbacks.pfnShaderCacheAddRefCb == callbacks.pfnShaderCacheReleaseCb)
+    {
+        printf("[ ok ] the shader cache addref and release slots share a "
+                "type\n");
+    }
+    else
+    {
+        printf("[fail] the shader cache addref and release slots no longer "
+                "accept one implementation\n");
+        ++failures;
+    }
+}
+
 /* The version arithmetic is macro expansion, so the header asserts it at
  * compile time.  Recomputing it here would restate the same expansion and
  * prove nothing; what run time can still check is that the composed value
@@ -323,6 +527,7 @@ int main(void)
     check_open_adapter();
     check_device_handles();
     check_create_device();
+    check_corelayer_callbacks();
     check_version_arithmetic();
 
     if (failures)

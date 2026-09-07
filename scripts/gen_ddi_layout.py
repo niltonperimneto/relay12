@@ -147,6 +147,7 @@ RUNTIME_HANDLES = [
     "D3D10DDI_HRTRESOURCE",
     "D3D10DDI_HRTDEVICE",
     "D3D10DDI_HRTCORELAYER",
+    "D3DWDDM2_2DDI_HRTCACHESESSION",
 ]
 
 HANDLES = [
@@ -278,12 +279,98 @@ CREATEDEVICE = Struct(
     ],
 )
 
+# Group: core-layer device callbacks
+# Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3dwddm2_6ddi_corelayer_devicecallbacks
+# Retrieved: 2026-09-07
+#
+# 47 members in the order the rendered syntax block and the markdown mirror
+# both give, every one a function pointer.  The member list is transcribed
+# here from the specification rather than from the header, which is the whole
+# point: a slot dropped or reordered in one artifact and not the other is
+# exactly what this model exists to catch, and across 47 near-identical names
+# it is a mistake a reader will not see.
+#
+# pfnDisableDeferredStagingResourceDestruction has no Cb suffix on either
+# surface, and pfnShaderCacheAddRefCb and pfnShaderCacheReleaseCb share one
+# type.  Both are as published.
+
+CORELAYER_CALLBACK_SLOTS = [
+    ("pfnSetErrorCb", "PFND3D10DDI_SETERROR_CB"),
+    ("pfnStateVsConstBufCb", "PFND3D10DDI_STATE_VS_CONSTBUF_CB"),
+    ("pfnStatePsSrvCb", "PFND3D10DDI_STATE_PS_SRV_CB"),
+    ("pfnStatePsShaderCb", "PFND3D10DDI_STATE_PS_SHADER_CB"),
+    ("pfnStatePsSamplerCb", "PFND3D10DDI_STATE_PS_SAMPLER_CB"),
+    ("pfnStateVsShaderCb", "PFND3D10DDI_STATE_VS_SHADER_CB"),
+    ("pfnStatePsConstBufCb", "PFND3D10DDI_STATE_PS_CONSTBUF_CB"),
+    ("pfnStateIaInputLayoutCb", "PFND3D10DDI_STATE_IA_INPUTLAYOUT_CB"),
+    ("pfnStateIaVertexBufCb", "PFND3D10DDI_STATE_IA_VERTEXBUF_CB"),
+    ("pfnStateIaIndexBufCb", "PFND3D10DDI_STATE_IA_INDEXBUF_CB"),
+    ("pfnStateGsConstBufCb", "PFND3D10DDI_STATE_GS_CONSTBUF_CB"),
+    ("pfnStateGsShaderCb", "PFND3D10DDI_STATE_GS_SHADER_CB"),
+    ("pfnStateIaPrimitiveTopologyCb",
+     "PFND3D10DDI_STATE_IA_PRIMITIVE_TOPOLOGY_CB"),
+    ("pfnStateVsSrvCb", "PFND3D10DDI_STATE_VS_SRV_CB"),
+    ("pfnStateVsSamplerCb", "PFND3D10DDI_STATE_VS_SAMPLER_CB"),
+    ("pfnStateGsSrvCb", "PFND3D10DDI_STATE_GS_SRV_CB"),
+    ("pfnStateGsSamplerCb", "PFND3D10DDI_STATE_GS_SAMPLER_CB"),
+    ("pfnStateOmRenderTargetsCb", "PFND3D10DDI_STATE_OM_RENDERTARGETS_CB"),
+    ("pfnStateOmBlendStateCb", "PFND3D10DDI_STATE_OM_BLENDSTATE_CB"),
+    ("pfnStateOmDepthStateCb", "PFND3D10DDI_STATE_OM_DEPTHSTATE_CB"),
+    ("pfnStateRsRastStateCb", "PFND3D10DDI_STATE_RS_RASTSTATE_CB"),
+    ("pfnStateSoTargetsCb", "PFND3D10DDI_STATE_SO_TARGETS_CB"),
+    ("pfnStateRsViewportsCb", "PFND3D10DDI_STATE_RS_VIEWPORTS_CB"),
+    ("pfnStateRsScissorCb", "PFND3D10DDI_STATE_RS_SCISSOR_CB"),
+    ("pfnDisableDeferredStagingResourceDestruction",
+     "PFND3D10DDI_DISABLE_DEFERRED_STAGING_RESOURCE_DESTRUCTION_CB"),
+    ("pfnStateTextFilterSizeCb", "PFND3D10DDI_STATE_TEXTFILTERSIZE_CB"),
+    ("pfnStateHsSrvCb", "PFND3D11DDI_STATE_HS_SRV_CB"),
+    ("pfnStateHsShaderCb", "PFND3D11DDI_STATE_HS_SHADER_CB"),
+    ("pfnStateHsSamplerCb", "PFND3D11DDI_STATE_HS_SAMPLER_CB"),
+    ("pfnStateHsConstBufCb", "PFND3D11DDI_STATE_HS_CONSTBUF_CB"),
+    ("pfnStateDsSrvCb", "PFND3D11DDI_STATE_DS_SRV_CB"),
+    ("pfnStateDsShaderCb", "PFND3D11DDI_STATE_DS_SHADER_CB"),
+    ("pfnStateDsSamplerCb", "PFND3D11DDI_STATE_DS_SAMPLER_CB"),
+    ("pfnStateDsConstBufCb", "PFND3D11DDI_STATE_DS_CONSTBUF_CB"),
+    ("pfnPerformAmortizedProcessingCb",
+     "PFND3D11DDI_PERFORM_AMORTIZED_PROCESSING_CB"),
+    ("pfnStateCsSrvCb", "PFND3D11DDI_STATE_CS_SRV_CB"),
+    ("pfnStateCsUavCb", "PFND3D11DDI_STATE_CS_UAV_CB"),
+    ("pfnStateCsShaderCb", "PFND3D11DDI_STATE_CS_SHADER_CB"),
+    ("pfnStateCsSamplerCb", "PFND3D11DDI_STATE_CS_SAMPLER_CB"),
+    ("pfnStateCsConstBufCb", "PFND3D11DDI_STATE_CS_CONSTBUF_CB"),
+    ("pfnCreateContextCb", "PFND3DWDDM2_0DDI_CREATECONTEXT_CB"),
+    ("pfnCreateContextVirtualCb", "PFND3DWDDM2_0DDI_CREATECONTEXTVIRTUAL_CB"),
+    ("pfnShaderCacheGetValueCb", "PFND3DWDDM2_2DDI_SHADERCACHE_GET_VALUE_CB"),
+    ("pfnShaderCacheStoreValueCb",
+     "PFND3DWDDM2_2DDI_SHADERCACHE_STORE_VALUE_CB"),
+    ("pfnShaderCacheAddRefCb",
+     "PFND3DWDDM2_2DDI_SHADERCACHE_ADDREF_RELEASE_CB"),
+    ("pfnShaderCacheReleaseCb",
+     "PFND3DWDDM2_2DDI_SHADERCACHE_ADDREF_RELEASE_CB"),
+    ("pfnQueryScanoutCapsCb", "PFND3DWDDM2_6DDI_QUERY_SCANOUT_CAPS_CB"),
+]
+
+CORELAYER_CALLBACKS = Struct(
+    "D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS",
+    [Field(name, type_name) for name, type_name in CORELAYER_CALLBACK_SLOTS],
+)
+
+# The published member count, held separately from the list above so that
+# losing a line from it is a failure rather than a smaller table that agrees
+# with itself.
+if len(CORELAYER_CALLBACK_SLOTS) != 47:
+    raise SystemExit(
+        "the core-layer callback table is published with 47 members, "
+        f"the model lists {len(CORELAYER_CALLBACK_SLOTS)}"
+    )
+
 GROUPS = HANDLES + [
     ADAPTERFUNCS,
     ADAPTERFUNCS_2,
     OPENADAPTER,
     DXGI_BASE_ARGS,
     CREATEDEVICE,
+    CORELAYER_CALLBACKS,
 ]
 
 # DXGI_DDI_BASE_ARGS is asserted in the header both on its own and through
