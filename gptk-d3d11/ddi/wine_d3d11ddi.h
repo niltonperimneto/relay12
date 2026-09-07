@@ -112,18 +112,280 @@
 /*
  * Declaration groups.
  *
- * None are declared yet.  docs/D3D11ON12.md requires these, and each one
- * lands here with its provenance block and layout assertions:
+ * Authored here so far:
  *
- *   - adapter, device, context, and resource handle types;
+ *   - driver and runtime object handles (adapter and resource);
+ *   - adapter function tables and the OpenAdapter argument structure;
+ *   - the version negotiation arithmetic.
+ *
+ * Still required by docs/D3D11ON12.md, each to land with its own provenance
+ * block and layout assertions:
+ *
+ *   - device and context handle types;
  *   - runtime callback tables;
- *   - adapter and device function tables;
+ *   - device function tables;
  *   - resource, view, shader, state, query, and command structures;
- *   - version negotiation constants;
+ *   - the literal DDI version numbers, which the public specification elides;
  *   - DXGI DDI interoperability structures.
  *
- * Until a group is declared and asserted here, the D3D11On12 host cannot be
- * compiled, and the core must keep returning DXGI_ERROR_UNSUPPORTED.
+ * Until those land the D3D11On12 host cannot be compiled, and the core must
+ * keep returning DXGI_ERROR_UNSUPPORTED.
  */
+
+/*
+ * Group: driver and runtime object handles
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/display/direct3d-version-10-runtime-and-driver-handles
+ * Retrieved: 2026-09-06
+ *
+ * The specification gives the resource pair verbatim and states the rule the
+ * rest follow: these handles "are essentially pointers that are wrapped with a
+ * strong type to identify the object that is being operated on".  A driver
+ * handle points at the runtime-allocated private block whose size the driver
+ * returned from CalcPrivate<ObjType>Size, so its member is pDrvPrivate; a
+ * runtime handle carries an opaque runtime value, so its member is handle.
+ *
+ * D3D10DDI_HRESOURCE and D3D10DDI_HRTRESOURCE are the page's own code block.
+ * The adapter pair's type names come from the D3D10DDIARG_OPENADAPTER syntax
+ * block cited in the group below; their contents follow the documented
+ * convention.  That is a clean-room derivation, not a quotation, and it is
+ * recorded as such.  What the host actually depends on is the binary
+ * contract, and that the specification does determine: one pointer, asserted
+ * below.
+ *
+ * Device and context handles are deliberately absent.  They belong to the
+ * device group, which is not authored yet; naming their members from
+ * recollection would put an unverified declaration behind a provenance block,
+ * which is the one thing this header exists to prevent.
+ */
+typedef struct D3D10DDI_HADAPTER
+{
+    void *pDrvPrivate;
+} D3D10DDI_HADAPTER;
+
+typedef struct D3D10DDI_HRTADAPTER
+{
+    void *handle;
+} D3D10DDI_HRTADAPTER;
+
+typedef struct D3D10DDI_HRESOURCE
+{
+    void *pDrvPrivate;
+} D3D10DDI_HRESOURCE;
+
+typedef struct D3D10DDI_HRTRESOURCE
+{
+    void *handle;
+} D3D10DDI_HRTRESOURCE;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_HADAPTER);
+WINE_DDI_ASSERT_SIZE(D3D10DDI_HADAPTER, 8);
+WINE_DDI_ASSERT_ALIGN(D3D10DDI_HADAPTER, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_HADAPTER, pDrvPrivate, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_HADAPTER, pDrvPrivate, 8);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_HRTADAPTER);
+WINE_DDI_ASSERT_SIZE(D3D10DDI_HRTADAPTER, 8);
+WINE_DDI_ASSERT_ALIGN(D3D10DDI_HRTADAPTER, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_HRTADAPTER, handle, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_HRTADAPTER, handle, 8);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_HRESOURCE);
+WINE_DDI_ASSERT_SIZE(D3D10DDI_HRESOURCE, 8);
+WINE_DDI_ASSERT_ALIGN(D3D10DDI_HRESOURCE, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_HRESOURCE, pDrvPrivate, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_HRESOURCE, pDrvPrivate, 8);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_HRTRESOURCE);
+WINE_DDI_ASSERT_SIZE(D3D10DDI_HRTRESOURCE, 8);
+WINE_DDI_ASSERT_ALIGN(D3D10DDI_HRTRESOURCE, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_HRTRESOURCE, handle, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_HRTRESOURCE, handle, 8);
+
+/*
+ * Argument structures belonging to groups that are not authored yet.
+ *
+ * These stay incomplete on purpose.  Every use below is behind a pointer, so
+ * an incomplete type carries the correct size and alignment and keeps the
+ * function signatures honest, while making it a compile error to touch a
+ * field nobody has derived from a specification yet.  Each completes in place
+ * when its own group lands, under its own provenance block.
+ */
+typedef struct D3D10DDIARG_CALCPRIVATEDEVICESIZE D3D10DDIARG_CALCPRIVATEDEVICESIZE;
+typedef struct D3D10DDIARG_CREATEDEVICE D3D10DDIARG_CREATEDEVICE;
+typedef struct D3D10_2DDIARG_GETCAPS D3D10_2DDIARG_GETCAPS;
+typedef struct _D3DDDI_ADAPTERCALLBACKS D3DDDI_ADAPTERCALLBACKS;
+
+/*
+ * Group: adapter function tables and OpenAdapter arguments
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_openadapter
+ * Retrieved: 2026-09-06
+ *
+ * Companion specifications, all retrieved 2026-09-06:
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddi_adapterfuncs
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10_2ddi_adapterfuncs
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_openadapter
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_calcprivatedevicesize
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_createdevice
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_closeadapter
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10_2ddi_getsupportedversions
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10_2ddi_getcaps
+ *
+ * D3D11 is why both tables are here: a version 11 driver must implement
+ * OpenAdapter10_2, which returns D3D10_2DDI_ADAPTERFUNCS through the
+ * pAdapterFuncs_2 arm of the union, while OpenAdapter10 returns
+ * D3D10DDI_ADAPTERFUNCS through pAdapterFuncs.  The union is what makes the
+ * two entry points share one argument structure, so its offset matters as
+ * much as any field's.
+ *
+ * No calling convention is written on these pointers.  The specification's
+ * syntax blocks show none, and this header is frozen to Win64 x86_64, which
+ * has a single calling convention, so APIENTRY would be a no-op that implied
+ * a contract this group has not verified.  An ABI that does distinguish
+ * conventions must re-derive these, as the frozen contract above requires.
+ */
+typedef SIZE_T (*PFND3D10DDI_CALCPRIVATEDEVICESIZE)(
+        D3D10DDI_HADAPTER hAdapter,
+        const D3D10DDIARG_CALCPRIVATEDEVICESIZE *pData);
+
+typedef HRESULT (*PFND3D10DDI_CREATEDEVICE)(
+        D3D10DDI_HADAPTER hAdapter,
+        D3D10DDIARG_CREATEDEVICE *pCreateData);
+
+typedef HRESULT (*PFND3D10DDI_CLOSEADAPTER)(
+        D3D10DDI_HADAPTER hAdapter);
+
+typedef HRESULT (*PFND3D10_2DDI_GETSUPPORTEDVERSIONS)(
+        D3D10DDI_HADAPTER hAdapter,
+        UINT32 *puEntries,
+        UINT64 *pSupportedDDIInterfaceVersions);
+
+typedef HRESULT (*PFND3D10_2DDI_GETCAPS)(
+        D3D10DDI_HADAPTER hAdapter,
+        const D3D10_2DDIARG_GETCAPS *pData);
+
+typedef struct D3D10DDI_ADAPTERFUNCS
+{
+    PFND3D10DDI_CALCPRIVATEDEVICESIZE pfnCalcPrivateDeviceSize;
+    PFND3D10DDI_CREATEDEVICE          pfnCreateDevice;
+    PFND3D10DDI_CLOSEADAPTER          pfnCloseAdapter;
+} D3D10DDI_ADAPTERFUNCS;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_ADAPTERFUNCS);
+WINE_DDI_ASSERT_SIZE(D3D10DDI_ADAPTERFUNCS, 24);
+WINE_DDI_ASSERT_ALIGN(D3D10DDI_ADAPTERFUNCS, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_ADAPTERFUNCS, pfnCalcPrivateDeviceSize, 0);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_ADAPTERFUNCS, pfnCreateDevice, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_ADAPTERFUNCS, pfnCloseAdapter, 16);
+
+typedef struct D3D10_2DDI_ADAPTERFUNCS
+{
+    PFND3D10DDI_CALCPRIVATEDEVICESIZE  pfnCalcPrivateDeviceSize;
+    PFND3D10DDI_CREATEDEVICE           pfnCreateDevice;
+    PFND3D10DDI_CLOSEADAPTER           pfnCloseAdapter;
+    PFND3D10_2DDI_GETSUPPORTEDVERSIONS pfnGetSupportedVersions;
+    PFND3D10_2DDI_GETCAPS              pfnGetCaps;
+} D3D10_2DDI_ADAPTERFUNCS;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10_2DDI_ADAPTERFUNCS);
+WINE_DDI_ASSERT_SIZE(D3D10_2DDI_ADAPTERFUNCS, 40);
+WINE_DDI_ASSERT_ALIGN(D3D10_2DDI_ADAPTERFUNCS, 8);
+WINE_DDI_ASSERT_FIELD(D3D10_2DDI_ADAPTERFUNCS, pfnCalcPrivateDeviceSize, 0);
+WINE_DDI_ASSERT_FIELD(D3D10_2DDI_ADAPTERFUNCS, pfnCreateDevice, 8);
+WINE_DDI_ASSERT_FIELD(D3D10_2DDI_ADAPTERFUNCS, pfnCloseAdapter, 16);
+WINE_DDI_ASSERT_FIELD(D3D10_2DDI_ADAPTERFUNCS, pfnGetSupportedVersions, 24);
+WINE_DDI_ASSERT_FIELD(D3D10_2DDI_ADAPTERFUNCS, pfnGetCaps, 32);
+
+/* The first three entries are the same functions in the same order in both
+ * tables.  OpenAdapter10_2 is the entry point a D3D11 driver must implement,
+ * so the host will fill the _2 table; asserting the shared prefix keeps a
+ * future edit from reordering one table and silently changing the other's
+ * meaning. */
+WINE_DDI_STATIC_ASSERT(
+        offsetof(D3D10DDI_ADAPTERFUNCS, pfnCalcPrivateDeviceSize)
+        == offsetof(D3D10_2DDI_ADAPTERFUNCS, pfnCalcPrivateDeviceSize)
+        && offsetof(D3D10DDI_ADAPTERFUNCS, pfnCreateDevice)
+        == offsetof(D3D10_2DDI_ADAPTERFUNCS, pfnCreateDevice)
+        && offsetof(D3D10DDI_ADAPTERFUNCS, pfnCloseAdapter)
+        == offsetof(D3D10_2DDI_ADAPTERFUNCS, pfnCloseAdapter),
+        "the adapter tables must share their leading three entries");
+
+typedef struct D3D10DDIARG_OPENADAPTER
+{
+    D3D10DDI_HRTADAPTER           hRTAdapter;
+    D3D10DDI_HADAPTER             hAdapter;
+    UINT                          Interface;
+    UINT                          Version;
+    const D3DDDI_ADAPTERCALLBACKS *pAdapterCallbacks;
+    union
+    {
+        D3D10DDI_ADAPTERFUNCS   *pAdapterFuncs;
+        D3D10_2DDI_ADAPTERFUNCS *pAdapterFuncs_2;
+    };
+} D3D10DDIARG_OPENADAPTER;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDIARG_OPENADAPTER);
+WINE_DDI_ASSERT_SIZE(D3D10DDIARG_OPENADAPTER, 40);
+WINE_DDI_ASSERT_ALIGN(D3D10DDIARG_OPENADAPTER, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENADAPTER, hRTAdapter, 0);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENADAPTER, hAdapter, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENADAPTER, Interface, 16);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDIARG_OPENADAPTER, Interface, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENADAPTER, Version, 20);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDIARG_OPENADAPTER, Version, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENADAPTER, pAdapterCallbacks, 24);
+/* Both arms are the same storage; a divergence here would mean the union had
+ * been turned into a structure, which changes the size of every argument
+ * block the runtime passes. */
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENADAPTER, pAdapterFuncs, 32);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENADAPTER, pAdapterFuncs_2, 32);
+
+typedef HRESULT (*PFND3D10DDI_OPENADAPTER)(
+        D3D10DDIARG_OPENADAPTER *pOpenData);
+
+/*
+ * Group: version negotiation arithmetic
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/display/initializing-communication-with-the-direct3d-version-11-ddi
+ * Retrieved: 2026-09-06
+ *
+ * The specification gives the major version as a literal and the composition
+ * of an interface version and a supported-version word as code.  It does not
+ * give the minor and build numbers: D3D11_0_DDI_MINOR_VERSION,
+ * D3D11_0_DDI_BUILD_VERSION, D3D11_0_7_DDI_MINOR_VERSION and
+ * D3D11_0_7_DDI_BUILD_VERSION all appear as literal ellipses on the page.
+ *
+ * So the literals are not publicly specified, and this header does not
+ * define them.  They exist only in the WDK header, and rule 1 forbids both
+ * transcribing that header and reconstructing one from a binary; writing the
+ * numbers from recollection would be exactly that, dressed in a provenance
+ * block that cites a page which does not contain them.  Whoever supplies them
+ * must record where they came from, under a group of their own, and the
+ * repository's authorized-WDK-comparison rule above is the only sanctioned
+ * route.  A wrong version number here does not corrupt memory; it makes the
+ * runtime negotiate a DDI the host does not implement, which is worse,
+ * because it fails inside the driver rather than at the boundary.
+ *
+ * What is publicly specified is the arithmetic, so that is what is captured,
+ * parameterised.  These carry the WINE_ prefix deliberately: they are not the
+ * WDK's fixed-name object-like macros, and must not be mistaken for them.
+ */
+#define D3D11_DDI_MAJOR_VERSION 11
+
+#define WINE_D3D11_DDI_INTERFACE_VERSION(minor) \
+    (((D3D11_DDI_MAJOR_VERSION) << 16) | (minor))
+
+#define WINE_D3D11_DDI_SUPPORTED(interface_version, build_version) \
+    ((((UINT64)(interface_version)) << 32) | (((UINT64)(build_version)) << 16))
+
+/* The composition is the whole content of this group, so it is asserted
+ * rather than trusted.  The operands are arbitrary and carry no claim about
+ * any real DDI version. */
+WINE_DDI_STATIC_ASSERT(D3D11_DDI_MAJOR_VERSION == 11,
+        "the D3D11 DDI major version is 11");
+WINE_DDI_STATIC_ASSERT(WINE_D3D11_DDI_INTERFACE_VERSION(3) == 0x000b0003,
+        "an interface version is the major version in the high 16 bits");
+WINE_DDI_STATIC_ASSERT(
+        WINE_D3D11_DDI_SUPPORTED(0x000b0003, 0x0007) == 0x000b000300070000ULL,
+        "a supported-version word is the interface version in the high 32 "
+        "bits and the build version in the next 16");
 
 #endif /* WINE_D3D11DDI_H */
