@@ -256,6 +256,28 @@ generator in the build would mean the offsets are whatever the docs said today
 rather than what was reviewed. The generator is a tool for producing a patch,
 and its output is read before it lands.
 
+`scripts/gen_ddi_layout.py` is that tool, and it has a second mode that is
+worth more than the first. `--emit` prints a group's declaration and
+assertions; `--check` compares the model against the committed header and is a
+CI gate. The distinction it exists for: the compiled assertions only prove the
+header is *self-consistent*. Transcribe a member list wrongly, assert the
+offsets that follow from it, and the compiler, the run-time harness and both
+languages all agree. The model derives its offsets by walking member lists
+instead of asserting numbers, so a divergence between the two is visible. It
+catches three things:
+
+- a hand-edited offset in either the header or the model;
+- a field the model knows and the header does not assert, which is rule 3's
+  "an unasserted field is not acceptable", enforced rather than remembered;
+- an assertion naming a field nothing derives from the specification, which is
+  how a stale declaration would outlive the group it belonged to.
+
+It is not independent authorship, so it does not defend against reading the
+specification wrong once and writing it into both. Only cross-validating the
+two documentation surfaces does that, and that stays a discipline. What
+`--check` defends against is *drift* — the two artifacts ceasing to agree
+after the day they were written, which over 178 slots is the likelier failure.
+
 The provenance blocks stay hand-written. They carry judgment — what was
 quoted, what was derived, what is missing — and that is not mechanizable.
 
@@ -298,7 +320,7 @@ that a write through it lands in the host's slot.
 
 Only the union arms the pinned driver reads are declared, per rule 4. The
 provenance block records the full published arm lists so the omission reads as
-a choice rather than a transcription loss, and `scripts/gen_ddi_layout.swift`
+a choice rather than a transcription loss, and `scripts/gen_ddi_layout.py`
 models both arm sets and fails if they disagree on any offset.
 
 Remaining, in the order they should land:
