@@ -256,6 +256,13 @@ jobs:
             -o d3d11ddilayoutxx.exe tests/d3d11ddilayout.c
           wine d3d11ddilayout.exe
           wine d3d11ddilayoutxx.exe
+          # A second opinion about the same offsets.  The compiled assertions
+          # only prove the header is self-consistent: transcribe a member list
+          # wrongly, assert the offsets that follow from it, and both agree.
+          # This model derives them by walking member lists instead, so it
+          # catches a hand-edited offset, an unasserted field, and an
+          # assertion for a field nothing derives from the specification.
+          python3 scripts/gen_ddi_layout.py --check
           python3 - <<'PY'
           import pathlib
 
