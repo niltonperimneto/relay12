@@ -31,13 +31,24 @@ that would fail silently are reported, once each: a missing or wrong
 cannot be established, and the deliberate `DXGI_ERROR_UNSUPPORTED` of this
 milestone.
 
-`ddi/` holds the clean-room D3D11 DDI work: the layout-assertion harness and
-the rules any declaration group must follow. Proprietary WDK headers must
-never be copied there, and the declarations are frozen for the Win64 `x86_64`
-ABI at natural alignment: `#pragma pack` is prohibited and CI rejects it.
+`ddi/` holds the clean-room D3D11 DDI work: the layout-assertion harness, the
+rules any declaration group must follow, and the groups authored so far — the
+adapter and resource handles, both adapter function tables with
+`D3D10DDIARG_OPENADAPTER`, and the version negotiation arithmetic. Every group
+cites the public specification it was authored from and asserts its size,
+alignment, and every field offset. Proprietary WDK headers must never be
+copied there, and the declarations are frozen for the Win64 `x86_64` ABI at
+natural alignment: `#pragma pack` is prohibited and CI rejects it.
+
+Where a value is not publicly specified, the group says so rather than
+guessing. The D3D11 DDI minor and build numbers are the current case: the
+specification composes an interface version in code but prints the numbers as
+ellipses, so the header defines the arithmetic and leaves the literals
+undefined.
 
 `tests/d3d11on12coretest.c` validates the core's boundary with mock COM
 objects, `tests/d3d11shimstatus.c` validates that the router fails closed with
 documented codes when neither module is deployed beside it, and
-`tests/d3d11ddilayout.c` validates the layout harness itself. All three run
-under Wine in pull-request CI.
+`tests/d3d11ddilayout.c` validates the layout harness and then walks the
+declared groups the same way, compiled and run as both C and C++. All three
+run under Wine in pull-request CI.
