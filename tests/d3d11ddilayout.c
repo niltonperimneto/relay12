@@ -20,9 +20,9 @@
  *
  * Build (both languages must succeed):
  *   x86_64-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
- *       -Igptk-d3d11/ddi -o d3d11ddilayout.exe tests/d3d11ddilayout.c
+ *       -Irelay12-d3d11/ddi -o d3d11ddilayout.exe tests/d3d11ddilayout.c
  *   x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Werror \
- *       -Igptk-d3d11/ddi -x c++ -o d3d11ddilayoutxx.exe tests/d3d11ddilayout.c
+ *       -Irelay12-d3d11/ddi -x c++ -o d3d11ddilayoutxx.exe tests/d3d11ddilayout.c
  */
 #include <stdio.h>
 #include <string.h>
