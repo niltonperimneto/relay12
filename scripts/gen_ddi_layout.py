@@ -4,7 +4,7 @@
 # An independent layout model of the clean-room DDI declaration groups.
 #
 # The model is written from the same public specifications as
-# gptk-d3d11/ddi/wine_d3d11ddi.h, but it derives the offsets by walking member
+# relay12-d3d11/ddi/wine_d3d11ddi.h, but it derives the offsets by walking member
 # lists rather than by asserting numbers, so it is a second opinion about the
 # same facts.  It does two jobs.
 #
@@ -34,7 +34,7 @@ import re
 import sys
 from dataclasses import dataclass, field as dataclass_field
 
-HEADER = pathlib.Path("gptk-d3d11/ddi/wine_d3d11ddi.h")
+HEADER = pathlib.Path("relay12-d3d11/ddi/wine_d3d11ddi.h")
 
 # The frozen contract is Win64 x86_64 at natural alignment.  Every type in
 # these groups is a pointer, a handle wrapping one, or a 4-byte integer.
@@ -359,7 +359,7 @@ def parse_header(text):
     return fields, sizes, aligns
 
 
-def check():
+def check(header=HEADER):
     errors = []
 
     # 1. Declaring a subset of a union's arms must not move anything.
@@ -380,11 +380,12 @@ def check():
                 )
 
     # 2. The committed header must agree with the model, both ways.
-    if not HEADER.is_file():
-        errors.append(f"{HEADER}: not found; run this from the repository root")
+    if not header.is_file():
+        errors.append(f"{header}: not found; run this from the repository root")
         return errors
 
-    asserted_fields, asserted_sizes, asserted_aligns = parse_header(HEADER.read_text())
+    asserted_fields, asserted_sizes, asserted_aligns = parse_header(
+            header.read_text())
 
     for struct in GROUPS:
         modelled, size, alignment = struct.walk()
@@ -450,10 +451,16 @@ def main():
         metavar="STRUCT",
         help="print declarations and assertions, all groups if none named",
     )
+    parser.add_argument(
+        "--header",
+        type=pathlib.Path,
+        default=HEADER,
+        help=f"the header to check against (default: {HEADER})",
+    )
     args = parser.parse_args()
 
     if args.check:
-        errors = check()
+        errors = check(args.header)
         if errors:
             for error in errors:
                 print(error, file=sys.stderr)

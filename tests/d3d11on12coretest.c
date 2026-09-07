@@ -8,7 +8,7 @@
  * initializers: any method the core is not expected to call is left NULL, so
  * an unexpected call faults immediately instead of passing silently.
  *
- * Build: x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -Werror -Igptk-d3d11 \
+ * Build: x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -Werror -Irelay12-d3d11 \
  *            -c -o d3d11on12coretest.o tests/d3d11on12coretest.c
  */
 #include <windows.h>
@@ -56,6 +56,11 @@ struct mock_device
      * is the object that defeats an identity comparison which only checks the
      * HRESULT, because two of them compare equal to each other. */
     int lie_about_identity;
+    /* How many nodes this device claims.  One is the ordinary answer; the
+     * interesting values are a larger count, which makes a high node bit
+     * legitimate, and zero, which is a payload naming no node at all. */
+    UINT node_count;
+    unsigned int node_count_calls;
 };
 
 static struct mock_device *impl_from_device(ID3D12Device *iface)
@@ -121,6 +126,14 @@ static HRESULT STDMETHODCALLTYPE mock_device_CheckFeatureSupport(
     return device->feature_hr;
 }
 
+static UINT STDMETHODCALLTYPE mock_device_GetNodeCount(ID3D12Device *iface)
+{
+    struct mock_device *device = impl_from_device(iface);
+
+    ++device->node_count_calls;
+    return device->node_count;
+}
+
 /* Not const: the widl C interface declares lpVtbl as a pointer to
  * non-const. */
 static ID3D12DeviceVtbl mock_device_vtbl =
@@ -129,6 +142,7 @@ static ID3D12DeviceVtbl mock_device_vtbl =
     .AddRef = mock_device_AddRef,
     .Release = mock_device_Release,
     .CheckFeatureSupport = mock_device_CheckFeatureSupport,
+    .GetNodeCount = mock_device_GetNodeCount,
 };
 
 static void mock_device_init(struct mock_device *device)
@@ -138,6 +152,7 @@ static void mock_device_init(struct mock_device *device)
     device->refcount = 1;
     device->feature_hr = S_OK;
     device->max_feature_level = D3D_FEATURE_LEVEL_11_0;
+    device->node_count = 1;
 }
 
 /* Mock ID3D12CommandQueue. */
@@ -337,18 +352,29 @@ struct outputs
     D3D_FEATURE_LEVEL level;
 };
 
+static HRESULT call_create_with_flags(IUnknown *device_object, UINT flags,
+        const D3D_FEATURE_LEVEL *levels, UINT level_count,
+        IUnknown *const *queues, UINT queue_count, UINT node_mask,
+        struct outputs *out)
+{
+    /* Poisoned, not zeroed: an output the core forgot to initialize has to be
+     * distinguishable from one it cleared, or check_cleared proves nothing. */
+    out->device = (ID3D11Device *)(ULONG_PTR)0xdeadbeefdeadbeefull;
+    out->context = (ID3D11DeviceContext *)(ULONG_PTR)0xfeedfacefeedfaceull;
+    out->level = (D3D_FEATURE_LEVEL)0x9999;
+
+    return WineD3D11On12CreateDeviceV1(device_object, flags, levels,
+            level_count, queues, queue_count, node_mask, &out->device,
+            &out->context, &out->level);
+}
+
 static HRESULT call_create(IUnknown *device_object,
         const D3D_FEATURE_LEVEL *levels, UINT level_count,
         IUnknown *const *queues, UINT queue_count, UINT node_mask,
         struct outputs *out)
 {
-    out->device = (ID3D11Device *)(ULONG_PTR)0xdeadbeefdeadbeefull;
-    out->context = (ID3D11DeviceContext *)(ULONG_PTR)0xfeedfacefeedfaceull;
-    out->level = (D3D_FEATURE_LEVEL)0x9999;
-
-    return WineD3D11On12CreateDeviceV1(device_object, 0, levels, level_count,
-            queues, queue_count, node_mask, &out->device, &out->context,
-            &out->level);
+    return call_create_with_flags(device_object, 0, levels, level_count, queues,
+            queue_count, node_mask, out);
 }
 
 static void check_cleared(const char *test, const struct outputs *out)
@@ -728,13 +754,162 @@ static void test_fail_closed(void)
     check_hr("valid inputs with node mask 1", hr, DXGI_ERROR_UNSUPPORTED);
     check_cleared("valid inputs with node mask 1", &out);
 
+    check_balanced("fail-closed path", &device, &queue);
+}
+
+/* A single-bit node mask is not the same as a node the device has.  This used
+ * to accept any single bit, so a mask of 0x8 on a one-node device reached the
+ * host and would have asked the driver for a node the caller's D3D12 device
+ * does not own. */
+static void test_node_mask(void)
+{
+    struct mock_device device;
+    struct mock_queue queue;
+    IUnknown *queues[1];
+    struct outputs out;
+    HRESULT hr;
+
+    mock_device_init(&device);
+    mock_queue_init(&queue, &device, D3D12_COMMAND_LIST_TYPE_DIRECT);
+    queues[0] = (IUnknown *)&queue.ID3D12CommandQueue_iface;
+
+    /* A zero mask means the default node, so there is nothing to ask the
+     * device about and it must not be asked. */
+    hr = call_create((IUnknown *)&device.ID3D12Device_iface, NULL, 0, queues, 1,
+            0, &out);
+    check_hr("node mask 0 needs no node count", hr, DXGI_ERROR_UNSUPPORTED);
+    if (device.node_count_calls)
+        fail("node mask 0 needs no node count",
+                "the device's node count was consulted anyway");
+
+    hr = call_create((IUnknown *)&device.ID3D12Device_iface, NULL, 0, queues, 1,
+            1, &out);
+    check_hr("the only node of a one-node device", hr, DXGI_ERROR_UNSUPPORTED);
+    check_cleared("the only node of a one-node device", &out);
+
+    hr = call_create((IUnknown *)&device.ID3D12Device_iface, NULL, 0, queues, 1,
+            0x2, &out);
+    check_hr("the second node of a one-node device", hr, E_INVALIDARG);
+    check_cleared("the second node of a one-node device", &out);
+
     hr = call_create((IUnknown *)&device.ID3D12Device_iface, NULL, 0, queues, 1,
             0x8, &out);
-    check_hr("valid inputs with a single high node bit", hr,
-            DXGI_ERROR_UNSUPPORTED);
-    check_cleared("valid inputs with a single high node bit", &out);
+    check_hr("a high node bit on a one-node device", hr, E_INVALIDARG);
+    check_cleared("a high node bit on a one-node device", &out);
 
-    check_balanced("fail-closed path", &device, &queue);
+    device.node_count = 4;
+    hr = call_create((IUnknown *)&device.ID3D12Device_iface, NULL, 0, queues, 1,
+            0x8, &out);
+    check_hr("the fourth node of a four-node device", hr,
+            DXGI_ERROR_UNSUPPORTED);
+    check_cleared("the fourth node of a four-node device", &out);
+
+    hr = call_create((IUnknown *)&device.ID3D12Device_iface, NULL, 0, queues, 1,
+            0x10, &out);
+    check_hr("the fifth node of a four-node device", hr, E_INVALIDARG);
+    check_cleared("the fifth node of a four-node device", &out);
+
+    /* A device claiming no nodes cannot satisfy any mask.  Nothing sane
+     * reports this, which is why it is worth a documented answer rather than
+     * an arithmetic accident. */
+    device.node_count = 0;
+    hr = call_create((IUnknown *)&device.ID3D12Device_iface, NULL, 0, queues, 1,
+            1, &out);
+    check_hr("a device reporting zero nodes", hr, E_INVALIDARG);
+    check_cleared("a device reporting zero nodes", &out);
+
+    /* The highest bit a UINT mask can carry, on a device with more nodes than
+     * bits.  The count-to-mask arithmetic must not shift by 32. */
+    device.node_count = 32;
+    hr = call_create((IUnknown *)&device.ID3D12Device_iface, NULL, 0, queues, 1,
+            0x80000000u, &out);
+    check_hr("the highest node bit on a 32-node device", hr,
+            DXGI_ERROR_UNSUPPORTED);
+    check_cleared("the highest node bit on a 32-node device", &out);
+
+    check_balanced("node mask", &device, &queue);
+}
+
+/* The creation flags used to be an unnamed parameter that nothing read. */
+static void test_creation_flags(void)
+{
+    static const UINT known[] =
+    {
+        D3D11_CREATE_DEVICE_SINGLETHREADED,
+        D3D11_CREATE_DEVICE_DEBUG,
+        D3D11_CREATE_DEVICE_SWITCH_TO_REF,
+        D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS,
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        D3D11_CREATE_DEVICE_DEBUGGABLE,
+        D3D11_CREATE_DEVICE_PREVENT_ALTERING_LAYER_DEFAULTS_FROM_REGISTRY,
+        D3D11_CREATE_DEVICE_DISABLE_GPU_TIMEOUT,
+        D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+    };
+    struct mock_device device;
+    struct mock_queue queue;
+    IUnknown *queues[1];
+    struct outputs out;
+    UINT all = 0;
+    UINT unclaimed;
+    UINT undefined;
+    unsigned int i;
+    int accepted = 1;
+    HRESULT hr;
+
+    mock_device_init(&device);
+    mock_queue_init(&queue, &device, D3D12_COMMAND_LIST_TYPE_DIRECT);
+    queues[0] = (IUnknown *)&queue.ID3D12CommandQueue_iface;
+
+    for (i = 0; i < TEST_ARRAY_SIZE(known); ++i)
+    {
+        hr = call_create_with_flags((IUnknown *)&device.ID3D12Device_iface,
+                known[i], NULL, 0, queues, 1, 0, &out);
+        if (hr != DXGI_ERROR_UNSUPPORTED)
+        {
+            printf("[fail] every documented creation flag is accepted: "
+                    "flag 0x%lx returned 0x%08lx\n", (unsigned long)known[i],
+                    (unsigned long)hr);
+            ++failures;
+            accepted = 0;
+        }
+        all |= known[i];
+    }
+    if (accepted)
+        printf("[ ok ] every documented creation flag is accepted\n");
+
+    hr = call_create_with_flags((IUnknown *)&device.ID3D12Device_iface, all,
+            NULL, 0, queues, 1, 0, &out);
+    check_hr("every documented creation flag at once", hr,
+            DXGI_ERROR_UNSUPPORTED);
+    check_cleared("every documented creation flag at once", &out);
+
+    /* The lowest bit no documented flag claims, derived rather than written
+     * down so this stays an undefined bit if the SDK gains a new flag. */
+    unclaimed = ~all;
+    undefined = unclaimed & (0u - unclaimed);
+    if (!undefined || (undefined & all))
+        fail("an undefined creation flag is rejected",
+                "the test could not derive an undefined bit");
+
+    hr = call_create_with_flags((IUnknown *)&device.ID3D12Device_iface,
+            undefined, NULL, 0, queues, 1, 0, &out);
+    check_hr("an undefined creation flag is rejected", hr, E_INVALIDARG);
+    check_cleared("an undefined creation flag is rejected", &out);
+
+    hr = call_create_with_flags((IUnknown *)&device.ID3D12Device_iface,
+            all | undefined, NULL, 0, queues, 1, 0, &out);
+    check_hr("one undefined bit among the documented ones is rejected", hr,
+            E_INVALIDARG);
+    check_cleared("one undefined bit among the documented ones is rejected",
+            &out);
+
+    /* The rejection must not depend on a device at all: it is an argument
+     * error, and the core checks it before it acquires anything. */
+    hr = call_create_with_flags(NULL, undefined, NULL, 0, queues, 1, 0, &out);
+    check_hr("a null device with an undefined flag is still rejected", hr,
+            E_INVALIDARG);
+
+    check_balanced("creation flags", &device, &queue);
 }
 
 static void test_optional_outputs(void)
@@ -809,6 +984,8 @@ int main(void)
     test_identity_of_contract_violating_devices();
     test_feature_levels();
     test_fail_closed();
+    test_node_mask();
+    test_creation_flags();
     test_optional_outputs();
     test_reference_stress();
 

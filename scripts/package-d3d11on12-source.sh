@@ -12,7 +12,7 @@ output=$1
 work=$(mktemp -d "${TMPDIR:-/tmp}/d3d11on12-source.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
-prefix=winecx-gptk/
+prefix=relay12/
 main_tar=$work/source.tar
 
 git -C "$repo" archive --format=tar --prefix="$prefix" HEAD > "$main_tar"

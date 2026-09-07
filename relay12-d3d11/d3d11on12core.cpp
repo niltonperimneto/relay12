@@ -26,7 +26,20 @@ public:
     ComRef &operator=(const ComRef &) = delete;
 
     Interface *get() const noexcept { return pointer_; }
-    Interface **put() noexcept { return &pointer_; }
+
+    /* Releasing first is what keeps a second acquisition through the same
+     * holder from dropping the first reference on the floor.  No call site
+     * reuses a holder today, and this is here so that the holder is not the
+     * reason one cannot. */
+    Interface **put() noexcept
+    {
+        if (pointer_)
+        {
+            pointer_->Release();
+            pointer_ = nullptr;
+        }
+        return &pointer_;
+    }
 
 private:
     Interface *pointer_ = nullptr;
@@ -101,6 +114,29 @@ HRESULT comObjectsIdentical(IUnknown *left, IUnknown *right,
     return S_OK;
 }
 
+/* The public creation flags this boundary recognizes.
+ *
+ * Composed from the named enumerators rather than from literals: the numbers
+ * are the SDK's to define, and a hand-copied bitmask here would be one more
+ * place for them to be wrong.  An application passing a bit outside this set
+ * is passing something no published flag names, and accepting it silently
+ * would mean promising to honour it.
+ *
+ * Honouring the ones inside the set is a separate matter, and not this
+ * milestone's: which public flag sets which member of the DDI's Flags word is
+ * a runtime implementation detail that is not publicly specified, so this
+ * validates and records rather than translating.  See docs/CLEANROOM-DDI.md
+ * for the open question. */
+constexpr UINT knownCreateDeviceFlags = D3D11_CREATE_DEVICE_SINGLETHREADED
+        | D3D11_CREATE_DEVICE_DEBUG
+        | D3D11_CREATE_DEVICE_SWITCH_TO_REF
+        | D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS
+        | D3D11_CREATE_DEVICE_BGRA_SUPPORT
+        | D3D11_CREATE_DEVICE_DEBUGGABLE
+        | D3D11_CREATE_DEVICE_PREVENT_ALTERING_LAYER_DEFAULTS_FROM_REGISTRY
+        | D3D11_CREATE_DEVICE_DISABLE_GPU_TIMEOUT
+        | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
+
 /* One guard per repeatable condition.  An application that probes
  * D3D11On12CreateDevice in its initialization loop must not be able to flood
  * the log with these. */
@@ -108,6 +144,8 @@ volatile LONG reportedDeviceNotD3D12;
 volatile LONG reportedQueueNotD3D12;
 volatile LONG reportedQueueDevice;
 volatile LONG reportedIdentity;
+volatile LONG reportedNodeCount;
+volatile LONG reportedUntranslatedFlags;
 volatile LONG reportedNoHost;
 }
 
@@ -135,9 +173,10 @@ extern "C" HRESULT WINAPI WineD3D11On12GetInterface(UINT requestedVersion,
 }
 
 extern "C" HRESULT WINAPI WineD3D11On12CreateDeviceV1(IUnknown *deviceObject,
-        UINT, const D3D_FEATURE_LEVEL *featureLevels, UINT featureLevelCount,
-        IUnknown *const *queueObjects, UINT queueCount, UINT nodeMask,
-        ID3D11Device **device11, ID3D11DeviceContext **context11,
+        UINT flags, const D3D_FEATURE_LEVEL *featureLevels,
+        UINT featureLevelCount, IUnknown *const *queueObjects, UINT queueCount,
+        UINT nodeMask, ID3D11Device **device11,
+        ID3D11DeviceContext **context11,
         D3D_FEATURE_LEVEL *chosenFeatureLevel) noexcept
 {
     clearOutputs(device11, context11, chosenFeatureLevel);
@@ -146,8 +185,19 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateDeviceV1(IUnknown *deviceObject,
         return E_INVALIDARG;
     if ((featureLevels == nullptr) != (featureLevelCount == 0))
         return E_INVALIDARG;
+    if (flags & ~knownCreateDeviceFlags)
+        return E_INVALIDARG;
     if (nodeMask && (nodeMask & (nodeMask - 1)))
         return E_INVALIDARG;
+
+    /* Accepted, but carried no further than this function.  Saying so once is
+     * the difference between a known gap and a parameter that looks honoured
+     * because nothing complained. */
+    if (flags)
+        wineD3D11DiagReportOnce(&reportedUntranslatedFlags,
+                "d3d11on12core: the requested D3D11 creation flags are "
+                "validated but not yet translated to the DDI's create-device "
+                "flags; no flag is being honoured in this milestone.\n");
 
     /* Propagate the QueryInterface result.  A caller that passed something
      * which is not a D3D12 device or queue must be told E_NOINTERFACE rather
@@ -161,6 +211,28 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateDeviceV1(IUnknown *deviceObject,
                 "d3d11on12core: the supplied device object does not implement "
                 "ID3D12Device.\n");
         return hr;
+    }
+
+    /* A single-bit mask is not the same as a mask naming a node that exists.
+     * The bit index has to be below the device's node count, or the host would
+     * later ask the driver to create a device on a node the caller's D3D12
+     * device does not have.  Only asked when a node was named: a zero mask
+     * means the default node and needs no device consulted. */
+    if (nodeMask)
+    {
+        const UINT nodeCount = device12.get()->GetNodeCount();
+
+        if (!nodeCount)
+        {
+            wineD3D11DiagReportOnce(&reportedNodeCount,
+                    "d3d11on12core: the supplied device reports zero nodes, so "
+                    "no node mask can name a node it has.\n");
+            return E_INVALIDARG;
+        }
+        /* At 32 nodes or more every single-bit mask a UINT can hold names a
+         * node, and 1u << 32 is undefined rather than large. */
+        if (nodeCount < 32 && nodeMask >= (1u << nodeCount))
+            return E_INVALIDARG;
     }
 
     ComRef<ID3D12CommandQueue> queue;
