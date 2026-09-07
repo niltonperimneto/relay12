@@ -188,6 +188,98 @@ static void check_open_adapter(void)
     }
 }
 
+static void check_device_handles(void)
+{
+    D3D10DDI_HDEVICE device;
+    D3D10DDI_HRTDEVICE rt_device;
+    D3D10DDI_HRTCORELAYER rt_core_layer;
+
+    memset(&device, 0, sizeof(device));
+    memset(&rt_device, 0, sizeof(rt_device));
+    memset(&rt_core_layer, 0, sizeof(rt_core_layer));
+
+    CHECK_FIELD(device, D3D10DDI_HDEVICE, pDrvPrivate);
+    CHECK_FIELD(rt_device, D3D10DDI_HRTDEVICE, handle);
+    CHECK_FIELD(rt_core_layer, D3D10DDI_HRTCORELAYER, handle);
+
+    check_size("D3D10DDI_HDEVICE", 8, (unsigned long)sizeof(device));
+    check_size("D3D10DDI_HRTDEVICE", 8, (unsigned long)sizeof(rt_device));
+    check_size("D3D10DDI_HRTCORELAYER", 8,
+            (unsigned long)sizeof(rt_core_layer));
+}
+
+/* Stands in for the driver's own RetrieveSubObject.  Declaring it with the
+ * declared signature is the point: it will not compile if the slot's type and
+ * the callback's type ever disagree. */
+static HRESULT stub_retrieve_sub_object(D3D10DDI_HDEVICE hDevice,
+        UINT32 SubDeviceID, SIZE_T ParamSize, void *pParams,
+        SIZE_T OutputParamSize, void *pOutputParamsBuffer)
+{
+    (void)hDevice;
+    (void)SubDeviceID;
+    (void)ParamSize;
+    (void)pParams;
+    (void)OutputParamSize;
+    (void)pOutputParamsBuffer;
+    return 0;
+}
+
+/* The runtime allocates the CreateDevice arguments, so this walk is against
+ * the storage the host will really hand the driver. */
+static void check_create_device(void)
+{
+    D3D10DDIARG_CREATEDEVICE create;
+    PFND3D10DDI_RETRIEVESUBOBJECT retrieve_sub_object;
+    const char *base;
+
+    memset(&create, 0, sizeof(create));
+    base = (const char *)&create;
+
+    CHECK_FIELD(create, D3D10DDIARG_CREATEDEVICE, hRTDevice);
+    CHECK_FIELD(create, D3D10DDIARG_CREATEDEVICE, Interface);
+    CHECK_FIELD(create, D3D10DDIARG_CREATEDEVICE, Version);
+    CHECK_FIELD(create, D3D10DDIARG_CREATEDEVICE, pKTCallbacks);
+    CHECK_FIELD(create, D3D10DDIARG_CREATEDEVICE, pWDDM2_6DeviceFuncs);
+    CHECK_FIELD(create, D3D10DDIARG_CREATEDEVICE, hDrvDevice);
+    CHECK_FIELD(create, D3D10DDIARG_CREATEDEVICE, DXGIBaseDDI);
+    CHECK_FIELD(create, D3D10DDIARG_CREATEDEVICE, hRTCoreLayer);
+    CHECK_FIELD(create, D3D10DDIARG_CREATEDEVICE, pWDDM2_6UMCallbacks);
+    CHECK_FIELD(create, D3D10DDIARG_CREATEDEVICE, Flags);
+    CHECK_FIELD(create, D3D10DDIARG_CREATEDEVICE, ppfnRetrieveSubObject);
+    check_size("D3D10DDIARG_CREATEDEVICE", 88, (unsigned long)sizeof(create));
+
+    /* DXGI_DDI_BASE_ARGS is a member, not a pointer to one.  If it ever
+     * became a pointer the structure would shrink by eight bytes and every
+     * member after it would move, which is why its own members are located
+     * from the enclosing structure's base here. */
+    check_size("DXGI_DDI_BASE_ARGS", 16,
+            (unsigned long)sizeof(create.DXGIBaseDDI));
+    check_offset("D3D10DDIARG_CREATEDEVICE", "DXGIBaseDDI.pDXGIBaseCallbacks",
+            40, (unsigned long)((const char *)&create.DXGIBaseDDI
+                    .pDXGIBaseCallbacks - base));
+    check_offset("D3D10DDIARG_CREATEDEVICE",
+            "DXGIBaseDDI.pDXGIDDIBaseFunctions6_1", 48,
+            (unsigned long)((const char *)&create.DXGIBaseDDI
+                    .pDXGIDDIBaseFunctions6_1 - base));
+
+    /* ppfnRetrieveSubObject points at storage the host owns and the driver
+     * writes.  A host that passed a null here, or read the slot back from the
+     * wrong place, would lose the driver's video function tables silently. */
+    retrieve_sub_object = NULL;
+    create.ppfnRetrieveSubObject = &retrieve_sub_object;
+    *create.ppfnRetrieveSubObject = stub_retrieve_sub_object;
+    if (retrieve_sub_object == stub_retrieve_sub_object)
+    {
+        printf("[ ok ] the driver's RetrieveSubObject lands in host storage\n");
+    }
+    else
+    {
+        printf("[fail] a write through ppfnRetrieveSubObject did not reach "
+                "the host's slot\n");
+        ++failures;
+    }
+}
+
 /* The version arithmetic is macro expansion, so the header asserts it at
  * compile time.  Recomputing it here would restate the same expansion and
  * prove nothing; what run time can still check is that the composed value
@@ -229,6 +321,8 @@ int main(void)
     check_object_handles();
     check_adapter_funcs();
     check_open_adapter();
+    check_device_handles();
+    check_create_device();
     check_version_arithmetic();
 
     if (failures)
