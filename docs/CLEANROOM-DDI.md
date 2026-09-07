@@ -12,7 +12,7 @@ It exists because the task looks unbounded and is not. The surface is
 enumerable, the sources are public, and the sequence is determined by which
 mistakes corrupt memory and which merely fail.
 
-## 1. The target is WDDM 2.6, not D3D11.0 or D3D11.1
+## 1. The tables are WDDM 2.6's, and the version to negotiate is 2.7
 
 The pinned Microsoft D3D11On12 advertises exactly two DDI versions.
 `Adapter::GetSupportedVersions` in `src/adapter.cpp` reads:
@@ -25,18 +25,40 @@ static constexpr UINT64 SupportedVersions[] =
 };
 ```
 
-So the device function table to declare is `D3DWDDM2_6DDI_DEVICEFUNCS`. It is
-not `D3D11DDI_DEVICEFUNCS` and not `D3D11_1DDI_DEVICEFUNCS`, despite the
-component being called D3D11On12 and despite those being the tables the D3D11
-DDI initialization documentation leads with.
+So the device function table to declare is `D3DWDDM2_6DDI_DEVICEFUNCS`, and
+the core-layer callback table is `D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS`.
+Neither is `D3D11DDI_DEVICEFUNCS` or `D3D11DDI_CORELAYER_DEVICECALLBACKS`,
+despite the component being called D3D11On12 and despite those being the
+tables the D3D11 DDI initialization documentation leads with.
 
-**Select 2.6 rather than 2.7.** The documented `D3D10DDIARG_CREATEDEVICE`
-union ends at `pWDDM2_6DeviceFuncs`; there is no `pWDDM2_7DeviceFuncs` arm in
-the public record, and no published `D3DWDDM2_7DDI_DEVICEFUNCS`. WDDM 2.6 is
-the newest version that is both advertised by the driver and publicly
-specified. Selecting 2.7 would mean authoring a table and a union arm from
-outside the public record, which is precisely what the clean-room rules
-forbid.
+**The table is the 2.6 one for both advertised versions.** The documented
+`D3D10DDIARG_CREATEDEVICE` union ends at `pWDDM2_6DeviceFuncs`; there is no
+`pWDDM2_7DeviceFuncs` arm in the public record, and no published
+`D3DWDDM2_7DDI_DEVICEFUNCS`. That first read as a reason to negotiate 2.6 and
+leave 2.7 alone, on the grounds that 2.7 would need a table authored from
+outside the public record. Reading the driver shows there is no such table to
+author. In `include/device.hpp` and `src/device.cpp`:
+
+- `DeviceBase` declares `typedef D3DWDDM2_6DDI_DEVICEFUNCS DDITableLatest;`
+  and holds one `DDITableLatest *m_pDDITable`;
+- `GetDeviceFuncsFromCreateArgs` returns `pArgs->pWDDM2_6DeviceFuncs`;
+- the `DeviceBase` constructor initializes `m_pCallbacks` from
+  `Args.pWDDM2_6UMCallbacks` and `m_pDXGITable` from
+  `pArgs->DXGIBaseDDI.pDXGIDDIBaseFunctions6_1`;
+- and then, with no branch on version anywhere above it, it asserts
+  `pArgs->Interface == D3DWDDM2_7_DDI_INTERFACE_VERSION`.
+
+So WDDM 2.7 reuses the 2.6-named tables, the arms the driver reads are the
+same either way, and the version it was written to be handed is the higher of
+the two it advertises.
+
+**Negotiate the numerically highest advertised word**, which is 2.7. It needs
+no declaration that 2.6 does not, and it is the only choice the driver's own
+assertion accepts. That assertion compiles out under `NDEBUG`, so 2.6 would
+very likely also work — but there is no reason to hand a driver a version it
+asserts against. The rule is evaluated against the pinned revision's set of
+exactly two words; if the pin moves, re-read the assertion before trusting
+the rule.
 
 An earlier estimate of this work sized it against `D3D11_1DDI_DEVICEFUNCS` at
 157 slots. That was the wrong table, and the correct one is larger. The
@@ -77,13 +99,14 @@ path.
 
 **The residual weakness, stated plainly.** We can *order* the advertised
 versions but we cannot *name* them. The selection rule is to take the
-numerically lowest advertised word, which is WDDM 2.6, because both the minor
-and the build number increase with version. That is an ordering argument, not
-an identification: if a future driver advertised something lower, we would
-select it silently and believe it was 2.6. So the host must validate the
-device it got rather than trust the selection, and if the literals ever do
-become available the selection should be replaced with an equality check. The
-header records the gap; this is what depends on it.
+numerically highest advertised word, which for the pinned driver is WDDM 2.7,
+because both the minor and the build number increase with version. That is an
+ordering argument, not an identification: if a future driver advertised a
+third, higher version with a table of its own, we would select it silently and
+believe it was 2.7. So the host must validate the device it got rather than
+trust the selection, and if the literals ever do become available the selection
+should be replaced with an equality check. The header records the gap; this is
+what depends on it.
 
 ## 3. What the MIT and WineCX trees already supply
 
@@ -142,7 +165,8 @@ Worked confirmation of the method, on the two largest tables:
 | Structure | Rendered page | Markdown mirror | Bytes |
 | --- | --- | --- | --- |
 | `D3DWDDM2_6DDI_DEVICEFUNCS` | 178 members, 138 distinct types | 178 fields | 1424 |
-| `D3D11DDI_CORELAYER_DEVICECALLBACKS` | 40 members | 40 fields | 320 |
+| `D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS` | 47 members, 46 distinct types | 47 fields | 376 |
+| `D3D10DDIARG_CREATEDEVICE` | 23 members | 23 fields | 88 |
 
 ## 5. Layout before signature
 
@@ -178,7 +202,7 @@ to know a signature, and deferring that claim is more honest than guessing it.
 | --- | --- | --- | --- |
 | `D3D10_2DDI_ADAPTERFUNCS` | driver | host | Host calls wrong; host controls when |
 | `D3DWDDM2_6DDI_DEVICEFUNCS` | driver | host | Host calls wrong; unpromoted slots never called |
-| `D3D11DDI_CORELAYER_DEVICECALLBACKS` | **host** | **driver** | Driver calls us with mismatched arguments |
+| `D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS` | **host** | **driver** | Driver calls us with mismatched arguments |
 | `D3DDDI_DEVICECALLBACKS` | **host** | **driver** | As above |
 
 The tables the host fills are the dangerous ones. The driver will call them
@@ -187,7 +211,7 @@ guard. Those get signature-complete treatment before the host runs at all.
 The tables the driver fills are safer, because the host decides when to call
 and an unpromoted slot is simply never called.
 
-This inverts the intuitive order: the 40-entry callback table is more urgent
+This inverts the intuitive order: the 47-entry callback table is more urgent
 than the 178-entry device table, despite being smaller and appearing later in
 the initialization sequence.
 
@@ -244,20 +268,10 @@ Authored, asserted, and CI-verified:
 | Object handles | `D3D10DDI_HADAPTER`, `HRTADAPTER`, `HRESOURCE`, `HRTRESOURCE` | 8 each |
 | Adapter tables | `D3D10DDI_ADAPTERFUNCS`, `D3D10_2DDI_ADAPTERFUNCS`, `D3D10DDIARG_OPENADAPTER`, 6 `PFN` typedefs | 24 / 40 / 40 |
 | Version arithmetic | `D3D11_DDI_MAJOR_VERSION`, composition macros | n/a |
+| Device creation | `D3D10DDI_HDEVICE`, `HRTDEVICE`, `HRTCORELAYER`, `PFND3D10DDI_RETRIEVESUBOBJECT`, `DXGI_DDI_BASE_ARGS`, `D3D10DDIARG_CREATEDEVICE`, flag constants | 8 each / 16 / 88 |
 
-Remaining, in the order they should land:
-
-| # | Group | Scope | Notes |
-| --- | --- | --- | --- |
-| 1 | Device creation | `DXGI_DDI_BASE_ARGS`, device and core-layer handles, `D3D10DDIARG_CREATEDEVICE`, flag constants | 88 bytes, computed and verified below |
-| 2 | Core-layer callbacks | `D3D11DDI_CORELAYER_DEVICECALLBACKS`, signature-complete | 40 slots; host fills these |
-| 3 | Kernel callbacks | `D3DDDI_DEVICECALLBACKS`, only the members D3D11On12 calls | Host fills these |
-| 4 | Device function table | `D3DWDDM2_6DDI_DEVICEFUNCS`, full layout, placeholder slots | 178 slots, 1424 bytes |
-| 5 | Surface discovery | CI job compiling the MIT tree against the header | Turns the rest into a closed worklist |
-| 6 | Signature promotion | Promote slots by priority from group 5's output | 138 distinct types, worked in priority order |
-| 7 | DXGI DDI interop | `DXGI_DDI_BASE_CALLBACKS`, base function tables | Extent set by group 5 |
-
-Group 1's layout is already computed and locally verified:
+The device-creation group is the whole device-level boundary in one
+declaration, and it landed with every offset asserted and walked at run time:
 
 | Field | Offset |
 | --- | --- |
@@ -273,16 +287,52 @@ Group 1's layout is already computed and locally verified:
 | `Flags` | 72 |
 | `ppfnRetrieveSubObject` | 80 |
 
-`DXGI_DDI_BASE_ARGS` is embedded **by value**, not behind a pointer, so
-`D3D10DDIARG_CREATEDEVICE` cannot be declared before it. It is 16 bytes and
-fully published, so this is an ordering constraint rather than a blocker.
+Three things about it are worth carrying forward. `DXGI_DDI_BASE_ARGS` is
+embedded **by value**, so it had to be declared first; if it ever became a
+pointer, the structure would shrink by eight bytes and everything after it
+would move. `Flags` is four bytes at 72 followed by four bytes of padding no
+member names, so the host must zero the structure rather than assign member by
+member. And `ppfnRetrieveSubObject` is a pointer to a function pointer whose
+storage the *host* owns and the driver writes, which is why the harness checks
+that a write through it lands in the host's slot.
 
-Group 5 is the one that changes the character of the work. Compiling the
+Only the union arms the pinned driver reads are declared, per rule 4. The
+provenance block records the full published arm lists so the omission reads as
+a choice rather than a transcription loss, and `scripts/gen_ddi_layout.swift`
+models both arm sets and fails if they disagree on any offset.
+
+Remaining, in the order they should land:
+
+| # | Group | Scope | Notes |
+| --- | --- | --- | --- |
+| 1 | Core-layer callbacks | `D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS`, signature-complete | 47 slots; host fills these |
+| 2 | Kernel callbacks | `D3DDDI_DEVICECALLBACKS`, only the members D3D11On12 calls | Host fills these |
+| 3 | Device function table | `D3DWDDM2_6DDI_DEVICEFUNCS`, full layout, placeholder slots | 178 slots, 1424 bytes |
+| 4 | Surface discovery | CI job compiling the MIT tree against the header | Turns the rest into a closed worklist |
+| 5 | Signature promotion | Promote slots by priority from group 4's output | 138 distinct types, worked in priority order |
+| 6 | DXGI DDI interop | `DXGI_DDI_BASE_CALLBACKS`, `DXGI1_6_1_DDI_BASE_FUNCTIONS` | Extent set by group 4 |
+
+The core-layer table is `D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS` and it has
+**47** members, not the 40 of `D3D11DDI_CORELAYER_DEVICECALLBACKS`. An earlier
+revision of this document named the D3D11 one. That was wrong: `DeviceBase`
+holds a `const D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS *` and initializes it
+from `Args.pWDDM2_6UMCallbacks`, so the 2.6 table is the one the host fills and
+the driver calls. Both documentation surfaces agree on 47 fields. This is the
+most urgent group by section 6's rule, and it is 18% larger than the estimate
+it replaces.
+
+Group 4 is the one that changes the character of the work. Compiling the
 pinned MIT tree against the clean-room header and collecting unresolved
 identifiers replaces an estimate with a measurement, and gives the effort a
-termination condition instead of a guess. It should not be deferred to the
-end merely because it appears late in the dependency order — it can be stood
-up as soon as group 1 lands, and it will be wrong in useful ways before then.
+termination condition instead of a guess. It should not be deferred to the end
+merely because it appears late in the dependency order — the device-creation
+group has landed, so it can be stood up now, and it will be wrong in useful
+ways before the tables above it exist.
+
+Group 6's extent is already partly known: the driver reads
+`pDXGIBaseCallbacks` and `pDXGIDDIBaseFunctions6_1` out of the structure that
+just landed, and both are incomplete types behind pointers until that group
+authors them.
 
 ## 10. Prohibitions
 
@@ -302,13 +352,22 @@ These restate the header, which governs:
 
 - **Does D3D11On12 require `d3dkmthk.h` types in any signature the host
   touches?** Its `pch.hpp` includes the header, but the host may never see
-  those types across the boundary. Group 5 answers this; until then the
+  those types across the boundary. Group 4 answers this; until then the
   extent of the D3DKMT surface is unknown, and it is the largest remaining
   uncertainty in the total.
 - **Which `D3DDDI_DEVICECALLBACKS` members does the driver actually call?**
   Filling the whole table is more work than the host needs and more risk than
   it should carry. The MIT source's call sites bound this, and reading them
   is cheap.
-- **Does WDDM 2.7 differ from 2.6 in the device table?** If it does not, the
-  selection argument in section 2 gets stronger. If it does, and 2.7 remains
-  undocumented, the selection rule must stay as written.
+- **What is `D3D11DDI_CREATEDEVICE_FLAG_IS_XBOX`?** The driver tests it in
+  `IsXboxCreateFlags`, and its value is in no public document. The header
+  records the gap and does not define it. Nothing the host does needs it —
+  it would never set the flag — but a bit of `Flags` is therefore unaccounted
+  for, alongside the three the 3-D pipeline level mask covers.
+
+Answered since the first revision, kept because the reasoning is load-bearing:
+
+- **Does WDDM 2.7 differ from 2.6 in the device table?** No. `DDITableLatest`
+  is `D3DWDDM2_6DDI_DEVICEFUNCS` for both, and the driver reads the 2.6 union
+  arms while asserting the 2.7 interface version. Section 1 records what that
+  costs and what it buys.
