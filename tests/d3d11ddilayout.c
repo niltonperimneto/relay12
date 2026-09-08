@@ -906,6 +906,52 @@ static HRESULT stub_recycle_create_command_list(D3D10DDI_HDEVICE hDevice,
     return S_OK;
 }
 
+static VOID stub_check_deferred_context_handle_sizes(D3D10DDI_HDEVICE hDevice,
+        UINT *count, D3D11DDI_HANDLESIZE *handle_size)
+{
+    (void)hDevice;
+    (void)handle_size;
+    ++command_list_calls;
+    *count = 1;
+}
+
+static SIZE_T stub_calc_deferred_context_handle_size(
+        D3D10DDI_HDEVICE hDevice, D3D11DDI_HANDLETYPE type, VOID *object)
+{
+    (void)hDevice;
+    (void)type;
+    (void)object;
+    ++command_list_calls;
+    return 32;
+}
+
+static SIZE_T stub_calc_private_deferred_context_size(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE *calculate)
+{
+    (void)hDevice;
+    (void)calculate;
+    ++command_list_calls;
+    return 128;
+}
+
+static VOID stub_create_deferred_context(D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CREATEDEFERREDCONTEXT *create)
+{
+    (void)hDevice;
+    (void)create;
+    ++command_list_calls;
+}
+
+static HRESULT stub_recycle_create_deferred_context(D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CREATEDEFERREDCONTEXT *create)
+{
+    (void)hDevice;
+    (void)create;
+    ++command_list_calls;
+    return S_OK;
+}
+
 static void check_command_list_handle(void)
 {
     D3D11DDI_HCOMMANDLIST command_list;
@@ -930,6 +976,39 @@ static void check_command_list_handle(void)
             (unsigned long)sizeof(create));
 }
 
+static void check_deferred_context_arguments(void)
+{
+    D3D11DDI_HANDLESIZE handle_size;
+    D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE calculate;
+    D3D11DDIARG_CREATEDEFERREDCONTEXT create;
+
+    memset(&handle_size, 0, sizeof(handle_size));
+    memset(&calculate, 0, sizeof(calculate));
+    memset(&create, 0, sizeof(create));
+
+    CHECK_FIELD(handle_size, D3D11DDI_HANDLESIZE, HandleType);
+    CHECK_FIELD(handle_size, D3D11DDI_HANDLESIZE, WinePad0);
+    CHECK_FIELD(handle_size, D3D11DDI_HANDLESIZE, DriverPrivateSize);
+    CHECK_FIELD(calculate, D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE, Flags);
+    CHECK_FIELD(create, D3D11DDIARG_CREATEDEFERREDCONTEXT, pWDDM2_6ContextFuncs);
+    CHECK_FIELD(create, D3D11DDIARG_CREATEDEFERREDCONTEXT, hDrvContext);
+    CHECK_FIELD(create, D3D11DDIARG_CREATEDEFERREDCONTEXT, hRTCoreLayer);
+    CHECK_FIELD(create, D3D11DDIARG_CREATEDEFERREDCONTEXT, pWDDM2_6UMCallbacks);
+    CHECK_FIELD(create, D3D11DDIARG_CREATEDEFERREDCONTEXT, Flags);
+    CHECK_FIELD(create, D3D11DDIARG_CREATEDEFERREDCONTEXT, WinePad0);
+
+    check_size("D3D11DDI_HANDLETYPE", 4,
+            (unsigned long)sizeof(D3D11DDI_HANDLETYPE));
+    check_size("D3D11DDI_HANDLESIZE", 16,
+            (unsigned long)sizeof(handle_size));
+    check_size("D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE", 4,
+            (unsigned long)sizeof(calculate));
+    check_size("D3D11DDIARG_CREATEDEFERREDCONTEXT", 40,
+            (unsigned long)sizeof(create));
+    check_size("D3DWDDM2_2DDI_HT_CACHESESSION", 19,
+            (unsigned long)D3DWDDM2_2DDI_HT_CACHESESSION);
+}
+
 /* The promoted command-list slots, filled and called through the table.
  * pfnDestroyCommandList and pfnRecycleDestroyCommandList share one type
  * outright, so what this checks beyond callability is that the documented
@@ -940,11 +1019,18 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     D3D11DDI_HCOMMANDLIST command_list;
     D3D11DDI_HRTCOMMANDLIST rt_command_list;
     D3D11DDIARG_CREATECOMMANDLIST create;
+    D3D11DDI_HANDLESIZE handle_size;
+    D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE calculate_deferred;
+    D3D11DDIARG_CREATEDEFERREDCONTEXT create_deferred;
+    UINT handle_count = 0;
 
     memset(&device, 0, sizeof(device));
     memset(&command_list, 0, sizeof(command_list));
     memset(&rt_command_list, 0, sizeof(rt_command_list));
     memset(&create, 0, sizeof(create));
+    memset(&handle_size, 0, sizeof(handle_size));
+    memset(&calculate_deferred, 0, sizeof(calculate_deferred));
+    memset(&create_deferred, 0, sizeof(create_deferred));
     create.hDeferredContext = device;
 
     funcs->pfnAbandonCommandList = stub_abandon_command_list;
@@ -955,6 +1041,15 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     funcs->pfnCalcPrivateCommandListSize = stub_calc_private_command_list_size;
     funcs->pfnCreateCommandList = stub_create_command_list;
     funcs->pfnRecycleCreateCommandList = stub_recycle_create_command_list;
+    funcs->pfnCheckDeferredContextHandleSizes =
+            stub_check_deferred_context_handle_sizes;
+    funcs->pfnCalcDeferredContextHandleSize =
+            stub_calc_deferred_context_handle_size;
+    funcs->pfnCalcPrivateDeferredContextSize =
+            stub_calc_private_deferred_context_size;
+    funcs->pfnCreateDeferredContext = stub_create_deferred_context;
+    funcs->pfnRecycleCreateDeferredContext =
+            stub_recycle_create_deferred_context;
 
     command_list_calls = 0;
     CHECK_STACK("PFND3D11DDI_ABANDONCOMMANDLIST",
@@ -975,15 +1070,29 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     CHECK_STACK("PFND3D11DDI_RECYCLECREATECOMMANDLIST",
             (void)funcs->pfnRecycleCreateCommandList(device, &create,
                     command_list, rt_command_list));
+    CHECK_STACK("PFND3D11DDI_CHECKDEFERREDCONTEXTHANDLESIZES",
+            funcs->pfnCheckDeferredContextHandleSizes(device, &handle_count,
+                    &handle_size));
+    CHECK_STACK("PFND3D11DDI_CALCDEFERREDCONTEXTHANDLESIZE",
+            (void)funcs->pfnCalcDeferredContextHandleSize(device,
+                    D3D10DDI_HT_RESOURCE, NULL));
+    CHECK_STACK("PFND3D11DDI_CALCPRIVATEDEFERREDCONTEXTSIZE",
+            (void)funcs->pfnCalcPrivateDeferredContextSize(device,
+                    &calculate_deferred));
+    CHECK_STACK("PFND3D11DDI_CREATEDEFERREDCONTEXT",
+            funcs->pfnCreateDeferredContext(device, &create_deferred));
+    CHECK_STACK("PFND3D11DDI_RECYCLECREATEDEFERREDCONTEXT",
+            (void)funcs->pfnRecycleCreateDeferredContext(device,
+                    &create_deferred));
 
-    if (command_list_calls == 8)
+    if (command_list_calls == 13 && handle_count == 1)
     {
-        printf("[ ok ] the promoted command-list slots are callable as "
+        printf("[ ok ] the promoted command-list and deferred-context slots are callable as "
                 "declared\n");
     }
     else
     {
-        printf("[fail] %d of 8 promoted command-list slots reached their "
+        printf("[fail] %d of 13 promoted command/deferred slots reached their "
                 "implementation\n", command_list_calls);
         ++failures;
     }
@@ -1207,6 +1316,7 @@ int main(void)
     check_device_handles();
     check_create_device();
     check_command_list_handle();
+    check_deferred_context_arguments();
     check_device_funcs();
     check_corelayer_callbacks();
     check_kernel_callbacks();
