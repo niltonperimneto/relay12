@@ -364,6 +364,161 @@ if len(CORELAYER_CALLBACK_SLOTS) != 47:
         f"the model lists {len(CORELAYER_CALLBACK_SLOTS)}"
     )
 
+# Group: kernel device callbacks
+# Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/ns-d3dumddi-_d3dddi_devicecallbacks
+#                https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/ns-d3dumddi-_d3dddicb_escape
+#                https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/ns-d3dumddi-_d3dddicb_synctoken
+# Retrieved: 2026-09-07
+#
+# The rendered syntax block and the markdown mirror disagree at the tail: 66
+# members against 65, the odd one being pfnCreateNativeFenceCb, a WDDM 3.1
+# addition the mirror has not caught up with.  The superset is modelled, for
+# the reason the header records.  Everything the pinned driver reads is at
+# index 9, 53 and 54, identical under both surfaces, so the disagreement
+# cannot move a live offset.
+#
+# Transcribed from the specification rather than from the header, as the
+# core-layer list is: across 66 near-identical names, a slot dropped in one
+# artifact and not the other is not a mistake a reader will see.
+
+KERNEL_CALLBACK_SLOTS = [
+    ("pfnAllocateCb", "PFND3DDDI_ALLOCATECB"),
+    ("pfnDeallocateCb", "PFND3DDDI_DEALLOCATECB"),
+    ("pfnSetPriorityCb", "PFND3DDDI_SETPRIORITYCB"),
+    ("pfnQueryResidencyCb", "PFND3DDDI_QUERYRESIDENCYCB"),
+    ("pfnSetDisplayModeCb", "PFND3DDDI_SETDISPLAYMODECB"),
+    ("pfnPresentCb", "PFND3DDDI_PRESENTCB"),
+    ("pfnRenderCb", "PFND3DDDI_RENDERCB"),
+    ("pfnLockCb", "PFND3DDDI_LOCKCB"),
+    ("pfnUnlockCb", "PFND3DDDI_UNLOCKCB"),
+    ("pfnEscapeCb", "PFND3DDDI_ESCAPECB"),
+    ("pfnCreateOverlayCb", "PFND3DDDI_CREATEOVERLAYCB"),
+    ("pfnUpdateOverlayCb", "PFND3DDDI_UPDATEOVERLAYCB"),
+    ("pfnFlipOverlayCb", "PFND3DDDI_FLIPOVERLAYCB"),
+    ("pfnDestroyOverlayCb", "PFND3DDDI_DESTROYOVERLAYCB"),
+    ("pfnCreateContextCb", "PFND3DDDI_CREATECONTEXTCB"),
+    ("pfnDestroyContextCb", "PFND3DDDI_DESTROYCONTEXTCB"),
+    ("pfnCreateSynchronizationObjectCb",
+     "PFND3DDDI_CREATESYNCHRONIZATIONOBJECTCB"),
+    ("pfnDestroySynchronizationObjectCb",
+     "PFND3DDDI_DESTROYSYNCHRONIZATIONOBJECTCB"),
+    ("pfnWaitForSynchronizationObjectCb",
+     "PFND3DDDI_WAITFORSYNCHRONIZATIONOBJECTCB"),
+    ("pfnSignalSynchronizationObjectCb",
+     "PFND3DDDI_SIGNALSYNCHRONIZATIONOBJECTCB"),
+    ("pfnSetAsyncCallbacksCb", "PFND3DDDI_SETASYNCCALLBACKSCB"),
+    ("pfnSetDisplayPrivateDriverFormatCb",
+     "PFND3DDDI_SETDISPLAYPRIVATEDRIVERFORMATCB"),
+    ("pfnOfferAllocationsCb", "PFND3DDDI_OFFERALLOCATIONSCB"),
+    ("pfnReclaimAllocationsCb", "PFND3DDDI_RECLAIMALLOCATIONSCB"),
+    ("pfnCreateSynchronizationObject2Cb",
+     "PFND3DDDI_CREATESYNCHRONIZATIONOBJECT2CB"),
+    ("pfnWaitForSynchronizationObject2Cb",
+     "PFND3DDDI_WAITFORSYNCHRONIZATIONOBJECT2CB"),
+    ("pfnSignalSynchronizationObject2Cb",
+     "PFND3DDDI_SIGNALSYNCHRONIZATIONOBJECT2CB"),
+    ("pfnPresentMultiPlaneOverlayCb", "PFND3DDDI_PRESENTMULTIPLANEOVERLAYCB"),
+    ("pfnLogUMDMarkerCb", "PFND3DDDI_LOGUMDMARKERCB"),
+    ("pfnMakeResidentCb", "PFND3DDDI_MAKERESIDENTCB"),
+    ("pfnEvictCb", "PFND3DDDI_EVICTCB"),
+    ("pfnWaitForSynchronizationObjectFromCpuCb",
+     "PFND3DDDI_WAITFORSYNCHRONIZATIONOBJECTFROMCPUCB"),
+    ("pfnSignalSynchronizationObjectFromCpuCb",
+     "PFND3DDDI_SIGNALSYNCHRONIZATIONOBJECTFROMCPUCB"),
+    ("pfnWaitForSynchronizationObjectFromGpuCb",
+     "PFND3DDDI_WAITFORSYNCHRONIZATIONOBJECTFROMGPUCB"),
+    ("pfnSignalSynchronizationObjectFromGpuCb",
+     "PFND3DDDI_SIGNALSYNCHRONIZATIONOBJECTFROMGPUCB"),
+    ("pfnCreatePagingQueueCb", "PFND3DDDI_CREATEPAGINGQUEUECB"),
+    ("pfnDestroyPagingQueueCb", "PFND3DDDI_DESTROYPAGINGQUEUECB"),
+    ("pfnLock2Cb", "PFND3DDDI_LOCK2CB"),
+    ("pfnUnlock2Cb", "PFND3DDDI_UNLOCK2CB"),
+    ("pfnInvalidateCacheCb", "PFND3DDDI_INVALIDATECACHECB"),
+    ("pfnReserveGpuVirtualAddressCb",
+     "PFND3DDDI_RESERVEGPUVIRTUALADDRESSCB"),
+    ("pfnMapGpuVirtualAddressCb", "PFND3DDDI_MAPGPUVIRTUALADDRESSCB"),
+    ("pfnFreeGpuVirtualAddressCb", "PFND3DDDI_FREEGPUVIRTUALADDRESSCB"),
+    ("pfnUpdateGpuVirtualAddressCb", "PFND3DDDI_UPDATEGPUVIRTUALADDRESSCB"),
+    ("pfnCreateContextVirtualCb", "PFND3DDDI_CREATECONTEXTVIRTUALCB"),
+    ("pfnSubmitCommandCb", "PFND3DDDI_SUBMITCOMMANDCB"),
+    ("pfnDeallocate2Cb", "PFND3DDDI_DEALLOCATE2CB"),
+    ("pfnSignalSynchronizationObjectFromGpu2Cb",
+     "PFND3DDDI_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2CB"),
+    ("pfnReclaimAllocations2Cb", "PFND3DDDI_RECLAIMALLOCATIONS2CB"),
+    ("pfnGetResourcePresentPrivateDriverDataCb",
+     "PFND3DDDI_GETRESOURCEPRESENTPRIVATEDRIVERDATACB"),
+    ("pfnUpdateAllocationPropertyCb",
+     "PFND3DDDI_UPDATEALLOCATIONPROPERTYCB"),
+    ("pfnOfferAllocations2Cb", "PFND3DDDI_OFFERALLOCATIONS2CB"),
+    ("pfnReclaimAllocations3Cb", "PFND3DDDI_RECLAIMALLOCATIONS3CB"),
+    ("pfnAcquireResourceCb", "PFND3DDDI_SYNCTOKENCB"),
+    ("pfnReleaseResourceCb", "PFND3DDDI_SYNCTOKENCB"),
+    ("pfnCreateHwContextCb", "PFND3DDDI_CREATEHWCONTEXTCB"),
+    ("pfnDestroyHwContextCb", "PFND3DDDI_DESTROYHWCONTEXTCB"),
+    ("pfnCreateHwQueueCb", "PFND3DDDI_CREATEHWQUEUECB"),
+    ("pfnDestroyHwQueueCb", "PFND3DDDI_DESTROYHWQUEUECB"),
+    ("pfnSubmitCommandToHwQueueCb", "PFND3DDDI_SUBMITCOMMANDTOHWQUEUECB"),
+    ("pfnSubmitWaitForSyncObjectsToHwQueueCb",
+     "PFND3DDDI_SUBMITWAITFORSYNCOBJECTSTOHWQUEUECB"),
+    ("pfnSubmitSignalSyncObjectsToHwQueueCb",
+     "PFND3DDDI_SUBMITSIGNALSYNCOBJECTSTOHWQUEUECB"),
+    ("pfnSubmitPresentBltToHwQueueCb",
+     "PFND3DDDI_SUBMITPRESENTBLTTOHWQUEUECB"),
+    ("pfnSubmitPresentToHwQueueCb", "PFND3DDDI_SUBMITPRESENTTOHWQUEUECB"),
+    ("pfnSubmitHistorySequenceCb", "PFND3DDDI_SUBMITHISTORYSEQUENCECB"),
+    ("pfnCreateNativeFenceCb", "PFND3DDDI_CREATENATIVEFENCECB"),
+]
+
+KERNEL_CALLBACKS = Struct(
+    "D3DDDI_DEVICECALLBACKS",
+    [Field(name, type_name) for name, type_name in KERNEL_CALLBACK_SLOTS],
+)
+
+# The slots the pinned driver actually reads, by index.  Held here so that the
+# claim the header makes about them is checked rather than asserted in prose.
+KERNEL_CALLBACKS_INVOKED = {
+    9: "pfnEscapeCb",
+    53: "pfnAcquireResourceCb",
+    54: "pfnReleaseResourceCb",
+}
+
+# The escape flags are a 32-bit bitfield union.  This model has no bitfield
+# vocabulary and does not need one: what it owes the enclosing structure is
+# four bytes at four-byte alignment, and the bit positions are pinned at run
+# time by tests/d3d11ddilayout.c instead.
+ESCAPE = Struct(
+    "D3DDDICB_ESCAPE",
+    [
+        Field("hDevice", "HANDLE"),
+        Field("Flags", "WINE_D3D11DDI_ESCAPEFLAGS", *UINT),
+        Field("pPrivateDriverData", "void *"),
+        Field("PrivateDriverDataSize", "UINT", *UINT),
+        Field("hContext", "HANDLE"),
+    ],
+)
+
+SYNCTOKEN = Struct(
+    "D3DDDICB_SYNCTOKEN",
+    [
+        Field("hSyncToken", "HANDLE"),
+        Field("BroadcastContextCount", "UINT", *UINT),
+        Field("BroadcastContextArray", "const HANDLE *"),
+    ],
+)
+
+if len(KERNEL_CALLBACK_SLOTS) != 66:
+    raise SystemExit(
+        "the kernel callback table is published with 66 members on the "
+        f"rendered surface, the model lists {len(KERNEL_CALLBACK_SLOTS)}"
+    )
+
+for _index, _name in KERNEL_CALLBACKS_INVOKED.items():
+    if KERNEL_CALLBACK_SLOTS[_index][0] != _name:
+        raise SystemExit(
+            f"the pinned driver reads {_name} at index {_index}, but the "
+            f"model puts {KERNEL_CALLBACK_SLOTS[_index][0]} there"
+        )
+
 GROUPS = HANDLES + [
     ADAPTERFUNCS,
     ADAPTERFUNCS_2,
@@ -371,6 +526,9 @@ GROUPS = HANDLES + [
     DXGI_BASE_ARGS,
     CREATEDEVICE,
     CORELAYER_CALLBACKS,
+    KERNEL_CALLBACKS,
+    ESCAPE,
+    SYNCTOKEN,
 ]
 
 # DXGI_DDI_BASE_ARGS is asserted in the header both on its own and through

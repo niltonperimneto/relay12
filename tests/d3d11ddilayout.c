@@ -484,6 +484,222 @@ static void check_corelayer_callbacks(void)
     }
 }
 
+/* Stand-ins for the host's own kernel callbacks.  Only three of the 66 slots
+ * have a signature to stand in for; the rest hold an offset and nothing
+ * else. */
+static int kernel_calls;
+
+static HRESULT stub_escape(HANDLE hAdapter, const D3DDDICB_ESCAPE *pData)
+{
+    /* The driver passes a null here and puts the real handle in the argument
+     * structure, so a host that rejected a null adapter would reject every
+     * call it makes. */
+    (void)hAdapter;
+    if (pData && pData->Flags.DeviceStatusQuery)
+        ++kernel_calls;
+    return 0;
+}
+
+static HRESULT stub_sync_token(HANDLE hDevice, const D3DDDICB_SYNCTOKEN *pData)
+{
+    (void)hDevice;
+    if (pData)
+        ++kernel_calls;
+    return 0;
+}
+
+/* The escape flags are a bitfield, so no offset assertion reaches the thing
+ * that matters about them.  Value aliases the whole word, which is what makes
+ * the bit positions checkable at all. */
+static void check_escape_flags(void)
+{
+    WINE_D3D11DDI_ESCAPEFLAGS flags;
+
+    memset(&flags, 0, sizeof(flags));
+    flags.DeviceStatusQuery = 1;
+    if (flags.Value == 0x2)
+    {
+        printf("[ ok ] DeviceStatusQuery is bit 1\n");
+    }
+    else
+    {
+        printf("[fail] DeviceStatusQuery set bits %#lx, expected 0x2\n",
+                (unsigned long)flags.Value);
+        ++failures;
+    }
+
+    memset(&flags, 0, sizeof(flags));
+    flags.HardwareAccess = 1;
+    if (flags.Value == 0x1)
+    {
+        printf("[ ok ] HardwareAccess is bit 0\n");
+    }
+    else
+    {
+        printf("[fail] HardwareAccess set bits %#lx, expected 0x1\n",
+                (unsigned long)flags.Value);
+        ++failures;
+    }
+
+    check_size("WINE_D3D11DDI_ESCAPEFLAGS", 4, (unsigned long)sizeof(flags));
+}
+
+/* The kernel callback table and the two argument structures the promoted
+ * slots take.  The host allocates all three. */
+static void check_kernel_callbacks(void)
+{
+    D3DDDI_DEVICECALLBACKS callbacks;
+    D3DDDICB_ESCAPE escape;
+    D3DDDICB_SYNCTOKEN token;
+
+    memset(&callbacks, 0, sizeof(callbacks));
+    memset(&escape, 0, sizeof(escape));
+    memset(&token, 0, sizeof(token));
+
+#define CHECK_KCB(field) \
+    CHECK_FIELD(callbacks, D3DDDI_DEVICECALLBACKS, field)
+
+    CHECK_KCB(pfnAllocateCb);
+    CHECK_KCB(pfnDeallocateCb);
+    CHECK_KCB(pfnSetPriorityCb);
+    CHECK_KCB(pfnQueryResidencyCb);
+    CHECK_KCB(pfnSetDisplayModeCb);
+    CHECK_KCB(pfnPresentCb);
+    CHECK_KCB(pfnRenderCb);
+    CHECK_KCB(pfnLockCb);
+    CHECK_KCB(pfnUnlockCb);
+    CHECK_KCB(pfnEscapeCb);
+    CHECK_KCB(pfnCreateOverlayCb);
+    CHECK_KCB(pfnUpdateOverlayCb);
+    CHECK_KCB(pfnFlipOverlayCb);
+    CHECK_KCB(pfnDestroyOverlayCb);
+    CHECK_KCB(pfnCreateContextCb);
+    CHECK_KCB(pfnDestroyContextCb);
+    CHECK_KCB(pfnCreateSynchronizationObjectCb);
+    CHECK_KCB(pfnDestroySynchronizationObjectCb);
+    CHECK_KCB(pfnWaitForSynchronizationObjectCb);
+    CHECK_KCB(pfnSignalSynchronizationObjectCb);
+    CHECK_KCB(pfnSetAsyncCallbacksCb);
+    CHECK_KCB(pfnSetDisplayPrivateDriverFormatCb);
+    CHECK_KCB(pfnOfferAllocationsCb);
+    CHECK_KCB(pfnReclaimAllocationsCb);
+    CHECK_KCB(pfnCreateSynchronizationObject2Cb);
+    CHECK_KCB(pfnWaitForSynchronizationObject2Cb);
+    CHECK_KCB(pfnSignalSynchronizationObject2Cb);
+    CHECK_KCB(pfnPresentMultiPlaneOverlayCb);
+    CHECK_KCB(pfnLogUMDMarkerCb);
+    CHECK_KCB(pfnMakeResidentCb);
+    CHECK_KCB(pfnEvictCb);
+    CHECK_KCB(pfnWaitForSynchronizationObjectFromCpuCb);
+    CHECK_KCB(pfnSignalSynchronizationObjectFromCpuCb);
+    CHECK_KCB(pfnWaitForSynchronizationObjectFromGpuCb);
+    CHECK_KCB(pfnSignalSynchronizationObjectFromGpuCb);
+    CHECK_KCB(pfnCreatePagingQueueCb);
+    CHECK_KCB(pfnDestroyPagingQueueCb);
+    CHECK_KCB(pfnLock2Cb);
+    CHECK_KCB(pfnUnlock2Cb);
+    CHECK_KCB(pfnInvalidateCacheCb);
+    CHECK_KCB(pfnReserveGpuVirtualAddressCb);
+    CHECK_KCB(pfnMapGpuVirtualAddressCb);
+    CHECK_KCB(pfnFreeGpuVirtualAddressCb);
+    CHECK_KCB(pfnUpdateGpuVirtualAddressCb);
+    CHECK_KCB(pfnCreateContextVirtualCb);
+    CHECK_KCB(pfnSubmitCommandCb);
+    CHECK_KCB(pfnDeallocate2Cb);
+    CHECK_KCB(pfnSignalSynchronizationObjectFromGpu2Cb);
+    CHECK_KCB(pfnReclaimAllocations2Cb);
+    CHECK_KCB(pfnGetResourcePresentPrivateDriverDataCb);
+    CHECK_KCB(pfnUpdateAllocationPropertyCb);
+    CHECK_KCB(pfnOfferAllocations2Cb);
+    CHECK_KCB(pfnReclaimAllocations3Cb);
+    CHECK_KCB(pfnAcquireResourceCb);
+    CHECK_KCB(pfnReleaseResourceCb);
+    CHECK_KCB(pfnCreateHwContextCb);
+    CHECK_KCB(pfnDestroyHwContextCb);
+    CHECK_KCB(pfnCreateHwQueueCb);
+    CHECK_KCB(pfnDestroyHwQueueCb);
+    CHECK_KCB(pfnSubmitCommandToHwQueueCb);
+    CHECK_KCB(pfnSubmitWaitForSyncObjectsToHwQueueCb);
+    CHECK_KCB(pfnSubmitSignalSyncObjectsToHwQueueCb);
+    CHECK_KCB(pfnSubmitPresentBltToHwQueueCb);
+    CHECK_KCB(pfnSubmitPresentToHwQueueCb);
+    CHECK_KCB(pfnSubmitHistorySequenceCb);
+    CHECK_KCB(pfnCreateNativeFenceCb);
+
+#undef CHECK_KCB
+
+    check_size("D3DDDI_DEVICECALLBACKS", 528, (unsigned long)sizeof(callbacks));
+
+    CHECK_FIELD(escape, D3DDDICB_ESCAPE, hDevice);
+    CHECK_FIELD(escape, D3DDDICB_ESCAPE, Flags);
+    CHECK_FIELD(escape, D3DDDICB_ESCAPE, pPrivateDriverData);
+    CHECK_FIELD(escape, D3DDDICB_ESCAPE, PrivateDriverDataSize);
+    CHECK_FIELD(escape, D3DDDICB_ESCAPE, hContext);
+    check_size("D3DDDICB_ESCAPE", 40, (unsigned long)sizeof(escape));
+
+    CHECK_FIELD(token, D3DDDICB_SYNCTOKEN, hSyncToken);
+    CHECK_FIELD(token, D3DDDICB_SYNCTOKEN, BroadcastContextCount);
+    CHECK_FIELD(token, D3DDDICB_SYNCTOKEN, BroadcastContextArray);
+    check_size("D3DDDICB_SYNCTOKEN", 24, (unsigned long)sizeof(token));
+
+    check_escape_flags();
+
+    /* Fill the three slots the pinned driver reads and call them the way it
+     * does.  Assignment proves the signatures are implementable; calling
+     * proves the frames land. */
+    callbacks.pfnEscapeCb = stub_escape;
+    callbacks.pfnAcquireResourceCb = stub_sync_token;
+    callbacks.pfnReleaseResourceCb = stub_sync_token;
+
+    escape.Flags.DeviceStatusQuery = 1;
+    kernel_calls = 0;
+    (void)callbacks.pfnEscapeCb(NULL, &escape);
+    (void)callbacks.pfnAcquireResourceCb(NULL, &token);
+    (void)callbacks.pfnReleaseResourceCb(NULL, &token);
+
+    if (kernel_calls == 3)
+    {
+        printf("[ ok ] the promoted kernel callback slots are callable as "
+                "declared\n");
+    }
+    else
+    {
+        printf("[fail] %d of 3 kernel callbacks reached their "
+                "implementation\n", kernel_calls);
+        ++failures;
+    }
+
+#ifdef __cplusplus
+    /* The driver does not call the sync-token slots through the table.  It
+     * stores a pointer-to-member and binds it to one or the other, which
+     * needs this structure to be a complete type and needs both slots to have
+     * exactly PFND3DDDI_SYNCTOKENCB rather than a compatible function-pointer
+     * type.  Nothing else in this file can express that, and if it ever
+     * stopped holding it would break in the port instead of here. */
+    {
+        PFND3DDDI_SYNCTOKENCB D3DDDI_DEVICECALLBACKS::*slot =
+                &D3DDDI_DEVICECALLBACKS::pfnAcquireResourceCb;
+
+        kernel_calls = 0;
+        (void)(callbacks.*slot)(NULL, &token);
+        slot = &D3DDDI_DEVICECALLBACKS::pfnReleaseResourceCb;
+        (void)(callbacks.*slot)(NULL, &token);
+
+        if (kernel_calls == 2)
+        {
+            printf("[ ok ] one pointer-to-member binds both sync-token "
+                    "slots\n");
+        }
+        else
+        {
+            printf("[fail] %d of 2 sync-token slots were reached through a "
+                    "pointer-to-member\n", kernel_calls);
+            ++failures;
+        }
+    }
+#endif
+}
+
 /* The version arithmetic is macro expansion, so the header asserts it at
  * compile time.  Recomputing it here would restate the same expansion and
  * prove nothing; what run time can still check is that the composed value
@@ -528,6 +744,7 @@ int main(void)
     check_device_handles();
     check_create_device();
     check_corelayer_callbacks();
+    check_kernel_callbacks();
     check_version_arithmetic();
 
     if (failures)
