@@ -135,7 +135,7 @@ jobs:
               names = names.split("\n\n", 1)[0]
               actual = {
                   base + int(index): name
-                  for index, name in re.findall(r"\[\s*(\d+)\]\s+(\S+)", names)
+                  for index, name in re.findall(r"\[\s*(\d+)\](?:.*\s+)?([a-zA-Z_]\w*)", names)
               }
               if actual != wanted:
                   raise SystemExit(f"{path}: exports {actual}, expected {wanted}")
