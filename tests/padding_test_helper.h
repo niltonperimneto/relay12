@@ -27,7 +27,7 @@ static inline int check_uninitialized_padding(const char *name, const void *ptr,
     {
         if (bytes[i] == 0xCC)
         {
-            printf("[fail] Uninitialized padding byte found in %s at offset %zu\n", name, i);
+            printf("[fail] Uninitialized padding byte found in %s at offset %lu\n", name, (unsigned long)i);
             leaks++;
         }
     }
