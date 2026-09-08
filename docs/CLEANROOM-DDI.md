@@ -237,8 +237,8 @@ misinterpretation; `--check` defends against structural *drift* across 178+ slot
 | Device creation | `D3D10DDI_HDEVICE`, `HRTDEVICE`, `HRTCORELAYER`, `PFND3D10DDI_RETRIEVESUBOBJECT`, `DXGI_DDI_BASE_ARGS`, `D3D10DDIARG_CREATEDEVICE`, flag constants | 8 each / 16 / 88 |
 | Core-layer callbacks | `D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS`, 46 `PFN` typedefs, `D3DWDDM2_2DDI_HRTCACHESESSION` | 376 / 8 |
 | Kernel callbacks | `D3DDDI_DEVICECALLBACKS`, 65 `PFN` typedefs of which 2 promoted, `D3DDDICB_ESCAPE`, `D3DDDICB_SYNCTOKEN`, `WINE_D3D11DDI_ESCAPEFLAGS` | 528 / 40 / 24 / 4 |
-| Command list handle | `D3D11DDI_HCOMMANDLIST` | 8 |
-| Device function table | `D3DWDDM2_6DDI_DEVICEFUNCS`, 178 slots across 138 published `PFN` names, of which 4 promoted (5 slots) and 134 held behind placeholders | 1424 |
+| Command-list creation | `D3D11DDI_HCOMMANDLIST`, `D3D11DDI_HRTCOMMANDLIST`, `D3D11DDIARG_CREATECOMMANDLIST` | 8 each |
+| Device function table | `D3DWDDM2_6DDI_DEVICEFUNCS`, 178 slots across 138 published `PFN` names, of which 7 promoted (8 slots) and 131 held behind placeholders | 1424 |
 
 #### Key constraints in `D3D10DDIARG_CREATEDEVICE` (88 bytes)
 
@@ -354,7 +354,7 @@ fail to compile — passing a `D3D10DDI_HDEVICE` where a
 `D3D11DDI_HCOMMANDLIST` belongs — which is the only check that catches a
 parameter list transcribed wrongly.
 
-**Promoted so far: the handle-only command-list family.** Four typedefs, five
+**Promoted so far: the command-list family.** Seven typedefs, eight
 slots, each quoted from its own reference page:
 
 | Slot | Type | Parameters |
@@ -364,9 +364,14 @@ slots, each quoted from its own reference page:
 | `pfnDestroyCommandList` | `PFND3D11DDI_DESTROYCOMMANDLIST` | `D3D10DDI_HDEVICE`, `D3D11DDI_HCOMMANDLIST` |
 | `pfnRecycleDestroyCommandList` | `PFND3D11DDI_DESTROYCOMMANDLIST` | shares the type above |
 | `pfnRecycleCommandList` | `PFND3D11DDI_RECYCLECOMMANDLIST` | `D3D10DDI_HDEVICE`, `D3D11DDI_HCOMMANDLIST` |
+| `pfnCalcPrivateCommandListSize` | `PFND3D11DDI_CALCPRIVATECOMMANDLISTSIZE` | device and creation arguments |
+| `pfnCreateCommandList` | `PFND3D11DDI_CREATECOMMANDLIST` | device, creation arguments, driver/runtime handles |
+| `pfnRecycleCreateCommandList` | `PFND3D11DDI_RECYCLECREATECOMMANDLIST` | device, creation arguments, driver/runtime handles |
 
-All five return `VOID` and report failure through `pfnSetErrorCb`, which is why
-none is declared returning `HRESULT`.
+The original five handle-only operations return `VOID`.
+`CalcPrivateCommandListSize` returns `SIZE_T`, `CreateCommandList` reports
+failure through `pfnSetErrorCb`, and `RecycleCreateCommandList` returns
+`HRESULT`, exactly as their individual reference pages specify.
 
 **`pfnRecycleDestroyCommandList` has no reference page**, and is promoted
 anyway. The URL its siblings would predict returns 404. What justifies it is
@@ -385,17 +390,17 @@ subset function table that structure's `p11ContextFuncs` member points at.
 No `D3D11DDI_HDEFERREDCONTEXT` may be added later: no specification names one,
 so it would be an invented type behind a provenance block.
 
-**`D3D11DDI_HCOMMANDLIST`'s runtime counterpart is deliberately absent.**
-`hRTCommandList` is a parameter of `CreateCommandList`, which cannot be
-promoted until `D3D11DDIARG_CREATECOMMANDLIST` is authored, and a handle no
-declared slot takes is the speculative version rule 4 rejects.
+**`D3D11DDI_HCOMMANDLIST` and its runtime counterpart are now complete.**
+`D3D11DDI_HRTCOMMANDLIST` enters with
+`D3D11DDIARG_CREATECOMMANDLIST`, the first declared signature that consumes
+it, preserving the prohibition on speculative handles.
 
 ### Remaining groups roadmap
 
 | # | Group | Scope | Rationale and dependencies |
 | :--- | :--- | :--- | :--- |
 | 1 | Surface discovery | MIT tree test build against clean-room header | Turns remaining clean-room work into a measurable compiler worklist |
-| 2 | Signature promotion | Promote slots in `D3DWDDM2_6DDI_DEVICEFUNCS` | 134 of 138 distinct callback types remain; ordered by which structure group declares their parameter types, not by slot. See the gating table in `DDI-REMAINING-ROADMAP.md` |
+| 2 | Signature promotion | Promote slots in `D3DWDDM2_6DDI_DEVICEFUNCS` | 131 of 138 distinct callback types remain; ordered by which structure group declares their parameter types, not by slot. See the gating table in `DDI-REMAINING-ROADMAP.md` |
 | 3 | DXGI DDI interop | `DXGI_DDI_BASE_CALLBACKS`, `DXGI1_6_1_DDI_BASE_FUNCTIONS` | Required by `DXGIBaseDDI` pointers in creation arguments |
 
 ## Open questions
