@@ -179,8 +179,7 @@ class Struct:
 
 # D3D11DDI_HCOMMANDLIST is a driver handle by the same convention: the
 # CommandListExecute page calls it "a handle to the driver's private data for
-# the command list".  Its runtime counterpart belongs with CreateCommandList
-# and is not declared, so it is not modelled.
+# the command list". D3D11DDI_HRTCOMMANDLIST is its runtime counterpart.
 DRIVER_HANDLES = ["D3D10DDI_HADAPTER", "D3D10DDI_HRESOURCE", "D3D10DDI_HDEVICE",
                   "D3D11DDI_HCOMMANDLIST"]
 RUNTIME_HANDLES = [
@@ -189,6 +188,7 @@ RUNTIME_HANDLES = [
     "D3D10DDI_HRTDEVICE",
     "D3D10DDI_HRTCORELAYER",
     "D3DWDDM2_2DDI_HRTCACHESESSION",
+    "D3D11DDI_HRTCOMMANDLIST",
 ]
 
 HANDLES = [
@@ -198,6 +198,16 @@ HANDLES = [
 
 def handle(name):
     return (name, POINTER[0], POINTER[1])
+
+
+# Group: command-list creation arguments
+# Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d11ddiarg_createcommandlist
+# Retrieved: 2026-09-08
+
+CREATECOMMANDLIST = Struct(
+    "D3D11DDIARG_CREATECOMMANDLIST",
+    [Field("hDeferredContext", "D3D10DDI_HDEVICE")],
+)
 
 
 # Group: adapter function tables and OpenAdapter arguments
@@ -772,9 +782,12 @@ DEVICEFUNCS = Struct(
 # the header for why the rest of the family cannot follow yet.
 PROMOTED_SLOTS = {
     "PFND3D11DDI_ABANDONCOMMANDLIST",
+    "PFND3D11DDI_CALCPRIVATECOMMANDLISTSIZE",
     "PFND3D11DDI_COMMANDLISTEXECUTE",
+    "PFND3D11DDI_CREATECOMMANDLIST",
     "PFND3D11DDI_DESTROYCOMMANDLIST",
     "PFND3D11DDI_RECYCLECOMMANDLIST",
+    "PFND3D11DDI_RECYCLECREATECOMMANDLIST",
 }
 
 if not PROMOTED_SLOTS <= {type_name for _, type_name in DEVICEFUNC_SLOTS}:
@@ -800,6 +813,7 @@ GROUPS = HANDLES + [
     OPENADAPTER,
     DXGI_BASE_ARGS,
     CREATEDEVICE,
+    CREATECOMMANDLIST,
     DEVICEFUNCS,
     CORELAYER_CALLBACKS,
     KERNEL_CALLBACKS,

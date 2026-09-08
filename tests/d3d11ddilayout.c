@@ -872,37 +872,89 @@ static VOID stub_command_list_execute(D3D10DDI_HDEVICE hDevice,
     ++command_list_calls;
 }
 
+static SIZE_T stub_calc_private_command_list_size(D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CREATECOMMANDLIST *create)
+{
+    (void)hDevice;
+    (void)create;
+    ++command_list_calls;
+    return 64;
+}
+
+static VOID stub_create_command_list(D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CREATECOMMANDLIST *create,
+        D3D11DDI_HCOMMANDLIST hCommandList,
+        D3D11DDI_HRTCOMMANDLIST hRTCommandList)
+{
+    (void)hDevice;
+    (void)create;
+    (void)hCommandList;
+    (void)hRTCommandList;
+    ++command_list_calls;
+}
+
+static HRESULT stub_recycle_create_command_list(D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CREATECOMMANDLIST *create,
+        D3D11DDI_HCOMMANDLIST hCommandList,
+        D3D11DDI_HRTCOMMANDLIST hRTCommandList)
+{
+    (void)hDevice;
+    (void)create;
+    (void)hCommandList;
+    (void)hRTCommandList;
+    ++command_list_calls;
+    return S_OK;
+}
+
 static void check_command_list_handle(void)
 {
     D3D11DDI_HCOMMANDLIST command_list;
+    D3D11DDI_HRTCOMMANDLIST rt_command_list;
+    D3D11DDIARG_CREATECOMMANDLIST create;
 
     memset(&command_list, 0, sizeof(command_list));
+    memset(&rt_command_list, 0, sizeof(rt_command_list));
+    memset(&create, 0, sizeof(create));
 
     CHECK_FIELD(command_list, D3D11DDI_HCOMMANDLIST, pDrvPrivate);
+    CHECK_FIELD(rt_command_list, D3D11DDI_HRTCOMMANDLIST, handle);
+    CHECK_FIELD(create, D3D11DDIARG_CREATECOMMANDLIST, hDeferredContext);
 
     /* One wrapped pointer, like every other driver handle.  A handle that grew
      * would have the runtime passing a different object than the driver
      * reads. */
     check_size("D3D11DDI_HCOMMANDLIST", 8, (unsigned long)sizeof(command_list));
+    check_size("D3D11DDI_HRTCOMMANDLIST", 8,
+            (unsigned long)sizeof(rt_command_list));
+    check_size("D3D11DDIARG_CREATECOMMANDLIST", 8,
+            (unsigned long)sizeof(create));
 }
 
-/* The promoted slots, filled and called through the table.  Three of the four
- * promoted typedefs take the same parameters, and pfnDestroyCommandList and
- * pfnRecycleDestroyCommandList share one type outright, so what this checks
- * beyond callability is that the sharing still holds. */
+/* The promoted command-list slots, filled and called through the table.
+ * pfnDestroyCommandList and pfnRecycleDestroyCommandList share one type
+ * outright, so what this checks beyond callability is that the documented
+ * sharing still holds. */
 static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
 {
     D3D10DDI_HDEVICE device;
     D3D11DDI_HCOMMANDLIST command_list;
+    D3D11DDI_HRTCOMMANDLIST rt_command_list;
+    D3D11DDIARG_CREATECOMMANDLIST create;
 
     memset(&device, 0, sizeof(device));
     memset(&command_list, 0, sizeof(command_list));
+    memset(&rt_command_list, 0, sizeof(rt_command_list));
+    memset(&create, 0, sizeof(create));
+    create.hDeferredContext = device;
 
     funcs->pfnAbandonCommandList = stub_abandon_command_list;
     funcs->pfnCommandListExecute = stub_command_list_execute;
     funcs->pfnDestroyCommandList = stub_command_list_execute;
     funcs->pfnRecycleCommandList = stub_command_list_execute;
     funcs->pfnRecycleDestroyCommandList = stub_command_list_execute;
+    funcs->pfnCalcPrivateCommandListSize = stub_calc_private_command_list_size;
+    funcs->pfnCreateCommandList = stub_create_command_list;
+    funcs->pfnRecycleCreateCommandList = stub_recycle_create_command_list;
 
     command_list_calls = 0;
     CHECK_STACK("PFND3D11DDI_ABANDONCOMMANDLIST",
@@ -915,15 +967,23 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
             funcs->pfnRecycleCommandList(device, command_list));
     CHECK_STACK("PFND3D11DDI_DESTROYCOMMANDLIST (recycle)",
             funcs->pfnRecycleDestroyCommandList(device, command_list));
+    CHECK_STACK("PFND3D11DDI_CALCPRIVATECOMMANDLISTSIZE",
+            (void)funcs->pfnCalcPrivateCommandListSize(device, &create));
+    CHECK_STACK("PFND3D11DDI_CREATECOMMANDLIST",
+            funcs->pfnCreateCommandList(device, &create, command_list,
+                    rt_command_list));
+    CHECK_STACK("PFND3D11DDI_RECYCLECREATECOMMANDLIST",
+            (void)funcs->pfnRecycleCreateCommandList(device, &create,
+                    command_list, rt_command_list));
 
-    if (command_list_calls == 5)
+    if (command_list_calls == 8)
     {
         printf("[ ok ] the promoted command-list slots are callable as "
                 "declared\n");
     }
     else
     {
-        printf("[fail] %d of 5 promoted command-list slots reached their "
+        printf("[fail] %d of 8 promoted command-list slots reached their "
                 "implementation\n", command_list_calls);
         ++failures;
     }
