@@ -3,9 +3,9 @@
 Security and Precision Static Analysis for relay12.
 Ensures LLM-generated code does not introduce probabilistic low-level C/C++ errors.
 """
-import sys
 import os
 import re
+import sys
 
 def check_file(filepath):
     errors = []
@@ -25,12 +25,12 @@ def check_file(filepath):
         alloc_match = re.search(r'\b(malloc|calloc|LocalAlloc|HeapAlloc)\s*\((.*?)\)', clean_line)
         if alloc_match:
             args = alloc_match.group(2)
-            # If there's an asterisk in the allocation argument, it's doing unsafe multiplication 
+            # If there's an asterisk in the allocation argument, it's doing unsafe multiplication
             # (ignoring cast pointers which have asterisks, this is a heuristic).
             # Improved heuristic: look for `sizeof(...) * var`
-            if re.search(r'\*\s*[a-zA-Z0-9_]+', args) and 'sizeof' in args:
+            if re.search(r'\bsizeof\s*\([^)]*\)\s*\*', args):
                 errors.append(f"{filepath}:{line_num}: Unchecked allocation math. Use safe integer bounds checking before allocation.")
-    
+
     return errors
 
 def main():
@@ -52,7 +52,7 @@ def main():
             print(err)
         print("\n[FAIL] Security and precision code linting failed.")
         sys.exit(1)
-        
+
     print("[OK] All security lints passed.")
 
 if __name__ == "__main__":
