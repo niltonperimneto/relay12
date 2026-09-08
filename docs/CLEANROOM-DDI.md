@@ -349,13 +349,14 @@ have a real function type in the header and every other slot to remain a
 `PFNWINE_D3D11DDI_UNDECLARED_CB` alias. It fails in both directions: a
 promotion recorded but not landed, and a signature authored but not recorded.
 `tests/d3d11ddilayout.c` then assigns a stub with the declared signature into
-each promoted slot and calls it, and `tests/d3d11ddipromotednegative.c` must
-fail to compile — passing a `D3D10DDI_HDEVICE` where a
+each promoted slot and calls it. The command-list and deferred-context
+negative translation units must fail to compile — passing a
+`D3D10DDI_HDEVICE` where a
 `D3D11DDI_HCOMMANDLIST` belongs — which is the only check that catches a
 parameter list transcribed wrongly.
 
-**Promoted so far: the command-list family.** Seven typedefs, eight
-slots, each quoted from its own reference page:
+**Promoted so far: the command-list and deferred-context creation families.**
+Twelve typedefs, thirteen slots, each quoted from its own reference page:
 
 | Slot | Type | Parameters |
 | :--- | :--- | :--- |
@@ -367,6 +368,11 @@ slots, each quoted from its own reference page:
 | `pfnCalcPrivateCommandListSize` | `PFND3D11DDI_CALCPRIVATECOMMANDLISTSIZE` | device and creation arguments |
 | `pfnCreateCommandList` | `PFND3D11DDI_CREATECOMMANDLIST` | device, creation arguments, driver/runtime handles |
 | `pfnRecycleCreateCommandList` | `PFND3D11DDI_RECYCLECREATECOMMANDLIST` | device, creation arguments, driver/runtime handles |
+| `pfnCheckDeferredContextHandleSizes` | `PFND3D11DDI_CHECKDEFERREDCONTEXTHANDLESIZES` | device, count, handle-size array |
+| `pfnCalcDeferredContextHandleSize` | `PFND3D11DDI_CALCDEFERREDCONTEXTHANDLESIZE` | device, handle type, immediate-context object |
+| `pfnCalcPrivateDeferredContextSize` | `PFND3D11DDI_CALCPRIVATEDEFERREDCONTEXTSIZE` | device and calculation arguments |
+| `pfnCreateDeferredContext` | `PFND3D11DDI_CREATEDEFERREDCONTEXT` | device and creation arguments |
+| `pfnRecycleCreateDeferredContext` | `PFND3D11DDI_RECYCLECREATEDEFERREDCONTEXT` | device and creation arguments |
 
 The original five handle-only operations return `VOID`.
 `CalcPrivateCommandListSize` returns `SIZE_T`, `CreateCommandList` reports

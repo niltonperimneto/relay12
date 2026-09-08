@@ -1201,6 +1201,116 @@ WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATECOMMANDLIST, hDeferredContext, 0);
 WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CREATECOMMANDLIST, hDeferredContext, 8);
 
 /*
+ * Group: deferred-context creation and handle sizing
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d11ddiarg_createdeferredcontext
+ * Retrieved: 2026-09-08
+ * Companion specifications:
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ne-d3d10umddi-d3d11ddi_handletype
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d11ddi_handlesize
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d11ddiarg_calcprivatedeferredcontextsize
+ * Source mirror:
+ *   https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs-ddi/staging/wdk-ddi-src/content/d3d10umddi/ns-d3d10umddi-d3d11ddiarg_createdeferredcontext.md
+ *
+ * The create structure publishes unions for every interface generation.  This
+ * target negotiates WDDM 2.6, so only the WDDM 2.6 arms are declared.  Every
+ * published arm is one pointer; the independent model retains all of them and
+ * proves that this subset has the same offsets, size, and alignment.
+ * WinePad0 in each structure names padding derived from natural Win64
+ * alignment.  It is not a specification member and must not be read by a
+ * host.
+ */
+typedef enum D3D11DDI_HANDLETYPE
+{
+    D3D10DDI_HT_RESOURCE = 0,
+    D3D10DDI_HT_SHADERRESOURCEVIEW,
+    D3D10DDI_HT_RENDERTARGETVIEW,
+    D3D10DDI_HT_DEPTHSTENCILVIEW,
+    D3D10DDI_HT_SHADER,
+    D3D10DDI_HT_ELEMENTLAYOUT,
+    D3D10DDI_HT_BLENDSTATE,
+    D3D10DDI_HT_DEPTHSTENCILSTATE,
+    D3D10DDI_HT_RASTERIZERSTATE,
+    D3D10DDI_HT_SAMPLERSTATE,
+    D3D10DDI_HT_QUERY,
+    D3D11DDI_HT_COMMANDLIST,
+    D3D11DDI_HT_UNORDEREDACCESSVIEW,
+    D3D11_1DDI_HT_DECODE,
+    D3D11_1DDI_HT_VIDEOPROCESSORENUM,
+    D3D11_1DDI_HT_VIDEOPROCESSOR,
+    D3D11_1DDI_HT_VIDEODECODEROUTPUTVIEW,
+    D3D11_1DDI_HT_VIDEOPROCESSORINPUTVIEW,
+    D3D11_1DDI_HT_VIDEOPROCESSOROUTPUTVIEW,
+    D3DWDDM2_2DDI_HT_CACHESESSION
+} D3D11DDI_HANDLETYPE;
+
+WINE_DDI_STATIC_ASSERT(sizeof(D3D11DDI_HANDLETYPE) == 4,
+        "D3D11DDI_HANDLETYPE is a four-byte enum");
+WINE_DDI_STATIC_ASSERT(D3D10DDI_HT_RESOURCE == 0,
+        "the first handle type has value zero");
+WINE_DDI_STATIC_ASSERT(D3DWDDM2_2DDI_HT_CACHESESSION == 19,
+        "the published handle types remain contiguous");
+
+typedef struct D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE
+{
+    UINT Flags;
+} D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE;
+
+typedef struct D3D11DDI_HANDLESIZE
+{
+    D3D11DDI_HANDLETYPE HandleType;
+    UINT32              WinePad0;
+    SIZE_T              DriverPrivateSize;
+} D3D11DDI_HANDLESIZE;
+
+typedef struct D3D11DDIARG_CREATEDEFERREDCONTEXT
+{
+    union
+    {
+        D3DWDDM2_6DDI_DEVICEFUNCS *pWDDM2_6ContextFuncs;
+    };
+    D3D10DDI_HDEVICE      hDrvContext;
+    D3D10DDI_HRTCORELAYER hRTCoreLayer;
+    union
+    {
+        const D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS *pWDDM2_6UMCallbacks;
+    };
+    UINT   Flags;
+    UINT32 WinePad0;
+} D3D11DDIARG_CREATEDEFERREDCONTEXT;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE);
+WINE_DDI_ASSERT_SIZE(D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE, 4);
+WINE_DDI_ASSERT_ALIGN(D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE, 4);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE, Flags, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE, Flags, 4);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D11DDI_HANDLESIZE);
+WINE_DDI_ASSERT_SIZE(D3D11DDI_HANDLESIZE, 16);
+WINE_DDI_ASSERT_ALIGN(D3D11DDI_HANDLESIZE, 8);
+WINE_DDI_ASSERT_FIELD(D3D11DDI_HANDLESIZE, HandleType, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDI_HANDLESIZE, HandleType, 4);
+WINE_DDI_ASSERT_FIELD(D3D11DDI_HANDLESIZE, WinePad0, 4);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDI_HANDLESIZE, WinePad0, 4);
+WINE_DDI_ASSERT_FIELD(D3D11DDI_HANDLESIZE, DriverPrivateSize, 8);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDI_HANDLESIZE, DriverPrivateSize, 8);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D11DDIARG_CREATEDEFERREDCONTEXT);
+WINE_DDI_ASSERT_SIZE(D3D11DDIARG_CREATEDEFERREDCONTEXT, 40);
+WINE_DDI_ASSERT_ALIGN(D3D11DDIARG_CREATEDEFERREDCONTEXT, 8);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATEDEFERREDCONTEXT, pWDDM2_6ContextFuncs, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CREATEDEFERREDCONTEXT, pWDDM2_6ContextFuncs, 8);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATEDEFERREDCONTEXT, hDrvContext, 8);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CREATEDEFERREDCONTEXT, hDrvContext, 8);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATEDEFERREDCONTEXT, hRTCoreLayer, 16);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CREATEDEFERREDCONTEXT, hRTCoreLayer, 8);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATEDEFERREDCONTEXT, pWDDM2_6UMCallbacks, 24);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CREATEDEFERREDCONTEXT, pWDDM2_6UMCallbacks, 8);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATEDEFERREDCONTEXT, Flags, 32);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CREATEDEFERREDCONTEXT, Flags, 4);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATEDEFERREDCONTEXT, WinePad0, 36);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CREATEDEFERREDCONTEXT, WinePad0, 4);
+
+/*
  * Group: WDDM 2.6 device function table
  * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3dwddm2_6ddi_devicefuncs
  * Source mirror: https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs-ddi/staging/wdk-ddi-src/content/d3d10umddi/ns-d3d10umddi-d3dwddm2_6ddi_devicefuncs.md
@@ -1213,8 +1323,8 @@ WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CREATECOMMANDLIST, hDeferredContext, 8);
  * accidental calls a compile error while keeping promotion local to one
  * typedef at a time.
  *
- * Seven typedefs are promoted, covering eight slots. They are the command-list
- * family; each is quoted from its own
+ * Twelve typedefs are promoted, covering thirteen slots. They are the
+ * command-list and deferred-context creation families; each is quoted from its own
  * reference page, cited beside it.  Promotion moves no offset -- a promoted
  * function pointer is still a function pointer, and the table's size and
  * every slot's offset are asserted unchanged below, which is the point of
@@ -1280,6 +1390,33 @@ typedef HRESULT (*PFND3D11DDI_RECYCLECREATECOMMANDLIST)(
         const D3D11DDIARG_CREATECOMMANDLIST *pCreateCommandList,
         D3D11DDI_HCOMMANDLIST hCommandList,
         D3D11DDI_HRTCOMMANDLIST hRTCommandList);
+
+/* https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_checkdeferredcontexthandlesizes */
+typedef VOID (*PFND3D11DDI_CHECKDEFERREDCONTEXTHANDLESIZES)(
+        D3D10DDI_HDEVICE hDevice,
+        UINT *pHSizes,
+        D3D11DDI_HANDLESIZE *pHandleSize);
+
+/* https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_calcdeferredcontexthandlesize */
+typedef SIZE_T (*PFND3D11DDI_CALCDEFERREDCONTEXTHANDLESIZE)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D11DDI_HANDLETYPE HandleType,
+        VOID *pICObject);
+
+/* https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_calcprivatedeferredcontextsize */
+typedef SIZE_T (*PFND3D11DDI_CALCPRIVATEDEFERREDCONTEXTSIZE)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE *pCalcPrivateDeferredContextSize);
+
+/* https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_createdeferredcontext */
+typedef VOID (*PFND3D11DDI_CREATEDEFERREDCONTEXT)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CREATEDEFERREDCONTEXT *pCreateDeferredContext);
+
+/* https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_recyclecreatedeferredcontext */
+typedef HRESULT (*PFND3D11DDI_RECYCLECREATEDEFERREDCONTEXT)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CREATEDEFERREDCONTEXT *pCreateDeferredContext);
 
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_RESOURCEUPDATESUBRESOURCEUP;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_SETCONSTANTBUFFERS;
@@ -1370,10 +1507,6 @@ typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_DRAWINDEXEDINSTANCEDINDIRECT;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_DRAWINSTANCEDINDIRECT;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CREATEHULLSHADER;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CREATEDOMAINSHADER;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CHECKDEFERREDCONTEXTHANDLESIZES;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CALCDEFERREDCONTEXTHANDLESIZE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CALCPRIVATEDEFERREDCONTEXTSIZE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CREATEDEFERREDCONTEXT;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CALCPRIVATETESSELLATIONSHADERSIZE;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_SETSHADER_WITH_IFACES;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CREATECOMPUTESHADER;
@@ -1387,7 +1520,6 @@ typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_DISPATCH;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_DISPATCHINDIRECT;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_SETRESOURCEMINLOD;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_COPYSTRUCTURECOUNT;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_RECYCLECREATEDEFERREDCONTEXT;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_DISCARD;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_ASSIGNDEBUGBINARY;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CHECKDIRECTFLIPSUPPORT;

@@ -99,7 +99,7 @@ Below is the structured roadmap of what is yet to be done.
 ## 3. Core DDI Function Implementations
 
 **3.1. Removing Placeholders**
-* **Status:** Ongoing — 7 of 138 PFN typedefs promoted, covering 8 of 178 slots
+* **Status:** Ongoing — 12 of 138 PFN typedefs promoted, covering 13 of 178 slots
 * **Done:** the command-list family — `pfnAbandonCommandList`,
   `pfnCommandListExecute`,
   `pfnDestroyCommandList`, `pfnRecycleCommandList`, and
@@ -107,6 +107,13 @@ Below is the structured roadmap of what is yet to be done.
   `pfnCreateCommandList`, and `pfnRecycleCreateCommandList`.
   The latter three are unblocked by the authored
   `D3D11DDIARG_CREATECOMMANDLIST` and `D3D11DDI_HRTCOMMANDLIST`.
+* **Done:** the deferred-context creation family —
+  `pfnCheckDeferredContextHandleSizes`, `pfnCalcDeferredContextHandleSize`,
+  `pfnCalcPrivateDeferredContextSize`, `pfnCreateDeferredContext`, and
+  `pfnRecycleCreateDeferredContext`. These are unblocked by the authored
+  `D3D11DDI_HANDLETYPE`, `D3D11DDI_HANDLESIZE`,
+  `D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE`, and
+  `D3D11DDIARG_CREATEDEFERREDCONTEXT` declarations.
 * **The mechanism the pilot established, and which every later promotion
   reuses:**
   * `PROMOTED_SLOTS` in `gen_ddi_layout.py` holds the promoted typedefs, and
@@ -124,7 +131,7 @@ Below is the structured roadmap of what is yet to be done.
   * The table's size assertion stays at 1424 bytes, unchanged. That is the
     pilot's headline result.
 
-**3.2. What gates the remaining 131 typedefs**
+**3.2. What gates the remaining 126 typedefs**
 
 A slot can be promoted when every type in its parameter list is declared. That
 makes the worklist a dependency order on structure groups, not a list of slots:
@@ -133,7 +140,7 @@ makes the worklist a dependency order on structure groups, not a list of slots:
 | :--- | :--- |
 | Command list handle — **done** | `pfnAbandonCommandList`, `pfnCommandListExecute`, `pfnDestroyCommandList`, `pfnRecycleCommandList`, `pfnRecycleDestroyCommandList` |
 | `D3D11DDIARG_CREATECOMMANDLIST` — **done** | `pfnCalcPrivateCommandListSize`, `pfnCreateCommandList`, `pfnRecycleCreateCommandList` |
-| `D3D11DDIARG_CREATEDEFERREDCONTEXT`, `D3D11DDI_HANDLESIZE` | `pfnCalcPrivateDeferredContextSize`, `pfnCreateDeferredContext`, `pfnRecycleCreateDeferredContext`, `pfnCheckDeferredContextHandleSizes`, `pfnCalcDeferredContextHandleSize` |
+| `D3D11DDIARG_CREATEDEFERREDCONTEXT`, `D3D11DDI_HANDLESIZE` — **done** | `pfnCalcPrivateDeferredContextSize`, `pfnCreateDeferredContext`, `pfnRecycleCreateDeferredContext`, `pfnCheckDeferredContextHandleSizes`, `pfnCalcDeferredContextHandleSize` |
 | Resource structures (`D3D11DDIARG_CREATERESOURCE`, `D3D10DDIARG_OPENRESOURCE`, map/lock arguments) | the `pfnCalcPrivateResourceSize`/`pfnCreateResource`/`pfnOpenResource`/`pfnDestroyResource` family, all the `pfn*ResourceMap`/`Unmap` slots, `pfnResourceCopy*`, `pfnResourceUpdateSubresourceUP`, `pfnDiscard`, `pfnResourceConvert*` |
 | View structures (SRV, RTV, DSV, UAV creation arguments) | every `pfnCalcPrivate*ViewSize`/`pfnCreate*View`/`pfnDestroy*View`, `pfnClearRenderTargetView`, `pfnClearDepthStencilView`, `pfnClearView`, `pfnClearUnorderedAccessView*` |
 | Shader and element-layout structures | `pfnCalcPrivateShaderSize`, every `pfnCreate*Shader`, `pfnCreateElementLayout`, the `pfn*SetShaderWithIfaces` family, `pfnRetrieveShaderComment`, `pfnAssignDebugBinary` |
