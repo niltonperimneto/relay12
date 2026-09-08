@@ -28,6 +28,7 @@
 #include <string.h>
 
 #include "wine_d3d11ddi.h"
+#include "padding_test_helper.h"
 
 /* A reference structure whose layout follows from the Win64 C ABI alone. */
 struct layout_probe
@@ -89,6 +90,38 @@ static void check_size(const char *type, unsigned long asserted,
     check_offset(#type, #field, (unsigned long)offsetof(type, field), \
             (unsigned long)((const char *)&(object).field \
                     - (const char *)&(object)))
+
+
+static void check_dirty_memory_padding(void)
+{
+    D3D10DDIARG_CREATEDEVICE *create = (D3D10DDIARG_CREATEDEVICE *)malloc_dirty(sizeof(*create));
+    if (!create) return;
+
+    memset(create, 0, sizeof(*create));
+    check_uninitialized_padding("D3D10DDIARG_CREATEDEVICE (zeroed)", create, sizeof(*create));
+    
+    struct layout_probe *probe = (struct layout_probe *)malloc_dirty(sizeof(*probe));
+    if (!probe) return;
+    probe->first = 1;
+    probe->second = 2;
+    probe->third = 3;
+    probe->fourth = NULL;
+    probe->fifth = 5;
+    
+    // Explicitly demonstrating padding trap. We expect padding to be uninitialized here.
+    int leaks = check_uninitialized_padding("struct layout_probe (un-zeroed)", probe, sizeof(*probe));
+    if (leaks == 0) {
+        printf("[fail] expected padding leaks in layout_probe, got none
+");
+        failures++;
+    } else {
+        printf("[ ok ] padding trap correctly identified implicit gaps
+");
+    }
+
+    free(probe);
+    free(create);
+}
 
 static void check_reference_probe(void)
 {
@@ -737,6 +770,7 @@ static void check_version_arithmetic(void)
 
 int main(void)
 {
+    check_dirty_memory_padding();
     check_reference_probe();
     check_object_handles();
     check_adapter_funcs();
