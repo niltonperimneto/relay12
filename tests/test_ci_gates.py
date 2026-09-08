@@ -16,6 +16,7 @@
 # Run: python3 -m unittest discover -s tests -p 'test_*.py'
 
 import pathlib
+import os
 import subprocess
 import sys
 import tempfile
@@ -324,6 +325,8 @@ class LayoutModel(unittest.TestCase):
         }
         self.assertEqual(padding, {
             "D3D10DDIARG_CREATEDEVICE": [(76, 4)],
+            "D3D11DDIARG_CREATEDEFERREDCONTEXT": [(36, 4)],
+            "D3D11DDI_HANDLESIZE": [(4, 4)],
             "D3DDDICB_ESCAPE": [(12, 4), (28, 4)],
             "D3DDDICB_SYNCTOKEN": [(12, 4)],
         })
@@ -522,6 +525,22 @@ class GateEntryPoints(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("needs a name", result.stderr)
 
+
+
+    def test_check_secure_code(self):
+        proc = subprocess.run(
+            ["python3", "scripts/check_secure_code.py", "relay12-d3d11"],
+            capture_output=True, text=True,
+            cwd=os.path.dirname(os.path.dirname(__file__))
+        )
+        self.assertEqual(0, proc.returncode, "check_secure_code rejected relay12-d3d11")
+
+        proc = subprocess.run(
+            ["python3", "scripts/check_secure_code.py", "tests"],
+            capture_output=True, text=True,
+            cwd=os.path.dirname(os.path.dirname(__file__))
+        )
+        self.assertEqual(0, proc.returncode, "check_secure_code rejected tests")
 
 if __name__ == "__main__":
     unittest.main()

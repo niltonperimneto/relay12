@@ -97,7 +97,7 @@ Microsoft's D3D11On12 driver communicates with the host through the user-mode dr
 | `relay12-d3d11/` | Implementation of the router (`d3d11shim.cpp`), core boundary (`d3d11on12core.cpp`), ABI header (`wine_d3d11on12.h`), diagnostic logging (`wine_d3d11_diag.h`), and clean-room DDI headers (`ddi/wine_d3d11ddi.h`). |
 | `scripts/` | Static verification tools and compliance gates: `check_ddi_header.py`, `gen_ddi_layout.py`, `check_pe_audit.py`, `check_interface_acquisition.py`. |
 | `tests/` | Test suite: Python CI gate tests (`test_ci_gates.py`), mock core unit tests (`d3d11on12coretest.c`), DDI layout validation (`d3d11ddilayout.c`), and router status checks (`d3d11shimstatus.c`). |
-| `docs/` | Technical specifications: `D3D11ON12.md` (system architecture and roadmap) and `CLEANROOM-DDI.md` (DDI authoring method and worklist). |
+| `docs/` | Technical specifications: `D3D11ON12.md` (system architecture), `CLEANROOM-DDI.md` (DDI authoring), `DDI-CONCURRENCY-TESTING.md` (thread-safety plans), and `DDI-REMAINING-ROADMAP.md` (roadmap). |
 | `third_party/` | Pinned submodules: `D3D11On12`, `D3D12TranslationLayer`, and `DirectX-Headers`. |
 
 ---
@@ -119,6 +119,8 @@ To maintain stability and prevent regression across compiler toolchains, four st
 
 - **[docs/D3D11ON12.md](docs/D3D11ON12.md):** Complete architectural design, component boundaries, failure modes, and rollout checklist.
 - **[docs/CLEANROOM-DDI.md](docs/CLEANROOM-DDI.md):** Clean-room WDDM DDI authoring guidelines, version negotiation proof, and implementation worklist.
+- **[docs/DDI-CONCURRENCY-TESTING.md](docs/DDI-CONCURRENCY-TESTING.md):** Strategy for testing race conditions, thread safety violations, and missing CPU/GPU memory barriers.
+- **[docs/DDI-REMAINING-ROADMAP.md](docs/DDI-REMAINING-ROADMAP.md):** Structured roadmap governing upcoming ABI hardening, placeholder eradication, and concurrency deployments.
 - **[AGENTS.md](AGENTS.md):** Architecture invariants, safety rules, and guidelines for automated coding agents.
 - **[SKILLS.md](SKILLS.md):** Step-by-step procedures for layout generation, compilation checks, and test execution.
 
