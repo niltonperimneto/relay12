@@ -9,13 +9,13 @@ permissions:
 
 jobs:
   validate-d3d11on12:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     env:
       WINEDEBUG: -all
       # The tests are console programs; never wait on a mono or gecko install.
       WINEDLLOVERRIDES: mscoree,mshtml=
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -310,7 +310,7 @@ jobs:
             source-files.txt
 
       - name: Upload D3D11-on-12 development artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: d3d11on12probe-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
