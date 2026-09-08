@@ -209,6 +209,60 @@ CREATECOMMANDLIST = Struct(
     [Field("hDeferredContext", "D3D10DDI_HDEVICE")],
 )
 
+# Group: deferred-context creation and handle sizing
+# Specifications: D3D11DDIARG_CREATEDEFERREDCONTEXT,
+# D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE, and D3D11DDI_HANDLESIZE
+# Retrieved: 2026-09-08
+
+CALCPRIVATEDEFERREDCONTEXTSIZE = Struct(
+    "D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE",
+    [Field("Flags", "UINT", *UINT)],
+)
+
+HANDLESIZE = Struct(
+    "D3D11DDI_HANDLESIZE",
+    [
+        Field("HandleType", "D3D11DDI_HANDLETYPE", *UINT),
+        Field("DriverPrivateSize", "SIZE_T"),
+    ],
+)
+
+CREATEDEFERREDCONTEXT = Struct(
+    "D3D11DDIARG_CREATEDEFERREDCONTEXT",
+    [
+        Union(
+            arms=[Field("pWDDM2_6ContextFuncs",
+                        "D3DWDDM2_6DDI_DEVICEFUNCS *")],
+            published=[
+                Field("p11ContextFuncs", "D3D11DDI_DEVICEFUNCS *"),
+                Field("p11_1ContextFuncs", "D3D11_1DDI_DEVICEFUNCS *"),
+                Field("pWDDM1_3ContextFuncs", "D3DWDDM1_3DDI_DEVICEFUNCS *"),
+                Field("pWDDM2_0ContextFuncs", "D3DWDDM2_0DDI_DEVICEFUNCS *"),
+                Field("pWDDM2_1ContextFuncs", "D3DWDDM2_1DDI_DEVICEFUNCS *"),
+                Field("pWDDM2_2ContextFuncs", "D3DWDDM2_2DDI_DEVICEFUNCS *"),
+                Field("pWDDM2_6ContextFuncs", "D3DWDDM2_6DDI_DEVICEFUNCS *"),
+            ],
+        ),
+        Field("hDrvContext", "D3D10DDI_HDEVICE"),
+        Field("hRTCoreLayer", "D3D10DDI_HRTCORELAYER"),
+        Union(
+            arms=[Field("pWDDM2_6UMCallbacks",
+                        "const D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS *")],
+            published=[
+                Field("p11UMCallbacks",
+                      "const D3D11DDI_CORELAYER_DEVICECALLBACKS *"),
+                Field("pWDDM2_0UMCallbacks",
+                      "const D3DWDDM2_0DDI_CORELAYER_DEVICECALLBACKS *"),
+                Field("pWDDM2_2UMCallbacks",
+                      "const D3DWDDM2_2DDI_CORELAYER_DEVICECALLBACKS *"),
+                Field("pWDDM2_6UMCallbacks",
+                      "const D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS *"),
+            ],
+        ),
+        Field("Flags", "UINT", *UINT),
+    ],
+)
+
 
 # Group: adapter function tables and OpenAdapter arguments
 # Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_openadapter
@@ -788,6 +842,11 @@ PROMOTED_SLOTS = {
     "PFND3D11DDI_DESTROYCOMMANDLIST",
     "PFND3D11DDI_RECYCLECOMMANDLIST",
     "PFND3D11DDI_RECYCLECREATECOMMANDLIST",
+    "PFND3D11DDI_CHECKDEFERREDCONTEXTHANDLESIZES",
+    "PFND3D11DDI_CALCDEFERREDCONTEXTHANDLESIZE",
+    "PFND3D11DDI_CALCPRIVATEDEFERREDCONTEXTSIZE",
+    "PFND3D11DDI_CREATEDEFERREDCONTEXT",
+    "PFND3D11DDI_RECYCLECREATEDEFERREDCONTEXT",
 }
 
 if not PROMOTED_SLOTS <= {type_name for _, type_name in DEVICEFUNC_SLOTS}:
@@ -814,6 +873,9 @@ GROUPS = HANDLES + [
     DXGI_BASE_ARGS,
     CREATEDEVICE,
     CREATECOMMANDLIST,
+    CALCPRIVATEDEFERREDCONTEXTSIZE,
+    HANDLESIZE,
+    CREATEDEFERREDCONTEXT,
     DEVICEFUNCS,
     CORELAYER_CALLBACKS,
     KERNEL_CALLBACKS,
