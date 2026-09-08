@@ -111,12 +111,10 @@ static void check_dirty_memory_padding(void)
     // Explicitly demonstrating padding trap. We expect padding to be uninitialized here.
     int leaks = check_uninitialized_padding("struct layout_probe (un-zeroed)", probe, sizeof(*probe));
     if (leaks == 0) {
-        printf("[fail] expected padding leaks in layout_probe, got none
-");
+        printf("[fail] expected padding leaks in layout_probe, got none\n");
         failures++;
     } else {
-        printf("[ ok ] padding trap correctly identified implicit gaps
-");
+        printf("[ ok ] padding trap correctly identified implicit gaps\n");
     }
 
     free(probe);
