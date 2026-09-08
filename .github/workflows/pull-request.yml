@@ -38,6 +38,17 @@ jobs:
             exit 1
           fi
 
+      - name: Test the gates
+        run: |
+          set -euo pipefail
+          # First, because it needs no toolchain and takes a second: a gate
+          # whose pattern has stopped matching fails silently, staying green
+          # while it withholds the signal it exists for.  These give every
+          # rule something that breaks it.  Running them here is also the only
+          # thing that runs them: the checks below are still inline heredocs,
+          # and migrating those to scripts/check_*.py is separate work.
+          python3 -m unittest discover -s tests -p 'test_*.py' --verbose
+
       - name: Install MinGW-w64 GCC and Wine
         run: |
           set -euo pipefail
@@ -191,6 +202,11 @@ jobs:
               raise SystemExit("\n".join(errors))
           print("interface acquisition audit: ok")
           PY
+          # A D3D11 device is used concurrently by design, and neither module
+          # is a Wine builtin, so neither gets Wine's locking for free.  A
+          # race added at namespace scope here would not fail a test; it would
+          # fail a game, once, on someone else's machine.
+          python3 scripts/check_shared_state.py
           # The WDK DDI structures are not packed.  pack(1) would break every
           # asserted offset and pack(8) would be a no-op that hides the real
           # alignment from WINE_DDI_ASSERT_ALIGN.
@@ -225,6 +241,62 @@ jobs:
           fi
           wine d3d11on12coretest.exe
 
+      - name: Run the D3D11-on-12 concurrency stress
+        run: |
+          set -euo pipefail
+          x86_64-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
+            -Irelay12-d3d11 -c -o ddi_thread_stress.o \
+            tests/ddi_thread_stress.c
+          # Linked with the C driver for the same reason the core test is: if
+          # the core ever needs libstdc++, this link fails.
+          x86_64-w64-mingw32-gcc -o ddi_thread_stress.exe \
+            ddi_thread_stress.o d3d11on12core.o wine_d3d11_diag.o \
+            -ld3d12 -ldxgi -ldxguid -luuid
+          # Captured, because the flood check cannot live inside the test: the
+          # diagnostics reach Wine's internal sink rather than the process's
+          # stdio, and a test that picked a sink would be testing the
+          # launcher.  Twelve threads times 400 iterations call each reporting
+          # path, so a latch that stopped latching shows up as hundreds of
+          # lines rather than one.
+          set +e
+          wine ddi_thread_stress.exe > stress-stdout.txt 2> stress-stderr.txt
+          status=$?
+          set -e
+          cat stress-stdout.txt
+          if [ "$status" -ne 0 ]; then
+            echo '--- captured diagnostics ---'
+            cat stress-stderr.txt
+            exit "$status"
+          fi
+          python3 - <<'PY'
+          import pathlib
+          import sys
+
+          # One line per condition, no matter how many threads raced for it.
+          # The substrings are the stable part of each message in
+          # d3d11on12core.cpp; matching the whole line would break on a
+          # rewording that changed nothing about the latch.
+          once = [
+              "does not implement ID3D12Device",
+              "does not implement ID3D12CommandQueue",
+              "would not report its owning ID3D12Device",
+              "refusing to assume they match",
+              "reports zero nodes",
+              "validated but not yet translated",
+              "no D3D11 runtime/DDI host is implemented",
+          ]
+          text = pathlib.Path("stress-stderr.txt").read_text(errors="replace")
+          errors = []
+          for needle in once:
+              count = text.count(needle)
+              if count != 1:
+                  errors.append(f"{count} occurrences of {needle!r}, expected 1")
+          if errors:
+              print(text, file=sys.stderr)
+              raise SystemExit("\n".join(errors))
+          print("diagnostic flood gate: each of the 7 latches reported once")
+          PY
+
       - name: Run the D3D11 router fail-closed tests
         run: |
           set -euo pipefail
@@ -256,6 +328,41 @@ jobs:
             -o d3d11ddilayoutxx.exe tests/d3d11ddilayout.c
           wine d3d11ddilayout.exe
           wine d3d11ddilayoutxx.exe
+          # Anonymous padding in a structure the host allocates is bytes the
+          # driver reads and the host never wrote, and every offset assertion
+          # holds either way.  -Wpadded is the only thing that sees it, so the
+          # DDI declarations are compiled alone under it.
+          x86_64-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wextra -Wpadded -Werror \
+            -Irelay12-d3d11/ddi -c -o d3d11ddipadding.o tests/d3d11ddipadding.c
+          x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Wpadded -Werror \
+            -fno-exceptions -fno-rtti -Irelay12-d3d11/ddi -x c++ \
+            -c -o d3d11ddipaddingxx.o tests/d3d11ddipadding.c
+          # Prove unpromoted device slots reject callback arguments.
+          if x86_64-w64-mingw32-gcc -std=gnu11 -Wall -Wextra -Werror \
+            -Irelay12-d3d11/ddi -c tests/d3d11ddiplaceholdernegative.c; then
+            echo "unpromoted device slot unexpectedly accepted arguments"
+            exit 1
+          fi
+          if x86_64-w64-mingw32-g++ -std=c++17 -Wall -Wextra -Werror \
+            -fno-exceptions -fno-rtti -Irelay12-d3d11/ddi -x c++ \
+            -c tests/d3d11ddiplaceholdernegative.c; then
+            echo "unpromoted C++ device slot unexpectedly accepted arguments"
+            exit 1
+          fi
+          # And the other half: a promoted slot must reject the wrong
+          # arguments.  A promotion that transcribed the parameter list wrongly
+          # changes no offset and no size, so nothing above would see it.
+          if x86_64-w64-mingw32-gcc -std=gnu11 -Wall -Wextra -Werror \
+            -Irelay12-d3d11/ddi -c tests/d3d11ddipromotednegative.c; then
+            echo "promoted device slot unexpectedly accepted the wrong handle"
+            exit 1
+          fi
+          if x86_64-w64-mingw32-g++ -std=c++17 -Wall -Wextra -Werror \
+            -fno-exceptions -fno-rtti -Irelay12-d3d11/ddi -x c++ \
+            -c tests/d3d11ddipromotednegative.c; then
+            echo "promoted C++ device slot unexpectedly accepted the wrong handle"
+            exit 1
+          fi
           # GetSupportedVersions writes its own count of words whenever the
           # buffer pointer is non-null, so the count it takes is not a
           # capacity.  These cases are what stands between that and a buffer
@@ -319,6 +426,7 @@ jobs:
             d3d11shimstatus.exe
             d3d11ddilayout.exe
             d3d11ddinegotiate.exe
+            ddi_thread_stress.exe
             d3d11shim.dll
             d3d11on12core.dll
             d3d11on12-source.tar.gz

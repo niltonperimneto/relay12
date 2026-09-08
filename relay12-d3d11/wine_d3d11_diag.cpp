@@ -29,6 +29,7 @@ namespace
 using WineDbgOutputFn = int (*)(const char *);
 
 INIT_ONCE sinkOnce = INIT_ONCE_STATIC_INIT;
+/* shared-state: published once through sinkOnce */
 WineDbgOutputFn wineDbgOutput = nullptr;
 
 BOOL CALLBACK resolveSinks(PINIT_ONCE, PVOID, PVOID *) noexcept
