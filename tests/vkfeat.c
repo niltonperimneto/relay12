@@ -143,6 +143,8 @@ int main(void)
         pEnumerateDeviceExtensionProperties(devs[d], NULL, &ec, NULL);
         printf("--- %u device extensions\n", ec);
         if (ec) {
+            if (ec > SIZE_MAX / sizeof(VkExtensionProperties))
+                return 1;
             VkExtensionProperties *ext = malloc(ec * sizeof(*ext));
             pEnumerateDeviceExtensionProperties(devs[d], NULL, &ec, ext);
             for (uint32_t i = 0; i < ec; i++) printf("  %s\n", ext[i].extensionName);
