@@ -121,13 +121,15 @@
  *   - the CreateDevice argument structure, its embedded DXGI base arguments,
  *     and the create-device flags;
  *   - the core-layer device callback table, signature-complete except for the
- *     two slots the public set does not document.
+ *     two slots the public set does not document;
+ *   - the kernel device callback table, with the three slots the pinned driver
+ *     invokes promoted and the rest holding their offsets only, and the two
+ *     argument structures those three take.
  *
  * Still required by docs/D3D11ON12.md, each to land with its own provenance
  * block and layout assertions:
  *
  *   - context handle types;
- *   - the kernel callback table;
  *   - device function tables;
  *   - resource, view, shader, state, query, and command structures;
  *   - the literal DDI version numbers, which the public specification elides;
@@ -1074,5 +1076,456 @@ WINE_DDI_STATIC_ASSERT(
         sizeof(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS)
         == 47 * sizeof(void (*)(void)),
         "the core-layer callback table is 47 function pointers");
+
+/*
+ * Group: kernel device callbacks
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/ns-d3dumddi-_d3dddi_devicecallbacks
+ * Retrieved: 2026-09-07
+ *
+ * Companion specifications, all retrieved 2026-09-07:
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/ns-d3dumddi-_d3dddicb_escape
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/ns-d3dumddi-_d3dddicb_synctoken
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/nc-d3dumddi-pfnd3dddi_escapecb
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/nc-d3dumddi-pfnd3dddi_synctokencb
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dukmdt/ns-d3dukmdt-_d3dddi_escapeflags
+ *
+ * This is D3D10DDIARG_CREATEDEVICE's pKTCallbacks, the second and last table
+ * the host fills and the driver calls, and the last unauthored member of the
+ * device-creation arguments.
+ *
+ * Unlike the core-layer table, this one is not authored signature-complete.
+ * The pinned driver reads exactly three of its slots, and the roadmap in
+ * docs/CLEANROOM-DDI.md asks for only the members D3D11On12 invokes:
+ *
+ *   pfnEscapeCb          (slot 10) src/device.cpp, in Device::ReportError
+ *   pfnAcquireResourceCb (slot 54) include/device.hpp, via a pointer-to-member
+ *   pfnReleaseResourceCb (slot 55) include/device.hpp, likewise
+ *
+ * So the promoted set and the invoked set are the same set, deliberately.
+ * Every other slot keeps its published type name as an alias of the
+ * undeclared-slot type, which holds the offset exactly, cannot be called
+ * without a cast, and turns promoting a signature later into a one-line change
+ * here rather than an edit to the structure.  scripts/gen_ddi_layout.py holds
+ * the same three indices and fails if they ever name different slots.
+ *
+ * Note that pfnPresentCb is in this table and is *not* one of the three.  The
+ * driver does call a pfnPresentCb, but it is the DXGI table's, reached through
+ * m_pDXGICallbacks in src/present.cpp; that belongs to the DXGI DDI interop
+ * group.  Reading the name alone would put a signature on the wrong slot.
+ *
+ * The two documentation surfaces disagree here, and the disagreement is
+ * recorded rather than resolved by picking one: the rendered syntax block
+ * gives 66 members and the markdown mirror 65, the odd one being
+ * pfnCreateNativeFenceCb, a WDDM 3.1 addition the mirror has not caught up
+ * with.  The superset is declared.  See docs/D3D11ON12.md, under Decisions and
+ * rejected alternatives, for why over-declaring is the safe direction for a
+ * structure the host allocates.  What makes the disagreement tolerable is that
+ * it is confined to the tail: slots 10, 54 and 55 sit at the same offsets
+ * under both surfaces.
+ *
+ * pfnEscapeCb's first parameter is documented as hAdapter, but the driver
+ * passes a null and puts the real handle in D3DDDICB_ESCAPE.hDevice.  A host
+ * that validated that argument would reject every call the driver makes.
+ *
+ * The two sync-token slots must share one type, and share it by name.  The
+ * driver does not call them through the table directly; it stores
+ * "PFND3DDDI_SYNCTOKENCB D3DDDI_DEVICECALLBACKS::* const m_pCallback" and
+ * binds it to one or the other.  A pointer-to-member needs the structure to be
+ * a complete type in C++ and needs both members to have exactly that type, not
+ * merely a compatible function-pointer type, so this is a constraint no offset
+ * assertion can express.  tests/d3d11ddilayout.c reproduces the construct.
+ *
+ * D3DDDI_EXECUTIONSTATEESCAPE is deliberately absent.  The driver builds one
+ * by value and passes its sizeof as PrivateDriverDataSize, but it has no
+ * public reference page on either surface and no definition in the pinned
+ * WineCX, so rule 1 forbids authoring it and no placeholder substitutes for a
+ * type used by value.  Device::ReportError therefore does not compile yet.
+ * That is a port dependency rather than a gap in this table, and
+ * docs/CLEANROOM-DDI.md records it as an open question.
+ */
+
+/*
+ * The escape flags, deliberately not named D3DDDI_ESCAPEFLAGS.
+ *
+ * The pinned WineCX does define that name, in include/d3dukmdt.h, as the
+ * oldest published variant: HardwareAccess and 31 reserved bits, with no
+ * DeviceStatusQuery.  DeviceStatusQuery is the one bit the driver sets.  The
+ * host is Wine's D3D11 frontend and will include both that header and this
+ * one, so declaring our own under the same name is a duplicate typedef and
+ * deferring to Wine's is a missing member.  A distinct name is neither: the
+ * layout is identical, and the driver never spells the type, only
+ * EscapeCB.Flags.DeviceStatusQuery.
+ *
+ * The specification prints this structure with the later bits behind #if
+ * ellipses, so which of them exist is version-dependent and unpublished.  The
+ * four leading bits and Reserved : 28 are one of the printed variants
+ * verbatim, not a blend of them.  Value aliases the whole word, so the size is
+ * four bytes under every variant and only the bit positions could differ;
+ * tests/d3d11ddilayout.c pins the two this port depends on.
+ */
+typedef struct WINE_D3D11DDI_ESCAPEFLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT HardwareAccess : 1;
+            UINT DeviceStatusQuery : 1;
+            UINT ChangeFrameLatency : 1;
+            UINT NoAdapterSynchronization : 1;
+            UINT Reserved : 28;
+        };
+        UINT Value;
+    };
+} WINE_D3D11DDI_ESCAPEFLAGS;
+
+WINE_DDI_ASSERT_SIZE(WINE_D3D11DDI_ESCAPEFLAGS, 4);
+WINE_DDI_ASSERT_ALIGN(WINE_D3D11DDI_ESCAPEFLAGS, 4);
+WINE_DDI_ASSERT_FIELD(WINE_D3D11DDI_ESCAPEFLAGS, Value, 0);
+
+/* Both argument structures carry interior padding, so a host that assigns
+ * member by member leaves the driver reading uninitialized bytes.  Zero the
+ * whole structure, as D3D10DDIARG_CREATEDEVICE also requires. */
+typedef struct _D3DDDICB_ESCAPE
+{
+    HANDLE                    hDevice;
+    WINE_D3D11DDI_ESCAPEFLAGS Flags;
+    void                      *pPrivateDriverData;
+    UINT                      PrivateDriverDataSize;
+    HANDLE                    hContext;
+} D3DDDICB_ESCAPE;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3DDDICB_ESCAPE);
+WINE_DDI_ASSERT_SIZE(D3DDDICB_ESCAPE, 40);
+WINE_DDI_ASSERT_ALIGN(D3DDDICB_ESCAPE, 8);
+WINE_DDI_ASSERT_FIELD(D3DDDICB_ESCAPE, hDevice, 0);
+WINE_DDI_ASSERT_FIELD(D3DDDICB_ESCAPE, Flags, 8);
+WINE_DDI_ASSERT_FIELD_SIZE(D3DDDICB_ESCAPE, Flags, 4);
+/* Four bytes of padding follow Flags, and four more follow
+ * PrivateDriverDataSize; no member names either. */
+WINE_DDI_ASSERT_FIELD(D3DDDICB_ESCAPE, pPrivateDriverData, 16);
+WINE_DDI_ASSERT_FIELD(D3DDDICB_ESCAPE, PrivateDriverDataSize, 24);
+WINE_DDI_ASSERT_FIELD_SIZE(D3DDDICB_ESCAPE, PrivateDriverDataSize, 4);
+WINE_DDI_ASSERT_FIELD(D3DDDICB_ESCAPE, hContext, 32);
+
+typedef struct _D3DDDICB_SYNCTOKEN
+{
+    HANDLE       hSyncToken;
+    UINT         BroadcastContextCount;
+    const HANDLE *BroadcastContextArray;
+} D3DDDICB_SYNCTOKEN;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3DDDICB_SYNCTOKEN);
+WINE_DDI_ASSERT_SIZE(D3DDDICB_SYNCTOKEN, 24);
+WINE_DDI_ASSERT_ALIGN(D3DDDICB_SYNCTOKEN, 8);
+WINE_DDI_ASSERT_FIELD(D3DDDICB_SYNCTOKEN, hSyncToken, 0);
+WINE_DDI_ASSERT_FIELD(D3DDDICB_SYNCTOKEN, BroadcastContextCount, 8);
+WINE_DDI_ASSERT_FIELD_SIZE(D3DDDICB_SYNCTOKEN, BroadcastContextCount, 4);
+WINE_DDI_ASSERT_FIELD(D3DDDICB_SYNCTOKEN, BroadcastContextArray, 16);
+
+/* The three promoted signatures: the slots the pinned driver invokes. */
+typedef HRESULT (*PFND3DDDI_ESCAPECB)(
+        HANDLE hAdapter,
+        const D3DDDICB_ESCAPE *pData);
+
+typedef HRESULT (*PFND3DDDI_SYNCTOKENCB)(
+        HANDLE hDevice,
+        const D3DDDICB_SYNCTOKEN *pData);
+
+/* The 63 slots the driver never reads.  Each keeps its published type name so
+ * the structure below reads as the specification prints it, and each is an
+ * alias of the undeclared-slot type so that reading one here is unambiguous
+ * about what has and has not been derived from a specification. */
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_ALLOCATECB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_DEALLOCATECB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_SETPRIORITYCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_QUERYRESIDENCYCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_SETDISPLAYMODECB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_PRESENTCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_RENDERCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_LOCKCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_UNLOCKCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_CREATEOVERLAYCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_UPDATEOVERLAYCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_FLIPOVERLAYCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_DESTROYOVERLAYCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_CREATECONTEXTCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_DESTROYCONTEXTCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_CREATESYNCHRONIZATIONOBJECTCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB
+        PFND3DDDI_DESTROYSYNCHRONIZATIONOBJECTCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB
+        PFND3DDDI_WAITFORSYNCHRONIZATIONOBJECTCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_SIGNALSYNCHRONIZATIONOBJECTCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_SETASYNCCALLBACKSCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB
+        PFND3DDDI_SETDISPLAYPRIVATEDRIVERFORMATCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_OFFERALLOCATIONSCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_RECLAIMALLOCATIONSCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB
+        PFND3DDDI_CREATESYNCHRONIZATIONOBJECT2CB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB
+        PFND3DDDI_WAITFORSYNCHRONIZATIONOBJECT2CB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB
+        PFND3DDDI_SIGNALSYNCHRONIZATIONOBJECT2CB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_PRESENTMULTIPLANEOVERLAYCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_LOGUMDMARKERCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_MAKERESIDENTCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_EVICTCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB
+        PFND3DDDI_WAITFORSYNCHRONIZATIONOBJECTFROMCPUCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB
+        PFND3DDDI_SIGNALSYNCHRONIZATIONOBJECTFROMCPUCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB
+        PFND3DDDI_WAITFORSYNCHRONIZATIONOBJECTFROMGPUCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB
+        PFND3DDDI_SIGNALSYNCHRONIZATIONOBJECTFROMGPUCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_CREATEPAGINGQUEUECB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_DESTROYPAGINGQUEUECB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_LOCK2CB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_UNLOCK2CB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_INVALIDATECACHECB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_RESERVEGPUVIRTUALADDRESSCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_MAPGPUVIRTUALADDRESSCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_FREEGPUVIRTUALADDRESSCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_UPDATEGPUVIRTUALADDRESSCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_CREATECONTEXTVIRTUALCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_SUBMITCOMMANDCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_DEALLOCATE2CB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB
+        PFND3DDDI_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2CB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_RECLAIMALLOCATIONS2CB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB
+        PFND3DDDI_GETRESOURCEPRESENTPRIVATEDRIVERDATACB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_UPDATEALLOCATIONPROPERTYCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_OFFERALLOCATIONS2CB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_RECLAIMALLOCATIONS3CB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_CREATEHWCONTEXTCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_DESTROYHWCONTEXTCB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_CREATEHWQUEUECB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_DESTROYHWQUEUECB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_SUBMITCOMMANDTOHWQUEUECB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB
+        PFND3DDDI_SUBMITWAITFORSYNCOBJECTSTOHWQUEUECB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB
+        PFND3DDDI_SUBMITSIGNALSYNCOBJECTSTOHWQUEUECB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_SUBMITPRESENTBLTTOHWQUEUECB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_SUBMITPRESENTTOHWQUEUECB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_SUBMITHISTORYSEQUENCECB;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DDDI_CREATENATIVEFENCECB;
+
+struct _D3DDDI_DEVICECALLBACKS
+{
+    PFND3DDDI_ALLOCATECB                            pfnAllocateCb;
+    PFND3DDDI_DEALLOCATECB                          pfnDeallocateCb;
+    PFND3DDDI_SETPRIORITYCB                         pfnSetPriorityCb;
+    PFND3DDDI_QUERYRESIDENCYCB                      pfnQueryResidencyCb;
+    PFND3DDDI_SETDISPLAYMODECB                      pfnSetDisplayModeCb;
+    PFND3DDDI_PRESENTCB                             pfnPresentCb;
+    PFND3DDDI_RENDERCB                              pfnRenderCb;
+    PFND3DDDI_LOCKCB                                pfnLockCb;
+    PFND3DDDI_UNLOCKCB                              pfnUnlockCb;
+    PFND3DDDI_ESCAPECB                              pfnEscapeCb;
+    PFND3DDDI_CREATEOVERLAYCB                       pfnCreateOverlayCb;
+    PFND3DDDI_UPDATEOVERLAYCB                       pfnUpdateOverlayCb;
+    PFND3DDDI_FLIPOVERLAYCB                         pfnFlipOverlayCb;
+    PFND3DDDI_DESTROYOVERLAYCB                      pfnDestroyOverlayCb;
+    PFND3DDDI_CREATECONTEXTCB                       pfnCreateContextCb;
+    PFND3DDDI_DESTROYCONTEXTCB                      pfnDestroyContextCb;
+    PFND3DDDI_CREATESYNCHRONIZATIONOBJECTCB         pfnCreateSynchronizationObjectCb;
+    PFND3DDDI_DESTROYSYNCHRONIZATIONOBJECTCB        pfnDestroySynchronizationObjectCb;
+    PFND3DDDI_WAITFORSYNCHRONIZATIONOBJECTCB        pfnWaitForSynchronizationObjectCb;
+    PFND3DDDI_SIGNALSYNCHRONIZATIONOBJECTCB         pfnSignalSynchronizationObjectCb;
+    PFND3DDDI_SETASYNCCALLBACKSCB                   pfnSetAsyncCallbacksCb;
+    PFND3DDDI_SETDISPLAYPRIVATEDRIVERFORMATCB       pfnSetDisplayPrivateDriverFormatCb;
+    PFND3DDDI_OFFERALLOCATIONSCB                    pfnOfferAllocationsCb;
+    PFND3DDDI_RECLAIMALLOCATIONSCB                  pfnReclaimAllocationsCb;
+    PFND3DDDI_CREATESYNCHRONIZATIONOBJECT2CB        pfnCreateSynchronizationObject2Cb;
+    PFND3DDDI_WAITFORSYNCHRONIZATIONOBJECT2CB       pfnWaitForSynchronizationObject2Cb;
+    PFND3DDDI_SIGNALSYNCHRONIZATIONOBJECT2CB        pfnSignalSynchronizationObject2Cb;
+    PFND3DDDI_PRESENTMULTIPLANEOVERLAYCB            pfnPresentMultiPlaneOverlayCb;
+    PFND3DDDI_LOGUMDMARKERCB                        pfnLogUMDMarkerCb;
+    PFND3DDDI_MAKERESIDENTCB                        pfnMakeResidentCb;
+    PFND3DDDI_EVICTCB                               pfnEvictCb;
+    PFND3DDDI_WAITFORSYNCHRONIZATIONOBJECTFROMCPUCB pfnWaitForSynchronizationObjectFromCpuCb;
+    PFND3DDDI_SIGNALSYNCHRONIZATIONOBJECTFROMCPUCB  pfnSignalSynchronizationObjectFromCpuCb;
+    PFND3DDDI_WAITFORSYNCHRONIZATIONOBJECTFROMGPUCB pfnWaitForSynchronizationObjectFromGpuCb;
+    PFND3DDDI_SIGNALSYNCHRONIZATIONOBJECTFROMGPUCB  pfnSignalSynchronizationObjectFromGpuCb;
+    PFND3DDDI_CREATEPAGINGQUEUECB                   pfnCreatePagingQueueCb;
+    PFND3DDDI_DESTROYPAGINGQUEUECB                  pfnDestroyPagingQueueCb;
+    PFND3DDDI_LOCK2CB                               pfnLock2Cb;
+    PFND3DDDI_UNLOCK2CB                             pfnUnlock2Cb;
+    PFND3DDDI_INVALIDATECACHECB                     pfnInvalidateCacheCb;
+    PFND3DDDI_RESERVEGPUVIRTUALADDRESSCB            pfnReserveGpuVirtualAddressCb;
+    PFND3DDDI_MAPGPUVIRTUALADDRESSCB                pfnMapGpuVirtualAddressCb;
+    PFND3DDDI_FREEGPUVIRTUALADDRESSCB               pfnFreeGpuVirtualAddressCb;
+    PFND3DDDI_UPDATEGPUVIRTUALADDRESSCB             pfnUpdateGpuVirtualAddressCb;
+    PFND3DDDI_CREATECONTEXTVIRTUALCB                pfnCreateContextVirtualCb;
+    PFND3DDDI_SUBMITCOMMANDCB                       pfnSubmitCommandCb;
+    PFND3DDDI_DEALLOCATE2CB                         pfnDeallocate2Cb;
+    PFND3DDDI_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2CB pfnSignalSynchronizationObjectFromGpu2Cb;
+    PFND3DDDI_RECLAIMALLOCATIONS2CB                 pfnReclaimAllocations2Cb;
+    PFND3DDDI_GETRESOURCEPRESENTPRIVATEDRIVERDATACB pfnGetResourcePresentPrivateDriverDataCb;
+    PFND3DDDI_UPDATEALLOCATIONPROPERTYCB            pfnUpdateAllocationPropertyCb;
+    PFND3DDDI_OFFERALLOCATIONS2CB                   pfnOfferAllocations2Cb;
+    PFND3DDDI_RECLAIMALLOCATIONS3CB                 pfnReclaimAllocations3Cb;
+    PFND3DDDI_SYNCTOKENCB                           pfnAcquireResourceCb;
+    PFND3DDDI_SYNCTOKENCB                           pfnReleaseResourceCb;
+    PFND3DDDI_CREATEHWCONTEXTCB                     pfnCreateHwContextCb;
+    PFND3DDDI_DESTROYHWCONTEXTCB                    pfnDestroyHwContextCb;
+    PFND3DDDI_CREATEHWQUEUECB                       pfnCreateHwQueueCb;
+    PFND3DDDI_DESTROYHWQUEUECB                      pfnDestroyHwQueueCb;
+    PFND3DDDI_SUBMITCOMMANDTOHWQUEUECB              pfnSubmitCommandToHwQueueCb;
+    PFND3DDDI_SUBMITWAITFORSYNCOBJECTSTOHWQUEUECB   pfnSubmitWaitForSyncObjectsToHwQueueCb;
+    PFND3DDDI_SUBMITSIGNALSYNCOBJECTSTOHWQUEUECB    pfnSubmitSignalSyncObjectsToHwQueueCb;
+    PFND3DDDI_SUBMITPRESENTBLTTOHWQUEUECB           pfnSubmitPresentBltToHwQueueCb;
+    PFND3DDDI_SUBMITPRESENTTOHWQUEUECB              pfnSubmitPresentToHwQueueCb;
+    PFND3DDDI_SUBMITHISTORYSEQUENCECB               pfnSubmitHistorySequenceCb;
+    PFND3DDDI_CREATENATIVEFENCECB                   pfnCreateNativeFenceCb;
+};
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3DDDI_DEVICECALLBACKS);
+WINE_DDI_ASSERT_SIZE(D3DDDI_DEVICECALLBACKS, 528);
+WINE_DDI_ASSERT_ALIGN(D3DDDI_DEVICECALLBACKS, 8);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnAllocateCb, 0);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnDeallocateCb, 8);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnSetPriorityCb, 16);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnQueryResidencyCb, 24);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnSetDisplayModeCb, 32);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnPresentCb, 40);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnRenderCb, 48);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnLockCb, 56);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnUnlockCb, 64);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnEscapeCb, 72);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnCreateOverlayCb, 80);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnUpdateOverlayCb, 88);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnFlipOverlayCb, 96);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnDestroyOverlayCb, 104);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnCreateContextCb, 112);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnDestroyContextCb, 120);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnCreateSynchronizationObjectCb, 128);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnDestroySynchronizationObjectCb, 136);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnWaitForSynchronizationObjectCb, 144);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnSignalSynchronizationObjectCb, 152);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnSetAsyncCallbacksCb, 160);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnSetDisplayPrivateDriverFormatCb, 168);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnOfferAllocationsCb, 176);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnReclaimAllocationsCb, 184);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnCreateSynchronizationObject2Cb, 192);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnWaitForSynchronizationObject2Cb, 200);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnSignalSynchronizationObject2Cb, 208);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnPresentMultiPlaneOverlayCb, 216);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnLogUMDMarkerCb, 224);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnMakeResidentCb, 232);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnEvictCb, 240);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnWaitForSynchronizationObjectFromCpuCb, 248);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnSignalSynchronizationObjectFromCpuCb, 256);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnWaitForSynchronizationObjectFromGpuCb, 264);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnSignalSynchronizationObjectFromGpuCb, 272);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnCreatePagingQueueCb, 280);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnDestroyPagingQueueCb, 288);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnLock2Cb, 296);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnUnlock2Cb, 304);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnInvalidateCacheCb, 312);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnReserveGpuVirtualAddressCb, 320);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnMapGpuVirtualAddressCb, 328);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnFreeGpuVirtualAddressCb, 336);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnUpdateGpuVirtualAddressCb, 344);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnCreateContextVirtualCb, 352);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnSubmitCommandCb, 360);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnDeallocate2Cb, 368);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnSignalSynchronizationObjectFromGpu2Cb, 376);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnReclaimAllocations2Cb, 384);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnGetResourcePresentPrivateDriverDataCb, 392);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnUpdateAllocationPropertyCb, 400);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnOfferAllocations2Cb, 408);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnReclaimAllocations3Cb, 416);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnAcquireResourceCb, 424);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnReleaseResourceCb, 432);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnCreateHwContextCb, 440);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnDestroyHwContextCb, 448);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnCreateHwQueueCb, 456);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnDestroyHwQueueCb, 464);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnSubmitCommandToHwQueueCb, 472);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnSubmitWaitForSyncObjectsToHwQueueCb, 480);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnSubmitSignalSyncObjectsToHwQueueCb, 488);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnSubmitPresentBltToHwQueueCb, 496);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnSubmitPresentToHwQueueCb, 504);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnSubmitHistorySequenceCb, 512);
+WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
+        pfnCreateNativeFenceCb, 520);
+
+/* Every slot is a function pointer, so the table is its member count times the
+ * pointer size.  Asserting that as arithmetic rather than as another literal
+ * catches a member being dropped and the offsets renumbered to match, which
+ * the per-field assertions above cannot see. */
+WINE_DDI_STATIC_ASSERT(
+        sizeof(D3DDDI_DEVICECALLBACKS) == 66 * sizeof(void (*)(void)),
+        "the kernel callback table is 66 function pointers");
 
 #endif /* WINE_D3D11DDI_H */

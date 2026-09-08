@@ -148,9 +148,15 @@ high risk; signatures are expensive to verify and low risk until invoked:
 | `D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS` | **Host** | **Driver** | **Critical**: driver calls host with external arguments |
 | `D3DDDI_DEVICECALLBACKS` | **Host** | **Driver** | **Critical**: driver invokes callbacks autonomously |
 
-The tables filled by the host must be signature-complete before runtime execution.
-Therefore, the 47-slot core-layer callback table takes priority over the 178-slot
-device table.
+The tables filled by the host must be signature-complete before runtime
+execution, so both took priority over the 178-slot device table. "Complete"
+means complete *for the slots the driver can reach*, and the two host-filled
+tables landed at opposite ends of that. The core-layer table is promoted
+throughout, because the driver reaches most of it; the kernel table has three
+promoted slots out of 66, because reading the pinned source showed it reaches
+only those. The rule is the same in both cases — never leave a reachable slot
+undeclared — and it is the driver, not the slot count, that decides how much
+work it implies.
 
 ## Tooling and drift defense
 
@@ -223,6 +229,7 @@ misinterpretation; `--check` defends against structural *drift* across 178+ slot
 | Version arithmetic | `D3D11_DDI_MAJOR_VERSION`, composition and extraction macros | n/a |
 | Device creation | `D3D10DDI_HDEVICE`, `HRTDEVICE`, `HRTCORELAYER`, `PFND3D10DDI_RETRIEVESUBOBJECT`, `DXGI_DDI_BASE_ARGS`, `D3D10DDIARG_CREATEDEVICE`, flag constants | 8 each / 16 / 88 |
 | Core-layer callbacks | `D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS`, 46 `PFN` typedefs, `D3DWDDM2_2DDI_HRTCACHESESSION` | 376 / 8 |
+| Kernel callbacks | `D3DDDI_DEVICECALLBACKS`, 65 `PFN` typedefs of which 2 promoted, `D3DDDICB_ESCAPE`, `D3DDDICB_SYNCTOKEN`, `WINE_D3D11DDI_ESCAPEFLAGS` | 528 / 40 / 24 / 4 |
 
 #### Key constraints in `D3D10DDIARG_CREATEDEVICE` (88 bytes)
 
@@ -273,23 +280,77 @@ published set rather than a whole undocumented feature.
 and `tests/d3d11ddilayout.c` pins the shared type by fitting one
 implementation to both slots.
 
+#### Constraints in `D3DDDI_DEVICECALLBACKS` (528 bytes)
+
+This is the other table the host fills, but it is authored the opposite way to
+the core-layer one: the pinned driver reads **three** of its 66 slots, so
+three are promoted and the other 63 keep their published type names as aliases
+of `PFNWINE_D3D11DDI_UNDECLARED_CB`. The promoted set and the invoked set are
+the same set by construction, and `gen_ddi_layout.py` holds the three indices
+and fails if they ever name different slots.
+
+| Slot | Index | Type | Where the pinned driver reads it |
+| :--- | ---: | :--- | :--- |
+| `pfnEscapeCb` | 9 | `PFND3DDDI_ESCAPECB` | `src/device.cpp`, `Device::ReportError` |
+| `pfnAcquireResourceCb` | 53 | `PFND3DDDI_SYNCTOKENCB` | `include/device.hpp` → `src/present.cpp` |
+| `pfnReleaseResourceCb` | 54 | `PFND3DDDI_SYNCTOKENCB` | `include/device.hpp` → `src/present.cpp` |
+
+**`pfnPresentCb` is a member of this table and is not one of the three.** The
+driver does call a `pfnPresentCb`, but through `m_pDXGICallbacks`, so it
+belongs to group 4 below. Promoting on the strength of the name would put a
+signature on the wrong slot.
+
+**The sync-token pair is bound by pointer-to-member.** The driver stores
+`PFND3DDDI_SYNCTOKENCB D3DDDI_DEVICECALLBACKS::* const` rather than calling
+through the table, which requires the structure to be complete in C++ and
+both slots to have exactly that type, not a compatible function-pointer type.
+No offset assertion reaches this; `tests/d3d11ddilayout.c` reproduces the
+construct instead.
+
+**`pfnEscapeCb` is passed a null adapter.** The documented first parameter is
+`hAdapter`, but the driver passes null and puts the real handle in
+`D3DDDICB_ESCAPE.hDevice`. A host validating that argument rejects every call.
+
+**The surfaces disagree at the tail**, 66 against 65, over the WDDM 3.1
+`pfnCreateNativeFenceCb`. Resolved by declaring the union rather than choosing
+a surface; `docs/D3D11ON12.md` records why over-declaring is the safe
+direction here. Offsets 0 through 54 are identical either way.
+
+**The escape flags do not use their published name.** WineCX already defines
+`D3DDDI_ESCAPEFLAGS` as the oldest variant, without the `DeviceStatusQuery`
+bit the driver sets, and the host includes both headers.
+`WINE_D3D11DDI_ESCAPEFLAGS` avoids both the duplicate typedef and the missing
+member at identical layout. Since the published page hides the later bits
+behind `#if` ellipses, only the four leading bits and `Reserved : 28` are
+declared — one printed variant verbatim, not a blend — and the run-time test
+pins the two bit positions this port depends on.
+
 ### Remaining groups roadmap
 
 | # | Group | Scope | Rationale and dependencies |
 | :--- | :--- | :--- | :--- |
-| 1 | Kernel callbacks | `D3DDDI_DEVICECALLBACKS` | Only members invoked by D3D11On12. Host fills |
-| 2 | Device function table | `D3DWDDM2_6DDI_DEVICEFUNCS`, full layout, placeholder slots | 178 slots (1424 bytes). Driver fills, host calls |
-| 3 | Surface discovery | MIT tree test build against clean-room header | Turns remaining clean-room work into a measurable compiler worklist |
-| 4 | Signature promotion | Promote slots in `D3DWDDM2_6DDI_DEVICEFUNCS` | 138 distinct callback types, prioritized by host call sites |
-| 5 | DXGI DDI interop | `DXGI_DDI_BASE_CALLBACKS`, `DXGI1_6_1_DDI_BASE_FUNCTIONS` | Required by `DXGIBaseDDI` pointers in creation arguments |
+| 1 | Device function table | `D3DWDDM2_6DDI_DEVICEFUNCS`, full layout, placeholder slots | 178 slots (1424 bytes). Driver fills, host calls |
+| 2 | Surface discovery | MIT tree test build against clean-room header | Turns remaining clean-room work into a measurable compiler worklist |
+| 3 | Signature promotion | Promote slots in `D3DWDDM2_6DDI_DEVICEFUNCS` | 138 distinct callback types, prioritized by host call sites |
+| 4 | DXGI DDI interop | `DXGI_DDI_BASE_CALLBACKS`, `DXGI1_6_1_DDI_BASE_FUNCTIONS` | Required by `DXGIBaseDDI` pointers in creation arguments |
 
 ## Open questions
 
 - **Extent of `d3dkmthk.h` types in host signatures**: `D3D11On12`'s `pch.hpp`
   includes `d3dkmthk.h`, but it is uncertain whether any types cross the host-driver
   boundary. Group 4 (Surface discovery) will provide the compiler-verified answer.
-- **`D3DDDI_DEVICECALLBACKS` active call set**: Establishing the exact subset of
-  kernel callbacks invoked by the pinned driver to avoid declaring unused slots.
+- **`D3DDDI_EXECUTIONSTATEESCAPE` is unpublished**: `Device::ReportError`
+  builds one by value and passes its `sizeof` as `PrivateDriverDataSize`, but
+  both documentation surfaces return 404 for it and the pinned WineCX has no
+  definition. Rule 1 forbids reconstructing it and no placeholder substitutes
+  for a type used by value, so that function does not compile yet. This is a
+  port dependency rather than a gap in the kernel callback table, which only
+  needs the type behind a pointer. Group 2 (Surface discovery) is where it
+  surfaces as a concrete worklist item.
+- **Whether the host should implement `pfnEscapeCb` at all**: `D3D11ON12.md`
+  lists display-kernel paths as disabled for this port, so the host may answer
+  the driver's device-removal probe directly rather than forwarding it to
+  Wine's D3DKMT. Declaring the slot does not decide this.
 - **Value of `D3D11DDI_CREATEDEVICE_FLAG_IS_XBOX`**: Checked by the driver in
   `IsXboxCreateFlags`, but omitted from public documentation. Left undefined as
   the host never targets Xbox execution.
