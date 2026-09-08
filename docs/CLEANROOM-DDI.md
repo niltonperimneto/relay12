@@ -202,6 +202,13 @@ misinterpretation; `--check` defends against structural *drift* across 178+ slot
    declared union arms at identical offsets.
 8. **Extend run-time test**: Add layout validation in `tests/d3d11ddilayout.c`
    compiled in both C and C++.
+8a. **Name the padding**: `gen_ddi_layout.py` derives every gap the member
+   list implies and requires a `WinePad<N>` member asserted at each, numbered
+   in offset order. `tests/d3d11ddipadding.c` compiles the declarations under
+   `-Wpadded -Werror`, which is what catches a gap nobody derived.
+8b. **If promoting a slot**: add its typedef to `PROMOTED_SLOTS`, call it from
+   `tests/d3d11ddilayout.c`, and extend `tests/d3d11ddipromotednegative.c`.
+   No layout assertion can see a promotion.
 9. **Verify locally**: Model layout locally with `gen_ddi_layout.py --check`.
 10. **Validate via CI**: Pass the `validate-d3d11on12` GitHub Actions job.
 
@@ -230,6 +237,8 @@ misinterpretation; `--check` defends against structural *drift* across 178+ slot
 | Device creation | `D3D10DDI_HDEVICE`, `HRTDEVICE`, `HRTCORELAYER`, `PFND3D10DDI_RETRIEVESUBOBJECT`, `DXGI_DDI_BASE_ARGS`, `D3D10DDIARG_CREATEDEVICE`, flag constants | 8 each / 16 / 88 |
 | Core-layer callbacks | `D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS`, 46 `PFN` typedefs, `D3DWDDM2_2DDI_HRTCACHESESSION` | 376 / 8 |
 | Kernel callbacks | `D3DDDI_DEVICECALLBACKS`, 65 `PFN` typedefs of which 2 promoted, `D3DDDICB_ESCAPE`, `D3DDDICB_SYNCTOKEN`, `WINE_D3D11DDI_ESCAPEFLAGS` | 528 / 40 / 24 / 4 |
+| Command list handle | `D3D11DDI_HCOMMANDLIST` | 8 |
+| Device function table | `D3DWDDM2_6DDI_DEVICEFUNCS`, 178 slots across 138 published `PFN` names, of which 4 promoted (5 slots) and 134 held behind placeholders | 1424 |
 
 #### Key constraints in `D3D10DDIARG_CREATEDEVICE` (88 bytes)
 
@@ -244,7 +253,8 @@ misinterpretation; `--check` defends against structural *drift* across 178+ slot
 | `DXGIBaseDDI` | 40 | **Embedded by value** (`DXGI_DDI_BASE_ARGS`, 16 bytes: offsets 40 and 48) |
 | `hRTCoreLayer` | 56 | Runtime core-layer handle |
 | Callbacks union | 64 | Contains `pWDDM2_6UMCallbacks` (offset 64) |
-| `Flags` | 72 | 4 bytes, followed by 4 bytes of unnamed padding (must zero entire struct) |
+| `Flags` | 72 | 4 bytes |
+| `WinePad0` | 76 | 4 bytes of padding the specification leaves anonymous, named here so it can be asserted and is zeroed by an aggregate initialiser. Not a specification claim and not a field any host may read |
 | `ppfnRetrieveSubObject` | 80 | **Pointer to function pointer**; storage owned by host, written by driver |
 
 Per rule 4, only the union arms read by the pinned driver are declared.
@@ -325,27 +335,81 @@ behind `#if` ellipses, only the four leading bits and `Reserved : 28` are
 declared — one printed variant verbatim, not a blend — and the run-time test
 pins the two bit positions this port depends on.
 
+#### Constraints in `D3DWDDM2_6DDI_DEVICEFUNCS` (1424 bytes)
+
+All 178 slots are function pointers at 8-byte stride, so the layout carries no
+information and the signatures are the whole content. What matters is that
+promoting one is invisible to every layout check: a promoted pointer and a
+placeholder pointer are both eight bytes at the same offset, and the table's
+size is 1424 either way.
+
+So promotion is gated separately. `PROMOTED_SLOTS` in `gen_ddi_layout.py` names
+the typedefs whose signature has been authored, and `--check` requires each to
+have a real function type in the header and every other slot to remain a
+`PFNWINE_D3D11DDI_UNDECLARED_CB` alias. It fails in both directions: a
+promotion recorded but not landed, and a signature authored but not recorded.
+`tests/d3d11ddilayout.c` then assigns a stub with the declared signature into
+each promoted slot and calls it, and `tests/d3d11ddipromotednegative.c` must
+fail to compile — passing a `D3D10DDI_HDEVICE` where a
+`D3D11DDI_HCOMMANDLIST` belongs — which is the only check that catches a
+parameter list transcribed wrongly.
+
+**Promoted so far: the handle-only command-list family.** Four typedefs, five
+slots, each quoted from its own reference page:
+
+| Slot | Type | Parameters |
+| :--- | :--- | :--- |
+| `pfnAbandonCommandList` | `PFND3D11DDI_ABANDONCOMMANDLIST` | `D3D10DDI_HDEVICE` |
+| `pfnCommandListExecute` | `PFND3D11DDI_COMMANDLISTEXECUTE` | `D3D10DDI_HDEVICE`, `D3D11DDI_HCOMMANDLIST` |
+| `pfnDestroyCommandList` | `PFND3D11DDI_DESTROYCOMMANDLIST` | `D3D10DDI_HDEVICE`, `D3D11DDI_HCOMMANDLIST` |
+| `pfnRecycleDestroyCommandList` | `PFND3D11DDI_DESTROYCOMMANDLIST` | shares the type above |
+| `pfnRecycleCommandList` | `PFND3D11DDI_RECYCLECOMMANDLIST` | `D3D10DDI_HDEVICE`, `D3D11DDI_HCOMMANDLIST` |
+
+All five return `VOID` and report failure through `pfnSetErrorCb`, which is why
+none is declared returning `HRESULT`.
+
+**`pfnRecycleDestroyCommandList` has no reference page**, and is promoted
+anyway. The URL its siblings would predict returns 404. What justifies it is
+the DestroyCommandList page, which states that a driver may set
+`pfnRecycleDestroyCommandList` to point at its `DestroyCommandList` — so the
+two members take one type. That is a published statement about the type rather
+than a reconstruction of a signature, and it is the declaration this header
+already carried.
+
+**A deferred context has no handle type of its own.** This closes the "context
+handle types" item on the header's roadmap, and not the way it was written: the
+runtime reuses `D3D10DDI_HDEVICE` for a deferred context, passed as the
+`hDrvContext` member of `D3D11DDIARG_CREATEDEFERREDCONTEXT` and used with the
+subset function table that structure's `p11ContextFuncs` member points at.
+`pfnAbandonCommandList` taking only a device handle is that fact made concrete.
+No `D3D11DDI_HDEFERREDCONTEXT` may be added later: no specification names one,
+so it would be an invented type behind a provenance block.
+
+**`D3D11DDI_HCOMMANDLIST`'s runtime counterpart is deliberately absent.**
+`hRTCommandList` is a parameter of `CreateCommandList`, which cannot be
+promoted until `D3D11DDIARG_CREATECOMMANDLIST` is authored, and a handle no
+declared slot takes is the speculative version rule 4 rejects.
+
 ### Remaining groups roadmap
 
 | # | Group | Scope | Rationale and dependencies |
 | :--- | :--- | :--- | :--- |
-| 1 | Device function table | `D3DWDDM2_6DDI_DEVICEFUNCS`, full layout, placeholder slots | 178 slots (1424 bytes). Driver fills, host calls |
-| 2 | Surface discovery | MIT tree test build against clean-room header | Turns remaining clean-room work into a measurable compiler worklist |
-| 3 | Signature promotion | Promote slots in `D3DWDDM2_6DDI_DEVICEFUNCS` | 138 distinct callback types, prioritized by host call sites |
-| 4 | DXGI DDI interop | `DXGI_DDI_BASE_CALLBACKS`, `DXGI1_6_1_DDI_BASE_FUNCTIONS` | Required by `DXGIBaseDDI` pointers in creation arguments |
+| 1 | Surface discovery | MIT tree test build against clean-room header | Turns remaining clean-room work into a measurable compiler worklist |
+| 2 | Signature promotion | Promote slots in `D3DWDDM2_6DDI_DEVICEFUNCS` | 134 of 138 distinct callback types remain; ordered by which structure group declares their parameter types, not by slot. See the gating table in `DDI-REMAINING-ROADMAP.md` |
+| 3 | DXGI DDI interop | `DXGI_DDI_BASE_CALLBACKS`, `DXGI1_6_1_DDI_BASE_FUNCTIONS` | Required by `DXGIBaseDDI` pointers in creation arguments |
 
 ## Open questions
 
 - **Extent of `d3dkmthk.h` types in host signatures**: `D3D11On12`'s `pch.hpp`
   includes `d3dkmthk.h`, but it is uncertain whether any types cross the host-driver
-  boundary. Group 4 (Surface discovery) will provide the compiler-verified answer.
+  boundary. Group 1 (Surface discovery) will provide the compiler-verified answer.
 - **`D3DDDI_EXECUTIONSTATEESCAPE` is unpublished**: `Device::ReportError`
   builds one by value and passes its `sizeof` as `PrivateDriverDataSize`, but
   both documentation surfaces return 404 for it and the pinned WineCX has no
   definition. Rule 1 forbids reconstructing it and no placeholder substitutes
   for a type used by value, so that function does not compile yet. This is a
   port dependency rather than a gap in the kernel callback table, which only
-  needs the type behind a pointer. Group 2 (Surface discovery) is where it
+  needs the type behind a pointer. Group 1 (Surface discovery) is where it
   surfaces as a concrete worklist item.
 - **Whether the host should implement `pfnEscapeCb` at all**: `D3D11ON12.md`
   lists display-kernel paths as disabled for this port, so the host may answer
@@ -356,7 +420,7 @@ pins the two bit positions this port depends on.
   the host never targets Xbox execution.
 - **Whether the pinned driver ever calls the two undeclared core-layer slots**:
   if `pfnShaderCacheGetValueCb` or `pfnQueryScanoutCapsCb` is invoked, the host
-  needs their real signatures and the published set does not have them. Group 3
+  needs their real signatures and the published set does not have them. Group 1
   (Surface discovery) answers this the same way it answers the `d3dkmthk.h`
   question, by compiling the MIT tree against the clean-room header. Until then
   the placeholder type is what stops a guess from being called.
