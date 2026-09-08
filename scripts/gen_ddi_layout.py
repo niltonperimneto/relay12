@@ -98,13 +98,40 @@ class Struct:
         becoming a pointer is exactly the mistake that moves everything after
         it.
         """
+        fields, size, alignment, _ = self._walk(published)
+        return fields, size, alignment
+
+    def padding(self, published=False):
+        """Return [(offset, size)] for every gap the member list implies.
+
+        Derived, never transcribed.  The member lists in this model are the
+        ones the specification prints, and no specification names padding, so
+        the only honest source for where the gaps are is the alignment
+        arithmetic that produces them.  The header names each gap and asserts
+        it; check() below compares those names against this, so a pad member
+        invented at the wrong offset -- or one the header keeps after the
+        member before it changed size -- fails rather than being ratified by
+        an identical edit on both sides.
+        """
+        return self._walk(published)[3]
+
+    def _walk(self, published):
         fields = {}
+        gaps = []
         offset = 0
         alignment = 1
 
+        def advance(to):
+            """Align up to `to`, recording anything skipped as a gap."""
+            nonlocal offset
+            aligned = align_up(offset, to)
+            if aligned != offset:
+                gaps.append((offset, aligned - offset))
+            offset = aligned
+
         for member in self.members:
             if isinstance(member, Field):
-                offset = align_up(offset, member.align)
+                advance(member.align)
                 fields[member.name] = offset
                 offset += member.size
                 alignment = max(alignment, member.align)
@@ -112,23 +139,32 @@ class Struct:
                 arms = member.members_for(published)
                 arm_align = max(arm.align for arm in arms)
                 arm_size = max(arm.size for arm in arms)
-                offset = align_up(offset, arm_align)
+                advance(arm_align)
                 for arm in arms:
                     fields[arm.name] = offset
                 offset += arm_size
                 alignment = max(alignment, arm_align)
             elif isinstance(member, Embedded):
-                inner, inner_size, inner_align = member.struct.walk(published)
-                offset = align_up(offset, inner_align)
+                inner, inner_size, inner_align, inner_gaps = member.struct._walk(
+                    published)
+                advance(inner_align)
                 fields[member.name] = offset
                 for inner_name, inner_offset in inner.items():
                     fields[f"{member.name}.{inner_name}"] = offset + inner_offset
+                gaps.extend(
+                    (offset + gap_offset, gap_size)
+                    for gap_offset, gap_size in inner_gaps
+                )
                 offset += inner_size
                 alignment = max(alignment, inner_align)
             else:
                 raise TypeError(f"unknown member kind: {member!r}")
 
-        return fields, align_up(offset, alignment), alignment
+        # Trailing padding counts too: it is the one gap a following member
+        # cannot reveal, and a structure the host allocates has it on the wire
+        # like any other.
+        advance(alignment)
+        return fields, offset, alignment, gaps
 
 
 # --- The declaration groups -------------------------------------------------
@@ -141,7 +177,12 @@ class Struct:
 # runtime-allocated private block, so its member is pDrvPrivate; the runtime
 # handle carries an opaque runtime value, so its member is handle.
 
-DRIVER_HANDLES = ["D3D10DDI_HADAPTER", "D3D10DDI_HRESOURCE", "D3D10DDI_HDEVICE"]
+# D3D11DDI_HCOMMANDLIST is a driver handle by the same convention: the
+# CommandListExecute page calls it "a handle to the driver's private data for
+# the command list".  Its runtime counterpart belongs with CreateCommandList
+# and is not declared, so it is not modelled.
+DRIVER_HANDLES = ["D3D10DDI_HADAPTER", "D3D10DDI_HRESOURCE", "D3D10DDI_HDEVICE",
+                  "D3D11DDI_HCOMMANDLIST"]
 RUNTIME_HANDLES = [
     "D3D10DDI_HRTADAPTER",
     "D3D10DDI_HRTRESOURCE",
@@ -519,12 +560,247 @@ for _index, _name in KERNEL_CALLBACKS_INVOKED.items():
             f"model puts {KERNEL_CALLBACK_SLOTS[_index][0]} there"
         )
 
+# Group: WDDM 2.6 device function table
+# Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3dwddm2_6ddi_devicefuncs
+# Source mirror: https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs-ddi/staging/wdk-ddi-src/content/d3d10umddi/ns-d3d10umddi-d3dwddm2_6ddi_devicefuncs.md
+# Retrieved: 2026-09-08
+#
+# The driver fills this table and the host controls which slots it invokes.
+# Preserve every published PFN name for incremental signature promotion, but
+# model every slot as one pointer until its signature is authored.
+
+DEVICEFUNC_SLOTS = [
+    ("pfnDefaultConstantBufferUpdateSubresourceUP", "PFND3D11_1DDI_RESOURCEUPDATESUBRESOURCEUP"),
+    ("pfnVsSetConstantBuffers", "PFND3D11_1DDI_SETCONSTANTBUFFERS"),
+    ("pfnPsSetShaderResources", "PFND3D10DDI_SETSHADERRESOURCES"),
+    ("pfnPsSetShader", "PFND3D10DDI_SETSHADER"),
+    ("pfnPsSetSamplers", "PFND3D10DDI_SETSAMPLERS"),
+    ("pfnVsSetShader", "PFND3D10DDI_SETSHADER"),
+    ("pfnDrawIndexed", "PFND3D10DDI_DRAWINDEXED"),
+    ("pfnDraw", "PFND3D10DDI_DRAW"),
+    ("pfnDynamicIABufferMapNoOverwrite", "PFND3D10DDI_RESOURCEMAP"),
+    ("pfnDynamicIABufferUnmap", "PFND3D10DDI_RESOURCEUNMAP"),
+    ("pfnDynamicConstantBufferMapDiscard", "PFND3D10DDI_RESOURCEMAP"),
+    ("pfnDynamicIABufferMapDiscard", "PFND3D10DDI_RESOURCEMAP"),
+    ("pfnDynamicConstantBufferUnmap", "PFND3D10DDI_RESOURCEUNMAP"),
+    ("pfnPsSetConstantBuffers", "PFND3D11_1DDI_SETCONSTANTBUFFERS"),
+    ("pfnIaSetInputLayout", "PFND3D10DDI_SETINPUTLAYOUT"),
+    ("pfnIaSetVertexBuffers", "PFND3D10DDI_IA_SETVERTEXBUFFERS"),
+    ("pfnIaSetIndexBuffer", "PFND3D10DDI_IA_SETINDEXBUFFER"),
+    ("pfnDrawIndexedInstanced", "PFND3D10DDI_DRAWINDEXEDINSTANCED"),
+    ("pfnDrawInstanced", "PFND3D10DDI_DRAWINSTANCED"),
+    ("pfnDynamicResourceMapDiscard", "PFND3D10DDI_RESOURCEMAP"),
+    ("pfnDynamicResourceUnmap", "PFND3D10DDI_RESOURCEUNMAP"),
+    ("pfnGsSetConstantBuffers", "PFND3D11_1DDI_SETCONSTANTBUFFERS"),
+    ("pfnGsSetShader", "PFND3D10DDI_SETSHADER"),
+    ("pfnIaSetTopology", "PFND3D10DDI_IA_SETTOPOLOGY"),
+    ("pfnStagingResourceMap", "PFND3D10DDI_RESOURCEMAP"),
+    ("pfnStagingResourceUnmap", "PFND3D10DDI_RESOURCEUNMAP"),
+    ("pfnVsSetShaderResources", "PFND3D10DDI_SETSHADERRESOURCES"),
+    ("pfnVsSetSamplers", "PFND3D10DDI_SETSAMPLERS"),
+    ("pfnGsSetShaderResources", "PFND3D10DDI_SETSHADERRESOURCES"),
+    ("pfnGsSetSamplers", "PFND3D10DDI_SETSAMPLERS"),
+    ("pfnSetRenderTargets", "PFND3D11DDI_SETRENDERTARGETS"),
+    ("pfnShaderResourceViewReadAfterWriteHazard", "PFND3D10DDI_SHADERRESOURCEVIEWREADAFTERWRITEHAZARD"),
+    ("pfnResourceReadAfterWriteHazard", "PFND3D10DDI_RESOURCEREADAFTERWRITEHAZARD"),
+    ("pfnSetBlendState", "PFND3D10DDI_SETBLENDSTATE"),
+    ("pfnSetDepthStencilState", "PFND3D10DDI_SETDEPTHSTENCILSTATE"),
+    ("pfnSetRasterizerState", "PFND3D10DDI_SETRASTERIZERSTATE"),
+    ("pfnQueryEnd", "PFND3D10DDI_QUERYEND"),
+    ("pfnQueryBegin", "PFND3D10DDI_QUERYBEGIN"),
+    ("pfnResourceCopyRegion", "PFND3D11_1DDI_RESOURCECOPYREGION"),
+    ("pfnResourceUpdateSubresourceUP", "PFND3D11_1DDI_RESOURCEUPDATESUBRESOURCEUP"),
+    ("pfnSoSetTargets", "PFND3D10DDI_SO_SETTARGETS"),
+    ("pfnDrawAuto", "PFND3D10DDI_DRAWAUTO"),
+    ("pfnSetViewports", "PFND3D10DDI_SETVIEWPORTS"),
+    ("pfnSetScissorRects", "PFND3D10DDI_SETSCISSORRECTS"),
+    ("pfnClearRenderTargetView", "PFND3D10DDI_CLEARRENDERTARGETVIEW"),
+    ("pfnClearDepthStencilView", "PFND3D10DDI_CLEARDEPTHSTENCILVIEW"),
+    ("pfnSetPredication", "PFND3D10DDI_SETPREDICATION"),
+    ("pfnQueryGetData", "PFND3D10DDI_QUERYGETDATA"),
+    ("pfnFlush", "PFND3DWDDM2_0DDI_FLUSH"),
+    ("pfnGenMips", "PFND3D10DDI_GENMIPS"),
+    ("pfnResourceCopy", "PFND3D10DDI_RESOURCECOPY"),
+    ("pfnResourceResolveSubresource", "PFND3D10DDI_RESOURCERESOLVESUBRESOURCE"),
+    ("pfnResourceMap", "PFND3D10DDI_RESOURCEMAP"),
+    ("pfnResourceUnmap", "PFND3D10DDI_RESOURCEUNMAP"),
+    ("pfnResourceIsStagingBusy", "PFND3D10DDI_RESOURCEISSTAGINGBUSY"),
+    ("pfnRelocateDeviceFuncs", "PFND3DWDDM2_6DDI_RELOCATEDEVICEFUNCS"),
+    ("pfnCalcPrivateResourceSize", "PFND3D11DDI_CALCPRIVATERESOURCESIZE"),
+    ("pfnCalcPrivateOpenedResourceSize", "PFND3D10DDI_CALCPRIVATEOPENEDRESOURCESIZE"),
+    ("pfnCreateResource", "PFND3D11DDI_CREATERESOURCE"),
+    ("pfnOpenResource", "PFND3D10DDI_OPENRESOURCE"),
+    ("pfnDestroyResource", "PFND3D10DDI_DESTROYRESOURCE"),
+    ("pfnCalcPrivateShaderResourceViewSize", "PFND3DWDDM2_0DDI_CALCPRIVATESHADERRESOURCEVIEWSIZE"),
+    ("pfnCreateShaderResourceView", "PFND3DWDDM2_0DDI_CREATESHADERRESOURCEVIEW"),
+    ("pfnDestroyShaderResourceView", "PFND3D10DDI_DESTROYSHADERRESOURCEVIEW"),
+    ("pfnCalcPrivateRenderTargetViewSize", "PFND3DWDDM2_0DDI_CALCPRIVATERENDERTARGETVIEWSIZE"),
+    ("pfnCreateRenderTargetView", "PFND3DWDDM2_0DDI_CREATERENDERTARGETVIEW"),
+    ("pfnDestroyRenderTargetView", "PFND3D10DDI_DESTROYRENDERTARGETVIEW"),
+    ("pfnCalcPrivateDepthStencilViewSize", "PFND3D11DDI_CALCPRIVATEDEPTHSTENCILVIEWSIZE"),
+    ("pfnCreateDepthStencilView", "PFND3D11DDI_CREATEDEPTHSTENCILVIEW"),
+    ("pfnDestroyDepthStencilView", "PFND3D10DDI_DESTROYDEPTHSTENCILVIEW"),
+    ("pfnCalcPrivateElementLayoutSize", "PFND3D10DDI_CALCPRIVATEELEMENTLAYOUTSIZE"),
+    ("pfnCreateElementLayout", "PFND3D10DDI_CREATEELEMENTLAYOUT"),
+    ("pfnDestroyElementLayout", "PFND3D10DDI_DESTROYELEMENTLAYOUT"),
+    ("pfnCalcPrivateBlendStateSize", "PFND3D11_1DDI_CALCPRIVATEBLENDSTATESIZE"),
+    ("pfnCreateBlendState", "PFND3D11_1DDI_CREATEBLENDSTATE"),
+    ("pfnDestroyBlendState", "PFND3D10DDI_DESTROYBLENDSTATE"),
+    ("pfnCalcPrivateDepthStencilStateSize", "PFND3D10DDI_CALCPRIVATEDEPTHSTENCILSTATESIZE"),
+    ("pfnCreateDepthStencilState", "PFND3D10DDI_CREATEDEPTHSTENCILSTATE"),
+    ("pfnDestroyDepthStencilState", "PFND3D10DDI_DESTROYDEPTHSTENCILSTATE"),
+    ("pfnCalcPrivateRasterizerStateSize", "PFND3DWDDM2_0DDI_CALCPRIVATERASTERIZERSTATESIZE"),
+    ("pfnCreateRasterizerState", "PFND3DWDDM2_0DDI_CREATERASTERIZERSTATE"),
+    ("pfnDestroyRasterizerState", "PFND3D10DDI_DESTROYRASTERIZERSTATE"),
+    ("pfnCalcPrivateShaderSize", "PFND3D11_1DDI_CALCPRIVATESHADERSIZE"),
+    ("pfnCreateVertexShader", "PFND3D11_1DDI_CREATEVERTEXSHADER"),
+    ("pfnCreateGeometryShader", "PFND3D11_1DDI_CREATEGEOMETRYSHADER"),
+    ("pfnCreatePixelShader", "PFND3D11_1DDI_CREATEPIXELSHADER"),
+    ("pfnCalcPrivateGeometryShaderWithStreamOutput", "PFND3D11_1DDI_CALCPRIVATEGEOMETRYSHADERWITHSTREAMOUTPUT"),
+    ("pfnCreateGeometryShaderWithStreamOutput", "PFND3D11_1DDI_CREATEGEOMETRYSHADERWITHSTREAMOUTPUT"),
+    ("pfnDestroyShader", "PFND3D10DDI_DESTROYSHADER"),
+    ("pfnCalcPrivateSamplerSize", "PFND3D10DDI_CALCPRIVATESAMPLERSIZE"),
+    ("pfnCreateSampler", "PFND3D10DDI_CREATESAMPLER"),
+    ("pfnDestroySampler", "PFND3D10DDI_DESTROYSAMPLER"),
+    ("pfnCalcPrivateQuerySize", "PFND3DWDDM2_0DDI_CALCPRIVATEQUERYSIZE"),
+    ("pfnCreateQuery", "PFND3DWDDM2_0DDI_CREATEQUERY"),
+    ("pfnDestroyQuery", "PFND3D10DDI_DESTROYQUERY"),
+    ("pfnCheckFormatSupport", "PFND3D10DDI_CHECKFORMATSUPPORT"),
+    ("pfnCheckMultisampleQualityLevels", "PFND3DWDDM1_3DDI_CHECKMULTISAMPLEQUALITYLEVELS"),
+    ("pfnCheckCounterInfo", "PFND3D10DDI_CHECKCOUNTERINFO"),
+    ("pfnCheckCounter", "PFND3D10DDI_CHECKCOUNTER"),
+    ("pfnDestroyDevice", "PFND3D10DDI_DESTROYDEVICE"),
+    ("pfnSetTextFilterSize", "PFND3D10DDI_SETTEXTFILTERSIZE"),
+    ("pfnResourceConvert", "PFND3D10DDI_RESOURCECOPY"),
+    ("pfnResourceConvertRegion", "PFND3D11_1DDI_RESOURCECOPYREGION"),
+    ("pfnResetPrimitiveID", "PFND3D10DDI_RESETPRIMITIVEID"),
+    ("pfnSetVertexPipelineOutput", "PFND3D10DDI_SETVERTEXPIPELINEOUTPUT"),
+    ("pfnDrawIndexedInstancedIndirect", "PFND3D11DDI_DRAWINDEXEDINSTANCEDINDIRECT"),
+    ("pfnDrawInstancedIndirect", "PFND3D11DDI_DRAWINSTANCEDINDIRECT"),
+    ("pfnCommandListExecute", "PFND3D11DDI_COMMANDLISTEXECUTE"),
+    ("pfnHsSetShaderResources", "PFND3D10DDI_SETSHADERRESOURCES"),
+    ("pfnHsSetShader", "PFND3D10DDI_SETSHADER"),
+    ("pfnHsSetSamplers", "PFND3D10DDI_SETSAMPLERS"),
+    ("pfnHsSetConstantBuffers", "PFND3D11_1DDI_SETCONSTANTBUFFERS"),
+    ("pfnDsSetShaderResources", "PFND3D10DDI_SETSHADERRESOURCES"),
+    ("pfnDsSetShader", "PFND3D10DDI_SETSHADER"),
+    ("pfnDsSetSamplers", "PFND3D10DDI_SETSAMPLERS"),
+    ("pfnDsSetConstantBuffers", "PFND3D11_1DDI_SETCONSTANTBUFFERS"),
+    ("pfnCreateHullShader", "PFND3D11_1DDI_CREATEHULLSHADER"),
+    ("pfnCreateDomainShader", "PFND3D11_1DDI_CREATEDOMAINSHADER"),
+    ("pfnCheckDeferredContextHandleSizes", "PFND3D11DDI_CHECKDEFERREDCONTEXTHANDLESIZES"),
+    ("pfnCalcDeferredContextHandleSize", "PFND3D11DDI_CALCDEFERREDCONTEXTHANDLESIZE"),
+    ("pfnCalcPrivateDeferredContextSize", "PFND3D11DDI_CALCPRIVATEDEFERREDCONTEXTSIZE"),
+    ("pfnCreateDeferredContext", "PFND3D11DDI_CREATEDEFERREDCONTEXT"),
+    ("pfnAbandonCommandList", "PFND3D11DDI_ABANDONCOMMANDLIST"),
+    ("pfnCalcPrivateCommandListSize", "PFND3D11DDI_CALCPRIVATECOMMANDLISTSIZE"),
+    ("pfnCreateCommandList", "PFND3D11DDI_CREATECOMMANDLIST"),
+    ("pfnDestroyCommandList", "PFND3D11DDI_DESTROYCOMMANDLIST"),
+    ("pfnCalcPrivateTessellationShaderSize", "PFND3D11_1DDI_CALCPRIVATETESSELLATIONSHADERSIZE"),
+    ("pfnPsSetShaderWithIfaces", "PFND3D11DDI_SETSHADER_WITH_IFACES"),
+    ("pfnVsSetShaderWithIfaces", "PFND3D11DDI_SETSHADER_WITH_IFACES"),
+    ("pfnGsSetShaderWithIfaces", "PFND3D11DDI_SETSHADER_WITH_IFACES"),
+    ("pfnHsSetShaderWithIfaces", "PFND3D11DDI_SETSHADER_WITH_IFACES"),
+    ("pfnDsSetShaderWithIfaces", "PFND3D11DDI_SETSHADER_WITH_IFACES"),
+    ("pfnCsSetShaderWithIfaces", "PFND3D11DDI_SETSHADER_WITH_IFACES"),
+    ("pfnCreateComputeShader", "PFND3D11DDI_CREATECOMPUTESHADER"),
+    ("pfnCsSetShader", "PFND3D10DDI_SETSHADER"),
+    ("pfnCsSetShaderResources", "PFND3D10DDI_SETSHADERRESOURCES"),
+    ("pfnCsSetSamplers", "PFND3D10DDI_SETSAMPLERS"),
+    ("pfnCsSetConstantBuffers", "PFND3D11_1DDI_SETCONSTANTBUFFERS"),
+    ("pfnCalcPrivateUnorderedAccessViewSize", "PFND3DWDDM2_0DDI_CALCPRIVATEUNORDEREDACCESSVIEWSIZE"),
+    ("pfnCreateUnorderedAccessView", "PFND3DWDDM2_0DDI_CREATEUNORDEREDACCESSVIEW"),
+    ("pfnDestroyUnorderedAccessView", "PFND3D11DDI_DESTROYUNORDEREDACCESSVIEW"),
+    ("pfnClearUnorderedAccessViewUint", "PFND3D11DDI_CLEARUNORDEREDACCESSVIEWUINT"),
+    ("pfnClearUnorderedAccessViewFloat", "PFND3D11DDI_CLEARUNORDEREDACCESSVIEWFLOAT"),
+    ("pfnCsSetUnorderedAccessViews", "PFND3D11DDI_SETUNORDEREDACCESSVIEWS"),
+    ("pfnDispatch", "PFND3D11DDI_DISPATCH"),
+    ("pfnDispatchIndirect", "PFND3D11DDI_DISPATCHINDIRECT"),
+    ("pfnSetResourceMinLOD", "PFND3D11DDI_SETRESOURCEMINLOD"),
+    ("pfnCopyStructureCount", "PFND3D11DDI_COPYSTRUCTURECOUNT"),
+    ("pfnRecycleCommandList", "PFND3D11DDI_RECYCLECOMMANDLIST"),
+    ("pfnRecycleCreateCommandList", "PFND3D11DDI_RECYCLECREATECOMMANDLIST"),
+    ("pfnRecycleCreateDeferredContext", "PFND3D11DDI_RECYCLECREATEDEFERREDCONTEXT"),
+    ("pfnRecycleDestroyCommandList", "PFND3D11DDI_DESTROYCOMMANDLIST"),
+    ("pfnDiscard", "PFND3D11_1DDI_DISCARD"),
+    ("pfnAssignDebugBinary", "PFND3D11_1DDI_ASSIGNDEBUGBINARY"),
+    ("pfnDynamicConstantBufferMapNoOverwrite", "PFND3D10DDI_RESOURCEMAP"),
+    ("pfnCheckDirectFlipSupport", "PFND3D11_1DDI_CHECKDIRECTFLIPSUPPORT"),
+    ("pfnClearView", "PFND3D11_1DDI_CLEARVIEW"),
+    ("pfnUpdateTileMappings", "PFND3DWDDM1_3DDI_UPDATETILEMAPPINGS"),
+    ("pfnCopyTileMappings", "PFND3DWDDM1_3DDI_COPYTILEMAPPINGS"),
+    ("pfnCopyTiles", "PFND3DWDDM1_3DDI_COPYTILES"),
+    ("pfnUpdateTiles", "PFND3DWDDM1_3DDI_UPDATETILES"),
+    ("pfnTiledResourceBarrier", "PFND3DWDDM1_3DDI_TILEDRESOURCEBARRIER"),
+    ("pfnGetMipPacking", "PFND3DWDDM1_3DDI_GETMIPPACKING"),
+    ("pfnResizeTilePool", "PFND3DWDDM1_3DDI_RESIZETILEPOOL"),
+    ("pfnSetMarker", "PFND3DWDDM1_3DDI_SETMARKER"),
+    ("pfnSetMarkerMode", "PFND3DWDDM1_3DDI_SETMARKERMODE"),
+    ("pfnSetHardwareProtection", "PFND3DWDDM2_0DDI_SETHARDWAREPROTECTION"),
+    ("pfnGetResourceLayout", "PFND3DWDDM2_0DDI_GETRESOURCELAYOUT"),
+    ("pfnRetrieveShaderComment", "PFND3DWDDM2_0DDI_RETRIEVE_SHADER_COMMENT"),
+    ("pfnSetHardwareProtectionState", "PFND3DWDDM2_0DDI_SETHARDWAREPROTECTIONSTATE"),
+    ("pfnAcquireResource", "PFND3DWDDM2_1DDI_SYNC_TOKEN"),
+    ("pfnReleaseResource", "PFND3DWDDM2_1DDI_SYNC_TOKEN"),
+    ("pfnCalcPrivateShaderCacheSessionSize", "PFND3DWDDM2_2DDI_CALCPRIVATE_SHADERCACHE_SESSION_SIZE"),
+    ("pfnCreateShaderCacheSession", "PFND3DWDDM2_2DDI_CREATE_SHADERCACHE_SESSION"),
+    ("pfnDestroyShaderCacheSession", "PFND3DWDDM2_2DDI_DESTROY_SHADERCACHE_SESSION"),
+    ("pfnSetShaderCacheSession", "PFND3DWDDM2_2DDI_SET_SHADERCACHE_SESSION"),
+    ("pfnQueryScanoutCaps", "PFND3DWDDM2_6DDI_QUERY_SCANOUT_CAPS"),
+    ("pfnPrepareScanoutTransformation", "PFND3DWDDM2_6DDI_PREPARE_SCANOUT_TRANSFORMATION"),
+]
+
+DEVICEFUNCS = Struct(
+    "D3DWDDM2_6DDI_DEVICEFUNCS",
+    [Field(name, type_name) for name, type_name in DEVICEFUNC_SLOTS],
+)
+
+# The PFN typedefs whose signature has been authored from its own reference
+# page, so the header must declare them as function types rather than as
+# aliases of the no-argument placeholder.
+#
+# Held here, apart from the slot list, because promotion is the one change to
+# this table that no layout assertion can see: a promoted pointer and a
+# placeholder pointer are both eight bytes at the same offset.  The set is
+# what makes a promotion land completely -- a name in it that is still an
+# alias fails, and a name absent from it that is no longer an alias fails too,
+# so a slot cannot be promoted in the header and forgotten here, or regress to
+# a placeholder without anyone noticing.
+#
+# The command-list family: every parameter is a handle, so they need the
+# command-list handle group and no argument structure.  See the group note in
+# the header for why the rest of the family cannot follow yet.
+PROMOTED_SLOTS = {
+    "PFND3D11DDI_ABANDONCOMMANDLIST",
+    "PFND3D11DDI_COMMANDLISTEXECUTE",
+    "PFND3D11DDI_DESTROYCOMMANDLIST",
+    "PFND3D11DDI_RECYCLECOMMANDLIST",
+}
+
+if not PROMOTED_SLOTS <= {type_name for _, type_name in DEVICEFUNC_SLOTS}:
+    raise SystemExit(
+        "PROMOTED_SLOTS names a typedef the device function table does not "
+        "use: " + ", ".join(sorted(
+            PROMOTED_SLOTS - {t for _, t in DEVICEFUNC_SLOTS})))
+
+if len(DEVICEFUNC_SLOTS) != 178:
+    raise SystemExit(
+        "the device function table is published with 178 members, the model "
+        f"lists {len(DEVICEFUNC_SLOTS)}"
+    )
+
+if len({type_name for _, type_name in DEVICEFUNC_SLOTS}) != 138:
+    raise SystemExit(
+        "the published device table must retain its 138 distinct PFN names"
+    )
+
 GROUPS = HANDLES + [
     ADAPTERFUNCS,
     ADAPTERFUNCS_2,
     OPENADAPTER,
     DXGI_BASE_ARGS,
     CREATEDEVICE,
+    DEVICEFUNCS,
     CORELAYER_CALLBACKS,
     KERNEL_CALLBACKS,
     ESCAPE,
@@ -544,12 +820,36 @@ def declare(type_name, name, indent, width):
     return f"{indent}{type_name:<{width}} {name};"
 
 
+def member_offset(member, fields):
+    """Where a member of any kind starts, read back from the walk."""
+    if isinstance(member, Union):
+        return fields[member.arms[0].name]
+    return fields[member.name]
+
+
 def emit(struct):
-    """The declaration and its assertion block, in the header's own style."""
+    """The declaration and its assertion block, in the header's own style.
+
+    Padding members are emitted at the derived gaps, so a group is authored
+    padding-complete rather than passing the -Wpadded gate only after someone
+    is told which bytes it missed.
+    """
     fields, size, alignment = struct.walk()
+    pads = {
+        offset: f"WinePad{index}"
+        for index, (offset, _) in enumerate(struct.padding())
+    }
     lines = [f"typedef struct {struct.name}", "{"]
 
+    def emit_pads_before(limit):
+        for offset in sorted(pads):
+            if offset < limit and pads[offset] not in emitted:
+                lines.append(declare("UINT32", pads[offset], "    ", 30))
+                emitted.add(pads[offset])
+
+    emitted = set()
     for member in struct.members:
+        emit_pads_before(member_offset(member, fields))
         if isinstance(member, Field):
             lines.append(declare(member.type_name, member.name, "    ", 30))
         elif isinstance(member, Union):
@@ -560,13 +860,16 @@ def emit(struct):
             lines.append("    };")
         elif isinstance(member, Embedded):
             lines.append(declare(member.struct.name, member.name, "    ", 30))
+    emit_pads_before(size)
 
     lines += [f"}} {struct.name};", ""]
     lines.append(f"WINE_DDI_ASSERT_STANDARD_LAYOUT({struct.name});")
     lines.append(f"WINE_DDI_ASSERT_SIZE({struct.name}, {size});")
     lines.append(f"WINE_DDI_ASSERT_ALIGN({struct.name}, {alignment});")
 
-    for name, offset in fields.items():
+    for name, offset in sorted(
+            list(fields.items()) + [(pad, at) for at, pad in pads.items()],
+            key=lambda entry: (entry[1], "." in entry[0])):
         if "." in name and struct.name not in DOTTED_OWNERS:
             continue
         lines.append(f"WINE_DDI_ASSERT_FIELD({struct.name}, {name}, {offset});")
@@ -632,6 +935,77 @@ def check(header=HEADER):
     asserted_fields, asserted_sizes, asserted_aligns = parse_header(
             header.read_text())
 
+    # The device table deliberately preserves the published PFN names even
+    # though all are placeholder pointers today. Layout assertions alone
+    # cannot distinguish one pointer typedef from another, so validate the
+    # typed member sequence and placeholder alias set explicitly.
+    header_text = header.read_text()
+    device_match = re.search(
+        r"struct D3DWDDM2_6DDI_DEVICEFUNCS\s*\{(.*?)\};",
+        header_text,
+        re.DOTALL,
+    )
+    if device_match is None:
+        errors.append("D3DWDDM2_6DDI_DEVICEFUNCS: declaration not found")
+    else:
+        declared_slots = re.findall(
+            r"^\s*(PFN[A-Z0-9_]+)\s+(pfn[A-Za-z0-9_]+);\s*$",
+            device_match.group(1),
+            re.MULTILINE,
+        )
+        expected_slots = [
+            (type_name, name) for name, type_name in DEVICEFUNC_SLOTS
+        ]
+        if declared_slots != expected_slots:
+            errors.append(
+                "D3DWDDM2_6DDI_DEVICEFUNCS: member PFN names or order "
+                "differ from the documentation model"
+            )
+
+    declared_aliases = set(re.findall(
+        r"typedef PFNWINE_D3D11DDI_UNDECLARED_CB\s+(PFN[A-Z0-9_]+);",
+        header_text,
+    ))
+    expected_aliases = {
+        type_name
+        for _, type_name in DEVICEFUNC_SLOTS
+        if type_name not in PROMOTED_SLOTS
+    }
+    missing_aliases = expected_aliases - declared_aliases
+    if missing_aliases:
+        errors.append(
+            "D3DWDDM2_6DDI_DEVICEFUNCS: placeholder aliases missing for "
+            + ", ".join(sorted(missing_aliases))
+        )
+
+    # Both directions.  A promoted slot still aliasing the placeholder is a
+    # promotion that did not land; an unpromoted slot with a real signature is
+    # one nobody recorded, and nothing else here would see either.
+    still_placeholders = PROMOTED_SLOTS & declared_aliases
+    if still_placeholders:
+        errors.append(
+            "D3DWDDM2_6DDI_DEVICEFUNCS: promoted slots are still placeholder "
+            "aliases: " + ", ".join(sorted(still_placeholders))
+        )
+
+    declared_signatures = set(re.findall(
+        r"typedef\s+\w+\s*\(\*(PFN[A-Z0-9_]+)\)\s*\(", header_text))
+    unrecorded = (declared_signatures
+                  & {type_name for _, type_name in DEVICEFUNC_SLOTS}
+                  - PROMOTED_SLOTS)
+    if unrecorded:
+        errors.append(
+            "D3DWDDM2_6DDI_DEVICEFUNCS: these slots have an authored "
+            "signature but are not in PROMOTED_SLOTS: "
+            + ", ".join(sorted(unrecorded))
+        )
+    unauthored = PROMOTED_SLOTS - declared_signatures
+    if unauthored:
+        errors.append(
+            "D3DWDDM2_6DDI_DEVICEFUNCS: PROMOTED_SLOTS names slots with no "
+            "authored signature: " + ", ".join(sorted(unauthored))
+        )
+
     for struct in GROUPS:
         modelled, size, alignment = struct.walk()
         modelled = {
@@ -672,12 +1046,66 @@ def check(header=HEADER):
                 )
 
         for name in asserted:
-            if name not in modelled:
+            if name not in modelled and not PAD_MEMBER.match(name):
                 errors.append(
                     f"{struct.name}.{name}: asserted in the header but absent "
                     "from the model, so nothing derives its offset from the "
                     "specification"
                 )
+
+        errors.extend(check_padding(struct, asserted))
+
+    return errors
+
+
+# The header's name for a member that occupies padding the specification leaves
+# anonymous.  It is this project's own device, so the model knows the naming
+# convention rather than the names.
+PAD_MEMBER = re.compile(r"^WinePad(\d+)$")
+
+
+def check_padding(struct, asserted):
+    """Every derived gap is named once, and every named pad sits in a gap.
+
+    The model derives the gaps from the published member list; the header
+    names them.  Neither side can move a pad without the other disagreeing,
+    which is what keeps naming the bytes from becoming a way to assert
+    whatever the header already says.
+    """
+    errors = []
+    gaps = dict(struct.padding())
+    pads = {
+        name: offset
+        for name, offset in asserted.items()
+        if PAD_MEMBER.match(name)
+    }
+
+    for offset, size in sorted(gaps.items()):
+        if offset not in pads.values():
+            errors.append(
+                f"{struct.name}: {size} byte(s) of padding at {offset} that no "
+                "member names; add a WinePad member and assert it"
+            )
+
+    for name, offset in sorted(pads.items(), key=lambda pad: pad[1]):
+        if offset not in gaps:
+            errors.append(
+                f"{struct.name}.{name}: asserted at {offset}, where the model "
+                "derives no padding"
+            )
+
+    # Numbered in offset order, so the name of a pad is a fact about the
+    # layout rather than about the order someone added them.
+    expected = [
+        f"WinePad{index}"
+        for index, _ in enumerate(sorted(pads.values()))
+    ]
+    actual = [name for name, _ in sorted(pads.items(), key=lambda pad: pad[1])]
+    if actual != expected:
+        errors.append(
+            f"{struct.name}: padding members are {actual}, expected "
+            f"{expected} numbered in offset order"
+        )
 
     return errors
 

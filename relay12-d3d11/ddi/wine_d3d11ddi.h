@@ -109,6 +109,36 @@
     WINE_DDI_STATIC_ASSERT(sizeof(type) > 0, #type " must be a complete type")
 #endif
 
+/* Two slots that must hold one type, not merely two compatible ones.
+ *
+ * Where the specification gives one PFN name to two members, a host writes one
+ * implementation and binds it to both, and the pinned driver binds one of them
+ * through a pointer-to-member.  No offset or size assertion reaches that: two
+ * distinct typedefs with identical signatures assert the same offsets, occupy
+ * the same eight bytes, and still force the host to write the function twice
+ * and break the pointer-to-member.  So the identity is asserted directly.
+ *
+ * C has no is_same, and comparing sizeof or a cast would pass for any two
+ * function pointers.  __builtin_types_compatible_p is the only construct in C
+ * that answers the actual question; GCC and Clang both have it, and this
+ * header is compiled by no other C compiler. */
+#ifdef __cplusplus
+/* The outer parentheses are load-bearing: the comma between the template
+ * arguments is invisible to the preprocessor, which would otherwise read it as
+ * separating two arguments to WINE_DDI_STATIC_ASSERT. */
+# define WINE_DDI_ASSERT_SAME_FIELD_TYPE(type, first, second) \
+    WINE_DDI_STATIC_ASSERT( \
+            (std::is_same<decltype(((type *)0)->first), \
+                    decltype(((type *)0)->second)>::value), \
+            #type "." #first " and ." #second " must hold one type")
+#else
+# define WINE_DDI_ASSERT_SAME_FIELD_TYPE(type, first, second) \
+    WINE_DDI_STATIC_ASSERT(__builtin_types_compatible_p( \
+                    __typeof__(((type *)0)->first), \
+                    __typeof__(((type *)0)->second)), \
+            #type "." #first " and ." #second " must hold one type")
+#endif
+
 /*
  * Declaration groups.
  *
@@ -122,6 +152,11 @@
  *     and the create-device flags;
  *   - the core-layer device callback table, signature-complete except for the
  *     two slots the public set does not document;
+ *   - the command list handle, which is the whole of the context handle types:
+ *     a deferred context has none of its own, and reuses D3D10DDI_HDEVICE;
+ *   - the 178-slot WDDM 2.6 device function table, with the handle-only
+ *     command-list family promoted and the remaining published PFN names held
+ *     behind non-callable placeholders pending signature promotion;
  *   - the kernel device callback table, with the three slots the pinned driver
  *     invokes promoted and the rest holding their offsets only, and the two
  *     argument structures those three take.
@@ -129,9 +164,9 @@
  * Still required by docs/D3D11ON12.md, each to land with its own provenance
  * block and layout assertions:
  *
- *   - context handle types;
- *   - device function tables;
- *   - resource, view, shader, state, query, and command structures;
+ *   - resource, view, shader, state, query, and command structures, which are
+ *     what gate the remaining device slots; docs/DDI-REMAINING-ROADMAP.md maps
+ *     each group to the slot families it unblocks;
  *   - the literal DDI version numbers, which the public specification elides;
  *   - DXGI DDI interoperability structures.
  *
@@ -598,6 +633,9 @@ struct D3D10DDIARG_CREATEDEVICE
         const D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS *pWDDM2_6UMCallbacks;
     };
     UINT                           Flags;
+    /* Anonymous padding in the specification, named here.  See the note below
+     * the assertions. */
+    UINT32                         WinePad0;
     PFND3D10DDI_RETRIEVESUBOBJECT  *ppfnRetrieveSubObject;
 };
 
@@ -625,12 +663,27 @@ WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEDEVICE,
 WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEDEVICE, hRTCoreLayer, 56);
 WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEDEVICE, pWDDM2_6UMCallbacks, 64);
 WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEDEVICE, Flags, 72);
-/* Flags is four bytes at 72 and the next member is eight-byte aligned, so
- * there are four bytes of padding here that no member names.  The runtime
- * allocates this structure, and a driver reading uninitialized padding is a
- * bug the host cannot see, so the host must zero the whole structure rather
- * than assign member by member. */
 WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDIARG_CREATEDEVICE, Flags, 4);
+/*
+ * Flags is four bytes at 72 and the next member is eight-byte aligned, so the
+ * specification leaves four bytes here that no member of its own names.
+ *
+ * WinePad0 names them.  It is not a specification claim and no host may read
+ * or write it as a field: it is this header's own device, prefixed like every
+ * other invention here, and it exists for two reasons.  A named member can be
+ * asserted, which is what docs/CLEANROOM-DDI.md requires of padding and what
+ * anonymous bytes make impossible.  And a named member is zeroed by an
+ * aggregate initialiser as well as by a struct-wide memset, so a host that
+ * initialises this structure the ordinary way can no longer hand the driver
+ * four bytes it never wrote.  The runtime allocates this structure, and a
+ * driver reading uninitialized padding is a bug the host cannot see.
+ *
+ * The size and every following offset are asserted unchanged above and below,
+ * which is what makes naming the bytes a declaration change and not a layout
+ * one.
+ */
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEDEVICE, WinePad0, 76);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDIARG_CREATEDEVICE, WinePad0, 4);
 WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEDEVICE, ppfnRetrieveSubObject, 80);
 
 /*
@@ -1068,6 +1121,13 @@ WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
 WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
         pfnQueryScanoutCapsCb, 368);
 
+/* The specification gives these two one PFN name, so one host implementation
+ * has to fit both.  tests/d3d11ddilayout.c assigns a single function into both
+ * slots and compares them, which only proves that whatever they hold today
+ * happens to be assignable; this is the constraint itself. */
+WINE_DDI_ASSERT_SAME_FIELD_TYPE(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS,
+        pfnShaderCacheAddRefCb, pfnShaderCacheReleaseCb);
+
 /* Every slot is a function pointer, so the table is exactly its member count
  * times the pointer size.  Asserting that as arithmetic rather than as another
  * literal is what catches a member being dropped and its offsets renumbered to
@@ -1076,6 +1136,614 @@ WINE_DDI_STATIC_ASSERT(
         sizeof(D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS)
         == 47 * sizeof(void (*)(void)),
         "the core-layer callback table is 47 function pointers");
+
+/*
+ * Group: command list handle
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_commandlistexecute
+ * Retrieved: 2026-09-08
+ *
+ * Companion specifications, all retrieved 2026-09-08:
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_destroycommandlist
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_recyclecommandlist
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_abandoncommandlist
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/display/introduction-to-deferred-contexts
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/display/supporting-command-lists
+ *
+ * One handle, and it is the whole of the context handle types the header's
+ * roadmap asks for.  That is the finding worth recording here, because it is
+ * not what the roadmap assumed: a deferred context has no handle type of its
+ * own.  The runtime reuses D3D10DDI_HDEVICE for it, passed as the hDrvContext
+ * member of D3D11DDIARG_CREATEDEFERREDCONTEXT and used with the subset
+ * function table that structure's p11ContextFuncs member points at.  Nobody
+ * may declare a D3D11DDI_HDEFERREDCONTEXT later: no specification names one,
+ * so it would be an invented type behind a provenance block, which rule 1
+ * forbids and which this note exists to prevent.
+ *
+ * The runtime counterpart, hRTCommandList, is deliberately absent.  It is a
+ * parameter of CreateCommandList, which cannot be promoted until
+ * D3D11DDIARG_CREATECOMMANDLIST is authored, and declaring a handle no
+ * declared slot takes would be the speculative version rule 4 rejects.
+ *
+ * The member name follows the documented convention, as the other driver
+ * handles' do: this is the handle to "the driver's private data for the
+ * command list", so its member is pDrvPrivate.  That is a derivation, not a
+ * quotation.  What the promoted slots below depend on is one wrapped pointer,
+ * and that is asserted.
+ */
+typedef struct D3D11DDI_HCOMMANDLIST
+{
+    void *pDrvPrivate;
+} D3D11DDI_HCOMMANDLIST;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D11DDI_HCOMMANDLIST);
+WINE_DDI_ASSERT_SIZE(D3D11DDI_HCOMMANDLIST, 8);
+WINE_DDI_ASSERT_ALIGN(D3D11DDI_HCOMMANDLIST, 8);
+WINE_DDI_ASSERT_FIELD(D3D11DDI_HCOMMANDLIST, pDrvPrivate, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDI_HCOMMANDLIST, pDrvPrivate, 8);
+
+/*
+ * Group: WDDM 2.6 device function table
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3dwddm2_6ddi_devicefuncs
+ * Source mirror: https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs-ddi/staging/wdk-ddi-src/content/d3d10umddi/ns-d3d10umddi-d3dwddm2_6ddi_devicefuncs.md
+ * Retrieved: 2026-09-08
+ *
+ * The rendered syntax and MicrosoftDocs source mirror agree on all 178
+ * members and their order. The driver fills this table; the host must not
+ * invoke a slot until its published signature has been authored. Retaining
+ * each published PFN name as an alias of the no-argument placeholder makes
+ * accidental calls a compile error while keeping promotion local to one
+ * typedef at a time.
+ *
+ * Four typedefs are promoted, covering five slots.  They are the command-list
+ * family whose parameters are handles and nothing else, so they need only the
+ * group above and no argument structure; each is quoted from its own
+ * reference page, cited beside it.  Promotion moves no offset -- a promoted
+ * function pointer is still a function pointer, and the table's size and
+ * every slot's offset are asserted unchanged below, which is the point of
+ * doing this family first.
+ *
+ * scripts/gen_ddi_layout.py holds the promoted set in PROMOTED_SLOTS and
+ * requires each to have a real typedef and every other slot to remain a
+ * placeholder alias, so a promotion cannot be half-landed and a slot cannot
+ * quietly regress to a placeholder.
+ *
+ * pfnRecycleDestroyCommandList shares PFND3D11DDI_DESTROYCOMMANDLIST, which
+ * is the declaration this header already carried and which the
+ * DestroyCommandList page sanctions: it states that a driver may set
+ * pfnRecycleDestroyCommandList to point at its DestroyCommandList, so the two
+ * members take one type.  Nothing else in the family is promotable yet.
+ * pfnRecycleDestroyCommandList has no reference page of its own -- the URL
+ * its siblings would predict returns 404 -- and pfnCreateCommandList,
+ * pfnCalcPrivateCommandListSize and pfnRecycleCreateCommandList all take
+ * D3D11DDIARG_CREATECOMMANDLIST, which is a group of its own and unauthored.
+ */
+
+/* The promoted command-list signatures.  Each returns nothing and reports
+ * failure through pfnSetErrorCb instead, which is why none of them is
+ * declared returning HRESULT.
+ *
+ * https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_abandoncommandlist
+ * Takes the deferred context, which is a D3D10DDI_HDEVICE: this is the slot
+ * that makes the absence of a deferred-context handle type concrete. */
+typedef VOID (*PFND3D11DDI_ABANDONCOMMANDLIST)(
+        D3D10DDI_HDEVICE hDevice);
+
+/* https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_commandlistexecute */
+typedef VOID (*PFND3D11DDI_COMMANDLISTEXECUTE)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D11DDI_HCOMMANDLIST hCommandList);
+
+/* https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_destroycommandlist
+ * Also the type of pfnRecycleDestroyCommandList; see the group note above. */
+typedef VOID (*PFND3D11DDI_DESTROYCOMMANDLIST)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D11DDI_HCOMMANDLIST hCommandList);
+
+/* https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_recyclecommandlist
+ * The handle is an immediate-context handle, which the specification says and
+ * no type distinguishes; the difference is the caller's, not the ABI's. */
+typedef VOID (*PFND3D11DDI_RECYCLECOMMANDLIST)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D11DDI_HCOMMANDLIST hCommandList);
+
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_RESOURCEUPDATESUBRESOURCEUP;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_SETCONSTANTBUFFERS;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETSHADERRESOURCES;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETSHADER;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETSAMPLERS;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DRAWINDEXED;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DRAW;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCEMAP;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCEUNMAP;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETINPUTLAYOUT;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_IA_SETVERTEXBUFFERS;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_IA_SETINDEXBUFFER;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DRAWINDEXEDINSTANCED;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DRAWINSTANCED;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_IA_SETTOPOLOGY;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_SETRENDERTARGETS;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SHADERRESOURCEVIEWREADAFTERWRITEHAZARD;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCEREADAFTERWRITEHAZARD;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETBLENDSTATE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETDEPTHSTENCILSTATE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETRASTERIZERSTATE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_QUERYEND;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_QUERYBEGIN;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_RESOURCECOPYREGION;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SO_SETTARGETS;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DRAWAUTO;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETVIEWPORTS;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETSCISSORRECTS;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CLEARRENDERTARGETVIEW;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CLEARDEPTHSTENCILVIEW;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETPREDICATION;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_QUERYGETDATA;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_FLUSH;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_GENMIPS;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCECOPY;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCERESOLVESUBRESOURCE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCEISSTAGINGBUSY;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_6DDI_RELOCATEDEVICEFUNCS;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CALCPRIVATERESOURCESIZE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CALCPRIVATEOPENEDRESOURCESIZE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CREATERESOURCE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_OPENRESOURCE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYRESOURCE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_CALCPRIVATESHADERRESOURCEVIEWSIZE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_CREATESHADERRESOURCEVIEW;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYSHADERRESOURCEVIEW;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_CALCPRIVATERENDERTARGETVIEWSIZE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_CREATERENDERTARGETVIEW;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYRENDERTARGETVIEW;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CALCPRIVATEDEPTHSTENCILVIEWSIZE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CREATEDEPTHSTENCILVIEW;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYDEPTHSTENCILVIEW;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CALCPRIVATEELEMENTLAYOUTSIZE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CREATEELEMENTLAYOUT;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYELEMENTLAYOUT;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CALCPRIVATEBLENDSTATESIZE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CREATEBLENDSTATE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYBLENDSTATE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CALCPRIVATEDEPTHSTENCILSTATESIZE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CREATEDEPTHSTENCILSTATE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYDEPTHSTENCILSTATE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_CALCPRIVATERASTERIZERSTATESIZE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_CREATERASTERIZERSTATE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYRASTERIZERSTATE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CALCPRIVATESHADERSIZE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CREATEVERTEXSHADER;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CREATEGEOMETRYSHADER;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CREATEPIXELSHADER;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CALCPRIVATEGEOMETRYSHADERWITHSTREAMOUTPUT;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CREATEGEOMETRYSHADERWITHSTREAMOUTPUT;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYSHADER;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CALCPRIVATESAMPLERSIZE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CREATESAMPLER;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYSAMPLER;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_CALCPRIVATEQUERYSIZE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_CREATEQUERY;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYQUERY;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CHECKFORMATSUPPORT;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM1_3DDI_CHECKMULTISAMPLEQUALITYLEVELS;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CHECKCOUNTERINFO;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CHECKCOUNTER;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYDEVICE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETTEXTFILTERSIZE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESETPRIMITIVEID;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETVERTEXPIPELINEOUTPUT;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_DRAWINDEXEDINSTANCEDINDIRECT;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_DRAWINSTANCEDINDIRECT;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CREATEHULLSHADER;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CREATEDOMAINSHADER;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CHECKDEFERREDCONTEXTHANDLESIZES;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CALCDEFERREDCONTEXTHANDLESIZE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CALCPRIVATEDEFERREDCONTEXTSIZE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CREATEDEFERREDCONTEXT;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CALCPRIVATECOMMANDLISTSIZE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CREATECOMMANDLIST;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CALCPRIVATETESSELLATIONSHADERSIZE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_SETSHADER_WITH_IFACES;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CREATECOMPUTESHADER;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_CALCPRIVATEUNORDEREDACCESSVIEWSIZE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_CREATEUNORDEREDACCESSVIEW;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_DESTROYUNORDEREDACCESSVIEW;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CLEARUNORDEREDACCESSVIEWUINT;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CLEARUNORDEREDACCESSVIEWFLOAT;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_SETUNORDEREDACCESSVIEWS;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_DISPATCH;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_DISPATCHINDIRECT;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_SETRESOURCEMINLOD;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_COPYSTRUCTURECOUNT;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_RECYCLECREATECOMMANDLIST;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_RECYCLECREATEDEFERREDCONTEXT;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_DISCARD;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_ASSIGNDEBUGBINARY;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CHECKDIRECTFLIPSUPPORT;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CLEARVIEW;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM1_3DDI_UPDATETILEMAPPINGS;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM1_3DDI_COPYTILEMAPPINGS;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM1_3DDI_COPYTILES;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM1_3DDI_UPDATETILES;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM1_3DDI_TILEDRESOURCEBARRIER;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM1_3DDI_GETMIPPACKING;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM1_3DDI_RESIZETILEPOOL;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM1_3DDI_SETMARKER;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM1_3DDI_SETMARKERMODE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_SETHARDWAREPROTECTION;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_GETRESOURCELAYOUT;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_RETRIEVE_SHADER_COMMENT;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_SETHARDWAREPROTECTIONSTATE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_1DDI_SYNC_TOKEN;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_2DDI_CALCPRIVATE_SHADERCACHE_SESSION_SIZE;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_2DDI_CREATE_SHADERCACHE_SESSION;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_2DDI_DESTROY_SHADERCACHE_SESSION;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_2DDI_SET_SHADERCACHE_SESSION;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_6DDI_QUERY_SCANOUT_CAPS;
+typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_6DDI_PREPARE_SCANOUT_TRANSFORMATION;
+
+struct D3DWDDM2_6DDI_DEVICEFUNCS
+{
+    PFND3D11_1DDI_RESOURCEUPDATESUBRESOURCEUP               pfnDefaultConstantBufferUpdateSubresourceUP;
+    PFND3D11_1DDI_SETCONSTANTBUFFERS                        pfnVsSetConstantBuffers;
+    PFND3D10DDI_SETSHADERRESOURCES                          pfnPsSetShaderResources;
+    PFND3D10DDI_SETSHADER                                   pfnPsSetShader;
+    PFND3D10DDI_SETSAMPLERS                                 pfnPsSetSamplers;
+    PFND3D10DDI_SETSHADER                                   pfnVsSetShader;
+    PFND3D10DDI_DRAWINDEXED                                 pfnDrawIndexed;
+    PFND3D10DDI_DRAW                                        pfnDraw;
+    PFND3D10DDI_RESOURCEMAP                                 pfnDynamicIABufferMapNoOverwrite;
+    PFND3D10DDI_RESOURCEUNMAP                               pfnDynamicIABufferUnmap;
+    PFND3D10DDI_RESOURCEMAP                                 pfnDynamicConstantBufferMapDiscard;
+    PFND3D10DDI_RESOURCEMAP                                 pfnDynamicIABufferMapDiscard;
+    PFND3D10DDI_RESOURCEUNMAP                               pfnDynamicConstantBufferUnmap;
+    PFND3D11_1DDI_SETCONSTANTBUFFERS                        pfnPsSetConstantBuffers;
+    PFND3D10DDI_SETINPUTLAYOUT                              pfnIaSetInputLayout;
+    PFND3D10DDI_IA_SETVERTEXBUFFERS                         pfnIaSetVertexBuffers;
+    PFND3D10DDI_IA_SETINDEXBUFFER                           pfnIaSetIndexBuffer;
+    PFND3D10DDI_DRAWINDEXEDINSTANCED                        pfnDrawIndexedInstanced;
+    PFND3D10DDI_DRAWINSTANCED                               pfnDrawInstanced;
+    PFND3D10DDI_RESOURCEMAP                                 pfnDynamicResourceMapDiscard;
+    PFND3D10DDI_RESOURCEUNMAP                               pfnDynamicResourceUnmap;
+    PFND3D11_1DDI_SETCONSTANTBUFFERS                        pfnGsSetConstantBuffers;
+    PFND3D10DDI_SETSHADER                                   pfnGsSetShader;
+    PFND3D10DDI_IA_SETTOPOLOGY                              pfnIaSetTopology;
+    PFND3D10DDI_RESOURCEMAP                                 pfnStagingResourceMap;
+    PFND3D10DDI_RESOURCEUNMAP                               pfnStagingResourceUnmap;
+    PFND3D10DDI_SETSHADERRESOURCES                          pfnVsSetShaderResources;
+    PFND3D10DDI_SETSAMPLERS                                 pfnVsSetSamplers;
+    PFND3D10DDI_SETSHADERRESOURCES                          pfnGsSetShaderResources;
+    PFND3D10DDI_SETSAMPLERS                                 pfnGsSetSamplers;
+    PFND3D11DDI_SETRENDERTARGETS                            pfnSetRenderTargets;
+    PFND3D10DDI_SHADERRESOURCEVIEWREADAFTERWRITEHAZARD      pfnShaderResourceViewReadAfterWriteHazard;
+    PFND3D10DDI_RESOURCEREADAFTERWRITEHAZARD                pfnResourceReadAfterWriteHazard;
+    PFND3D10DDI_SETBLENDSTATE                               pfnSetBlendState;
+    PFND3D10DDI_SETDEPTHSTENCILSTATE                        pfnSetDepthStencilState;
+    PFND3D10DDI_SETRASTERIZERSTATE                          pfnSetRasterizerState;
+    PFND3D10DDI_QUERYEND                                    pfnQueryEnd;
+    PFND3D10DDI_QUERYBEGIN                                  pfnQueryBegin;
+    PFND3D11_1DDI_RESOURCECOPYREGION                        pfnResourceCopyRegion;
+    PFND3D11_1DDI_RESOURCEUPDATESUBRESOURCEUP               pfnResourceUpdateSubresourceUP;
+    PFND3D10DDI_SO_SETTARGETS                               pfnSoSetTargets;
+    PFND3D10DDI_DRAWAUTO                                    pfnDrawAuto;
+    PFND3D10DDI_SETVIEWPORTS                                pfnSetViewports;
+    PFND3D10DDI_SETSCISSORRECTS                             pfnSetScissorRects;
+    PFND3D10DDI_CLEARRENDERTARGETVIEW                       pfnClearRenderTargetView;
+    PFND3D10DDI_CLEARDEPTHSTENCILVIEW                       pfnClearDepthStencilView;
+    PFND3D10DDI_SETPREDICATION                              pfnSetPredication;
+    PFND3D10DDI_QUERYGETDATA                                pfnQueryGetData;
+    PFND3DWDDM2_0DDI_FLUSH                                  pfnFlush;
+    PFND3D10DDI_GENMIPS                                     pfnGenMips;
+    PFND3D10DDI_RESOURCECOPY                                pfnResourceCopy;
+    PFND3D10DDI_RESOURCERESOLVESUBRESOURCE                  pfnResourceResolveSubresource;
+    PFND3D10DDI_RESOURCEMAP                                 pfnResourceMap;
+    PFND3D10DDI_RESOURCEUNMAP                               pfnResourceUnmap;
+    PFND3D10DDI_RESOURCEISSTAGINGBUSY                       pfnResourceIsStagingBusy;
+    PFND3DWDDM2_6DDI_RELOCATEDEVICEFUNCS                    pfnRelocateDeviceFuncs;
+    PFND3D11DDI_CALCPRIVATERESOURCESIZE                     pfnCalcPrivateResourceSize;
+    PFND3D10DDI_CALCPRIVATEOPENEDRESOURCESIZE               pfnCalcPrivateOpenedResourceSize;
+    PFND3D11DDI_CREATERESOURCE                              pfnCreateResource;
+    PFND3D10DDI_OPENRESOURCE                                pfnOpenResource;
+    PFND3D10DDI_DESTROYRESOURCE                             pfnDestroyResource;
+    PFND3DWDDM2_0DDI_CALCPRIVATESHADERRESOURCEVIEWSIZE      pfnCalcPrivateShaderResourceViewSize;
+    PFND3DWDDM2_0DDI_CREATESHADERRESOURCEVIEW               pfnCreateShaderResourceView;
+    PFND3D10DDI_DESTROYSHADERRESOURCEVIEW                   pfnDestroyShaderResourceView;
+    PFND3DWDDM2_0DDI_CALCPRIVATERENDERTARGETVIEWSIZE        pfnCalcPrivateRenderTargetViewSize;
+    PFND3DWDDM2_0DDI_CREATERENDERTARGETVIEW                 pfnCreateRenderTargetView;
+    PFND3D10DDI_DESTROYRENDERTARGETVIEW                     pfnDestroyRenderTargetView;
+    PFND3D11DDI_CALCPRIVATEDEPTHSTENCILVIEWSIZE             pfnCalcPrivateDepthStencilViewSize;
+    PFND3D11DDI_CREATEDEPTHSTENCILVIEW                      pfnCreateDepthStencilView;
+    PFND3D10DDI_DESTROYDEPTHSTENCILVIEW                     pfnDestroyDepthStencilView;
+    PFND3D10DDI_CALCPRIVATEELEMENTLAYOUTSIZE                pfnCalcPrivateElementLayoutSize;
+    PFND3D10DDI_CREATEELEMENTLAYOUT                         pfnCreateElementLayout;
+    PFND3D10DDI_DESTROYELEMENTLAYOUT                        pfnDestroyElementLayout;
+    PFND3D11_1DDI_CALCPRIVATEBLENDSTATESIZE                 pfnCalcPrivateBlendStateSize;
+    PFND3D11_1DDI_CREATEBLENDSTATE                          pfnCreateBlendState;
+    PFND3D10DDI_DESTROYBLENDSTATE                           pfnDestroyBlendState;
+    PFND3D10DDI_CALCPRIVATEDEPTHSTENCILSTATESIZE            pfnCalcPrivateDepthStencilStateSize;
+    PFND3D10DDI_CREATEDEPTHSTENCILSTATE                     pfnCreateDepthStencilState;
+    PFND3D10DDI_DESTROYDEPTHSTENCILSTATE                    pfnDestroyDepthStencilState;
+    PFND3DWDDM2_0DDI_CALCPRIVATERASTERIZERSTATESIZE         pfnCalcPrivateRasterizerStateSize;
+    PFND3DWDDM2_0DDI_CREATERASTERIZERSTATE                  pfnCreateRasterizerState;
+    PFND3D10DDI_DESTROYRASTERIZERSTATE                      pfnDestroyRasterizerState;
+    PFND3D11_1DDI_CALCPRIVATESHADERSIZE                     pfnCalcPrivateShaderSize;
+    PFND3D11_1DDI_CREATEVERTEXSHADER                        pfnCreateVertexShader;
+    PFND3D11_1DDI_CREATEGEOMETRYSHADER                      pfnCreateGeometryShader;
+    PFND3D11_1DDI_CREATEPIXELSHADER                         pfnCreatePixelShader;
+    PFND3D11_1DDI_CALCPRIVATEGEOMETRYSHADERWITHSTREAMOUTPUT pfnCalcPrivateGeometryShaderWithStreamOutput;
+    PFND3D11_1DDI_CREATEGEOMETRYSHADERWITHSTREAMOUTPUT      pfnCreateGeometryShaderWithStreamOutput;
+    PFND3D10DDI_DESTROYSHADER                               pfnDestroyShader;
+    PFND3D10DDI_CALCPRIVATESAMPLERSIZE                      pfnCalcPrivateSamplerSize;
+    PFND3D10DDI_CREATESAMPLER                               pfnCreateSampler;
+    PFND3D10DDI_DESTROYSAMPLER                              pfnDestroySampler;
+    PFND3DWDDM2_0DDI_CALCPRIVATEQUERYSIZE                   pfnCalcPrivateQuerySize;
+    PFND3DWDDM2_0DDI_CREATEQUERY                            pfnCreateQuery;
+    PFND3D10DDI_DESTROYQUERY                                pfnDestroyQuery;
+    PFND3D10DDI_CHECKFORMATSUPPORT                          pfnCheckFormatSupport;
+    PFND3DWDDM1_3DDI_CHECKMULTISAMPLEQUALITYLEVELS          pfnCheckMultisampleQualityLevels;
+    PFND3D10DDI_CHECKCOUNTERINFO                            pfnCheckCounterInfo;
+    PFND3D10DDI_CHECKCOUNTER                                pfnCheckCounter;
+    PFND3D10DDI_DESTROYDEVICE                               pfnDestroyDevice;
+    PFND3D10DDI_SETTEXTFILTERSIZE                           pfnSetTextFilterSize;
+    PFND3D10DDI_RESOURCECOPY                                pfnResourceConvert;
+    PFND3D11_1DDI_RESOURCECOPYREGION                        pfnResourceConvertRegion;
+    PFND3D10DDI_RESETPRIMITIVEID                            pfnResetPrimitiveID;
+    PFND3D10DDI_SETVERTEXPIPELINEOUTPUT                     pfnSetVertexPipelineOutput;
+    PFND3D11DDI_DRAWINDEXEDINSTANCEDINDIRECT                pfnDrawIndexedInstancedIndirect;
+    PFND3D11DDI_DRAWINSTANCEDINDIRECT                       pfnDrawInstancedIndirect;
+    PFND3D11DDI_COMMANDLISTEXECUTE                          pfnCommandListExecute;
+    PFND3D10DDI_SETSHADERRESOURCES                          pfnHsSetShaderResources;
+    PFND3D10DDI_SETSHADER                                   pfnHsSetShader;
+    PFND3D10DDI_SETSAMPLERS                                 pfnHsSetSamplers;
+    PFND3D11_1DDI_SETCONSTANTBUFFERS                        pfnHsSetConstantBuffers;
+    PFND3D10DDI_SETSHADERRESOURCES                          pfnDsSetShaderResources;
+    PFND3D10DDI_SETSHADER                                   pfnDsSetShader;
+    PFND3D10DDI_SETSAMPLERS                                 pfnDsSetSamplers;
+    PFND3D11_1DDI_SETCONSTANTBUFFERS                        pfnDsSetConstantBuffers;
+    PFND3D11_1DDI_CREATEHULLSHADER                          pfnCreateHullShader;
+    PFND3D11_1DDI_CREATEDOMAINSHADER                        pfnCreateDomainShader;
+    PFND3D11DDI_CHECKDEFERREDCONTEXTHANDLESIZES             pfnCheckDeferredContextHandleSizes;
+    PFND3D11DDI_CALCDEFERREDCONTEXTHANDLESIZE               pfnCalcDeferredContextHandleSize;
+    PFND3D11DDI_CALCPRIVATEDEFERREDCONTEXTSIZE              pfnCalcPrivateDeferredContextSize;
+    PFND3D11DDI_CREATEDEFERREDCONTEXT                       pfnCreateDeferredContext;
+    PFND3D11DDI_ABANDONCOMMANDLIST                          pfnAbandonCommandList;
+    PFND3D11DDI_CALCPRIVATECOMMANDLISTSIZE                  pfnCalcPrivateCommandListSize;
+    PFND3D11DDI_CREATECOMMANDLIST                           pfnCreateCommandList;
+    PFND3D11DDI_DESTROYCOMMANDLIST                          pfnDestroyCommandList;
+    PFND3D11_1DDI_CALCPRIVATETESSELLATIONSHADERSIZE         pfnCalcPrivateTessellationShaderSize;
+    PFND3D11DDI_SETSHADER_WITH_IFACES                       pfnPsSetShaderWithIfaces;
+    PFND3D11DDI_SETSHADER_WITH_IFACES                       pfnVsSetShaderWithIfaces;
+    PFND3D11DDI_SETSHADER_WITH_IFACES                       pfnGsSetShaderWithIfaces;
+    PFND3D11DDI_SETSHADER_WITH_IFACES                       pfnHsSetShaderWithIfaces;
+    PFND3D11DDI_SETSHADER_WITH_IFACES                       pfnDsSetShaderWithIfaces;
+    PFND3D11DDI_SETSHADER_WITH_IFACES                       pfnCsSetShaderWithIfaces;
+    PFND3D11DDI_CREATECOMPUTESHADER                         pfnCreateComputeShader;
+    PFND3D10DDI_SETSHADER                                   pfnCsSetShader;
+    PFND3D10DDI_SETSHADERRESOURCES                          pfnCsSetShaderResources;
+    PFND3D10DDI_SETSAMPLERS                                 pfnCsSetSamplers;
+    PFND3D11_1DDI_SETCONSTANTBUFFERS                        pfnCsSetConstantBuffers;
+    PFND3DWDDM2_0DDI_CALCPRIVATEUNORDEREDACCESSVIEWSIZE     pfnCalcPrivateUnorderedAccessViewSize;
+    PFND3DWDDM2_0DDI_CREATEUNORDEREDACCESSVIEW              pfnCreateUnorderedAccessView;
+    PFND3D11DDI_DESTROYUNORDEREDACCESSVIEW                  pfnDestroyUnorderedAccessView;
+    PFND3D11DDI_CLEARUNORDEREDACCESSVIEWUINT                pfnClearUnorderedAccessViewUint;
+    PFND3D11DDI_CLEARUNORDEREDACCESSVIEWFLOAT               pfnClearUnorderedAccessViewFloat;
+    PFND3D11DDI_SETUNORDEREDACCESSVIEWS                     pfnCsSetUnorderedAccessViews;
+    PFND3D11DDI_DISPATCH                                    pfnDispatch;
+    PFND3D11DDI_DISPATCHINDIRECT                            pfnDispatchIndirect;
+    PFND3D11DDI_SETRESOURCEMINLOD                           pfnSetResourceMinLOD;
+    PFND3D11DDI_COPYSTRUCTURECOUNT                          pfnCopyStructureCount;
+    PFND3D11DDI_RECYCLECOMMANDLIST                          pfnRecycleCommandList;
+    PFND3D11DDI_RECYCLECREATECOMMANDLIST                    pfnRecycleCreateCommandList;
+    PFND3D11DDI_RECYCLECREATEDEFERREDCONTEXT                pfnRecycleCreateDeferredContext;
+    PFND3D11DDI_DESTROYCOMMANDLIST                          pfnRecycleDestroyCommandList;
+    PFND3D11_1DDI_DISCARD                                   pfnDiscard;
+    PFND3D11_1DDI_ASSIGNDEBUGBINARY                         pfnAssignDebugBinary;
+    PFND3D10DDI_RESOURCEMAP                                 pfnDynamicConstantBufferMapNoOverwrite;
+    PFND3D11_1DDI_CHECKDIRECTFLIPSUPPORT                    pfnCheckDirectFlipSupport;
+    PFND3D11_1DDI_CLEARVIEW                                 pfnClearView;
+    PFND3DWDDM1_3DDI_UPDATETILEMAPPINGS                     pfnUpdateTileMappings;
+    PFND3DWDDM1_3DDI_COPYTILEMAPPINGS                       pfnCopyTileMappings;
+    PFND3DWDDM1_3DDI_COPYTILES                              pfnCopyTiles;
+    PFND3DWDDM1_3DDI_UPDATETILES                            pfnUpdateTiles;
+    PFND3DWDDM1_3DDI_TILEDRESOURCEBARRIER                   pfnTiledResourceBarrier;
+    PFND3DWDDM1_3DDI_GETMIPPACKING                          pfnGetMipPacking;
+    PFND3DWDDM1_3DDI_RESIZETILEPOOL                         pfnResizeTilePool;
+    PFND3DWDDM1_3DDI_SETMARKER                              pfnSetMarker;
+    PFND3DWDDM1_3DDI_SETMARKERMODE                          pfnSetMarkerMode;
+    PFND3DWDDM2_0DDI_SETHARDWAREPROTECTION                  pfnSetHardwareProtection;
+    PFND3DWDDM2_0DDI_GETRESOURCELAYOUT                      pfnGetResourceLayout;
+    PFND3DWDDM2_0DDI_RETRIEVE_SHADER_COMMENT                pfnRetrieveShaderComment;
+    PFND3DWDDM2_0DDI_SETHARDWAREPROTECTIONSTATE             pfnSetHardwareProtectionState;
+    PFND3DWDDM2_1DDI_SYNC_TOKEN                             pfnAcquireResource;
+    PFND3DWDDM2_1DDI_SYNC_TOKEN                             pfnReleaseResource;
+    PFND3DWDDM2_2DDI_CALCPRIVATE_SHADERCACHE_SESSION_SIZE   pfnCalcPrivateShaderCacheSessionSize;
+    PFND3DWDDM2_2DDI_CREATE_SHADERCACHE_SESSION             pfnCreateShaderCacheSession;
+    PFND3DWDDM2_2DDI_DESTROY_SHADERCACHE_SESSION            pfnDestroyShaderCacheSession;
+    PFND3DWDDM2_2DDI_SET_SHADERCACHE_SESSION                pfnSetShaderCacheSession;
+    PFND3DWDDM2_6DDI_QUERY_SCANOUT_CAPS                     pfnQueryScanoutCaps;
+    PFND3DWDDM2_6DDI_PREPARE_SCANOUT_TRANSFORMATION         pfnPrepareScanoutTransformation;
+};
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3DWDDM2_6DDI_DEVICEFUNCS);
+WINE_DDI_ASSERT_SIZE(D3DWDDM2_6DDI_DEVICEFUNCS, 1424);
+WINE_DDI_ASSERT_ALIGN(D3DWDDM2_6DDI_DEVICEFUNCS, 8);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDefaultConstantBufferUpdateSubresourceUP, 0);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnVsSetConstantBuffers, 8);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnPsSetShaderResources, 16);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnPsSetShader, 24);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnPsSetSamplers, 32);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnVsSetShader, 40);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDrawIndexed, 48);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDraw, 56);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDynamicIABufferMapNoOverwrite, 64);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDynamicIABufferUnmap, 72);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDynamicConstantBufferMapDiscard, 80);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDynamicIABufferMapDiscard, 88);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDynamicConstantBufferUnmap, 96);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnPsSetConstantBuffers, 104);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnIaSetInputLayout, 112);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnIaSetVertexBuffers, 120);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnIaSetIndexBuffer, 128);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDrawIndexedInstanced, 136);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDrawInstanced, 144);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDynamicResourceMapDiscard, 152);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDynamicResourceUnmap, 160);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnGsSetConstantBuffers, 168);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnGsSetShader, 176);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnIaSetTopology, 184);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnStagingResourceMap, 192);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnStagingResourceUnmap, 200);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnVsSetShaderResources, 208);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnVsSetSamplers, 216);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnGsSetShaderResources, 224);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnGsSetSamplers, 232);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetRenderTargets, 240);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnShaderResourceViewReadAfterWriteHazard, 248);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnResourceReadAfterWriteHazard, 256);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetBlendState, 264);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetDepthStencilState, 272);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetRasterizerState, 280);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnQueryEnd, 288);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnQueryBegin, 296);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnResourceCopyRegion, 304);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnResourceUpdateSubresourceUP, 312);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnSoSetTargets, 320);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDrawAuto, 328);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetViewports, 336);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetScissorRects, 344);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnClearRenderTargetView, 352);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnClearDepthStencilView, 360);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetPredication, 368);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnQueryGetData, 376);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnFlush, 384);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnGenMips, 392);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnResourceCopy, 400);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnResourceResolveSubresource, 408);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnResourceMap, 416);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnResourceUnmap, 424);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnResourceIsStagingBusy, 432);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnRelocateDeviceFuncs, 440);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateResourceSize, 448);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateOpenedResourceSize, 456);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateResource, 464);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnOpenResource, 472);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyResource, 480);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateShaderResourceViewSize, 488);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateShaderResourceView, 496);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyShaderResourceView, 504);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateRenderTargetViewSize, 512);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateRenderTargetView, 520);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyRenderTargetView, 528);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateDepthStencilViewSize, 536);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateDepthStencilView, 544);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyDepthStencilView, 552);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateElementLayoutSize, 560);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateElementLayout, 568);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyElementLayout, 576);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateBlendStateSize, 584);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateBlendState, 592);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyBlendState, 600);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateDepthStencilStateSize, 608);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateDepthStencilState, 616);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyDepthStencilState, 624);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateRasterizerStateSize, 632);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateRasterizerState, 640);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyRasterizerState, 648);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateShaderSize, 656);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateVertexShader, 664);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateGeometryShader, 672);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreatePixelShader, 680);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateGeometryShaderWithStreamOutput, 688);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateGeometryShaderWithStreamOutput, 696);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyShader, 704);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateSamplerSize, 712);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateSampler, 720);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroySampler, 728);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateQuerySize, 736);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateQuery, 744);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyQuery, 752);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCheckFormatSupport, 760);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCheckMultisampleQualityLevels, 768);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCheckCounterInfo, 776);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCheckCounter, 784);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyDevice, 792);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetTextFilterSize, 800);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnResourceConvert, 808);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnResourceConvertRegion, 816);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnResetPrimitiveID, 824);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetVertexPipelineOutput, 832);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDrawIndexedInstancedIndirect, 840);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDrawInstancedIndirect, 848);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCommandListExecute, 856);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnHsSetShaderResources, 864);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnHsSetShader, 872);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnHsSetSamplers, 880);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnHsSetConstantBuffers, 888);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDsSetShaderResources, 896);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDsSetShader, 904);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDsSetSamplers, 912);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDsSetConstantBuffers, 920);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateHullShader, 928);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateDomainShader, 936);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCheckDeferredContextHandleSizes, 944);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcDeferredContextHandleSize, 952);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateDeferredContextSize, 960);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateDeferredContext, 968);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnAbandonCommandList, 976);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateCommandListSize, 984);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateCommandList, 992);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyCommandList, 1000);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateTessellationShaderSize, 1008);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnPsSetShaderWithIfaces, 1016);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnVsSetShaderWithIfaces, 1024);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnGsSetShaderWithIfaces, 1032);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnHsSetShaderWithIfaces, 1040);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDsSetShaderWithIfaces, 1048);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCsSetShaderWithIfaces, 1056);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateComputeShader, 1064);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCsSetShader, 1072);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCsSetShaderResources, 1080);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCsSetSamplers, 1088);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCsSetConstantBuffers, 1096);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateUnorderedAccessViewSize, 1104);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateUnorderedAccessView, 1112);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyUnorderedAccessView, 1120);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnClearUnorderedAccessViewUint, 1128);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnClearUnorderedAccessViewFloat, 1136);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCsSetUnorderedAccessViews, 1144);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDispatch, 1152);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDispatchIndirect, 1160);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetResourceMinLOD, 1168);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCopyStructureCount, 1176);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnRecycleCommandList, 1184);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnRecycleCreateCommandList, 1192);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnRecycleCreateDeferredContext, 1200);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnRecycleDestroyCommandList, 1208);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDiscard, 1216);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnAssignDebugBinary, 1224);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDynamicConstantBufferMapNoOverwrite, 1232);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCheckDirectFlipSupport, 1240);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnClearView, 1248);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnUpdateTileMappings, 1256);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCopyTileMappings, 1264);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCopyTiles, 1272);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnUpdateTiles, 1280);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnTiledResourceBarrier, 1288);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnGetMipPacking, 1296);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnResizeTilePool, 1304);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetMarker, 1312);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetMarkerMode, 1320);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetHardwareProtection, 1328);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnGetResourceLayout, 1336);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnRetrieveShaderComment, 1344);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetHardwareProtectionState, 1352);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnAcquireResource, 1360);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnReleaseResource, 1368);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateShaderCacheSessionSize, 1376);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateShaderCacheSession, 1384);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyShaderCacheSession, 1392);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetShaderCacheSession, 1400);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnQueryScanoutCaps, 1408);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_6DDI_DEVICEFUNCS, pfnPrepareScanoutTransformation, 1416);
 
 /*
  * Group: kernel device callbacks
@@ -1185,13 +1853,18 @@ WINE_DDI_ASSERT_FIELD(WINE_D3D11DDI_ESCAPEFLAGS, Value, 0);
 
 /* Both argument structures carry interior padding, so a host that assigns
  * member by member leaves the driver reading uninitialized bytes.  Zero the
- * whole structure, as D3D10DDIARG_CREATEDEVICE also requires. */
+ * whole structure, as D3D10DDIARG_CREATEDEVICE also requires.  The padding is
+ * named here for the reasons recorded with D3D10DDIARG_CREATEDEVICE.WinePad0;
+ * naming it is what lets it be asserted and zeroed, and it changes no
+ * offset. */
 typedef struct _D3DDDICB_ESCAPE
 {
     HANDLE                    hDevice;
     WINE_D3D11DDI_ESCAPEFLAGS Flags;
+    UINT32                    WinePad0;
     void                      *pPrivateDriverData;
     UINT                      PrivateDriverDataSize;
+    UINT32                    WinePad1;
     HANDLE                    hContext;
 } D3DDDICB_ESCAPE;
 
@@ -1201,17 +1874,20 @@ WINE_DDI_ASSERT_ALIGN(D3DDDICB_ESCAPE, 8);
 WINE_DDI_ASSERT_FIELD(D3DDDICB_ESCAPE, hDevice, 0);
 WINE_DDI_ASSERT_FIELD(D3DDDICB_ESCAPE, Flags, 8);
 WINE_DDI_ASSERT_FIELD_SIZE(D3DDDICB_ESCAPE, Flags, 4);
-/* Four bytes of padding follow Flags, and four more follow
- * PrivateDriverDataSize; no member names either. */
+WINE_DDI_ASSERT_FIELD(D3DDDICB_ESCAPE, WinePad0, 12);
+WINE_DDI_ASSERT_FIELD_SIZE(D3DDDICB_ESCAPE, WinePad0, 4);
 WINE_DDI_ASSERT_FIELD(D3DDDICB_ESCAPE, pPrivateDriverData, 16);
 WINE_DDI_ASSERT_FIELD(D3DDDICB_ESCAPE, PrivateDriverDataSize, 24);
 WINE_DDI_ASSERT_FIELD_SIZE(D3DDDICB_ESCAPE, PrivateDriverDataSize, 4);
+WINE_DDI_ASSERT_FIELD(D3DDDICB_ESCAPE, WinePad1, 28);
+WINE_DDI_ASSERT_FIELD_SIZE(D3DDDICB_ESCAPE, WinePad1, 4);
 WINE_DDI_ASSERT_FIELD(D3DDDICB_ESCAPE, hContext, 32);
 
 typedef struct _D3DDDICB_SYNCTOKEN
 {
     HANDLE       hSyncToken;
     UINT         BroadcastContextCount;
+    UINT32       WinePad0;
     const HANDLE *BroadcastContextArray;
 } D3DDDICB_SYNCTOKEN;
 
@@ -1221,6 +1897,8 @@ WINE_DDI_ASSERT_ALIGN(D3DDDICB_SYNCTOKEN, 8);
 WINE_DDI_ASSERT_FIELD(D3DDDICB_SYNCTOKEN, hSyncToken, 0);
 WINE_DDI_ASSERT_FIELD(D3DDDICB_SYNCTOKEN, BroadcastContextCount, 8);
 WINE_DDI_ASSERT_FIELD_SIZE(D3DDDICB_SYNCTOKEN, BroadcastContextCount, 4);
+WINE_DDI_ASSERT_FIELD(D3DDDICB_SYNCTOKEN, WinePad0, 12);
+WINE_DDI_ASSERT_FIELD_SIZE(D3DDDICB_SYNCTOKEN, WinePad0, 4);
 WINE_DDI_ASSERT_FIELD(D3DDDICB_SYNCTOKEN, BroadcastContextArray, 16);
 
 /* The three promoted signatures: the slots the pinned driver invokes. */
@@ -1497,6 +2175,13 @@ WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
         pfnAcquireResourceCb, 424);
 WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
         pfnReleaseResourceCb, 432);
+/* The driver binds one "PFND3DDDI_SYNCTOKENCB D3DDDI_DEVICECALLBACKS::*" to
+ * either of these, so they must hold that type and not merely two compatible
+ * function-pointer types.  The C++ arm of tests/d3d11ddilayout.c reproduces the
+ * pointer-to-member; this states the requirement in both languages and at the
+ * declaration rather than in a test that only C++ runs. */
+WINE_DDI_ASSERT_SAME_FIELD_TYPE(D3DDDI_DEVICECALLBACKS,
+        pfnAcquireResourceCb, pfnReleaseResourceCb);
 WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
         pfnCreateHwContextCb, 440);
 WINE_DDI_ASSERT_FIELD(D3DDDI_DEVICECALLBACKS,
