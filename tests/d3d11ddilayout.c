@@ -91,6 +91,76 @@ static void check_size(const char *type, unsigned long asserted,
             (unsigned long)((const char *)&(object).field \
                     - (const char *)&(object)))
 
+/*
+ * The calling-convention guard.
+ *
+ * Read this before reading it as a test that can fail.  On Win64 x86_64 there
+ * is one calling convention: __stdcall, __cdecl and __fastcall all name it,
+ * arguments arrive in registers, and the caller owns the argument area.  The
+ * stack pointer therefore cannot drift across a call through a DDI slot, and
+ * no declaration this header could carry would make it drift.  These checks
+ * pass unconditionally on the frozen contract, and that is not a defect in
+ * them.
+ *
+ * They exist for the case the header itself describes: an ABI other than this
+ * one must re-derive the declarations, and an ABI that does distinguish
+ * conventions is one where a slot declared with the wrong one unbalances the
+ * stack at the call site.  On that day this is the check that says so, next to
+ * the offsets, instead of the port discovering it as a corrupted frame.  It
+ * also pins the assumption itself: if these ever stop holding here, the claim
+ * at the top of wine_d3d11ddi.h is wrong and everything built on it needs
+ * re-reading.
+ *
+ * The reads are volatile with a memory clobber so the compiler cannot move
+ * them across the call, which also touches memory.  The frame is fixed for the
+ * body of a function with no alloca, so the two reads are comparable at -O2.
+ */
+#if defined(__x86_64__) && defined(__GNUC__)
+# define READ_STACK_POINTER(into) \
+    __asm__ volatile ("movq %%rsp, %0" : "=r"(into) : : "memory")
+#else
+/* Nothing to read, and nothing to claim: check_stack treats a pair of zeroes
+ * as "not asked". */
+# define READ_STACK_POINTER(into) ((into) = 0)
+#endif
+
+#define CHECK_STACK(what, call) \
+    do { \
+        unsigned long long rsp_before, rsp_after; \
+        READ_STACK_POINTER(rsp_before); \
+        (void)(call); \
+        READ_STACK_POINTER(rsp_after); \
+        check_stack((what), rsp_before, rsp_after); \
+    } while (0)
+
+static void check_stack(const char *what, unsigned long long before,
+        unsigned long long after)
+{
+    if (!before && !after)
+        return;
+
+    if (before != after)
+    {
+        printf("[fail] %s moved the stack pointer by %lld bytes\n", what,
+                (long long)after - (long long)before);
+        ++failures;
+        return;
+    }
+
+    /* Reported apart from drift: a frame that was never 16-byte aligned is a
+     * different fault from one the callee unbalanced, and reading which of
+     * the two tripped is the whole value of the guard on the day it does. */
+    if (before & 0xf)
+    {
+        printf("[fail] %s ran on a stack aligned to %llu, not 16\n", what,
+                before & 0xf);
+        ++failures;
+        return;
+    }
+
+    printf("[ ok ] %s left the stack pointer where it found it\n", what);
+}
+
 
 static void check_dirty_memory_padding(void)
 {
@@ -480,12 +550,22 @@ static void check_corelayer_callbacks(void)
     callbacks.pfnQueryScanoutCapsCb = stub_undeclared;
 
     callback_calls = 0;
-    callbacks.pfnSetErrorCb(core_layer, 0);
-    callbacks.pfnStatePsShaderCb(core_layer);
-    callbacks.pfnStatePsSrvCb(core_layer, 4, 0);
-    callbacks.pfnStateHsSrvCb(core_layer, 0, 4);
-    callbacks.pfnShaderCacheGetValueCb();
-    callbacks.pfnQueryScanoutCapsCb();
+    /* Every call here goes through the stack guard.  One of each declared
+     * shape is what makes that worth doing: a slot taking no arguments and
+     * one taking two are exactly what a convention mismatch would tell
+     * apart. */
+    CHECK_STACK("PFND3D10DDI_SETERROR_CB",
+            callbacks.pfnSetErrorCb(core_layer, 0));
+    CHECK_STACK("PFND3D10DDI_STATE_PS_SHADER_CB",
+            callbacks.pfnStatePsShaderCb(core_layer));
+    CHECK_STACK("PFND3D10DDI_STATE_PS_SRV_CB",
+            callbacks.pfnStatePsSrvCb(core_layer, 4, 0));
+    CHECK_STACK("PFND3D11DDI_STATE_HS_SRV_CB",
+            callbacks.pfnStateHsSrvCb(core_layer, 0, 4));
+    CHECK_STACK("PFNWINE_D3D11DDI_UNDECLARED_CB (shader cache get)",
+            callbacks.pfnShaderCacheGetValueCb());
+    CHECK_STACK("PFNWINE_D3D11DDI_UNDECLARED_CB (query scanout caps)",
+            callbacks.pfnQueryScanoutCapsCb());
 
     if (callback_calls == 6)
     {
@@ -684,9 +764,12 @@ static void check_kernel_callbacks(void)
 
     escape.Flags.DeviceStatusQuery = 1;
     kernel_calls = 0;
-    (void)callbacks.pfnEscapeCb(NULL, &escape);
-    (void)callbacks.pfnAcquireResourceCb(NULL, &token);
-    (void)callbacks.pfnReleaseResourceCb(NULL, &token);
+    CHECK_STACK("PFND3DDDI_ESCAPECB",
+            callbacks.pfnEscapeCb(NULL, &escape));
+    CHECK_STACK("PFND3DDDI_SYNCTOKENCB (acquire)",
+            callbacks.pfnAcquireResourceCb(NULL, &token));
+    CHECK_STACK("PFND3DDDI_SYNCTOKENCB (release)",
+            callbacks.pfnReleaseResourceCb(NULL, &token));
 
     if (kernel_calls == 3)
     {
@@ -766,6 +849,294 @@ static void check_version_arithmetic(void)
     }
 }
 
+/* Stand-ins for the driver's own command-list entry points: the first slots of
+ * D3DWDDM2_6DDI_DEVICEFUNCS whose signature has been promoted from the
+ * placeholder.  Declaring them with the declared signatures and assigning them
+ * into the table is what makes the promotion mean something.  No offset
+ * assertion can distinguish a promoted function pointer from a placeholder
+ * one, so if a promoted typedef were wrong, this file is the only place that
+ * would say so. */
+static int command_list_calls;
+
+static VOID stub_abandon_command_list(D3D10DDI_HDEVICE hDevice)
+{
+    (void)hDevice;
+    ++command_list_calls;
+}
+
+static VOID stub_command_list_execute(D3D10DDI_HDEVICE hDevice,
+        D3D11DDI_HCOMMANDLIST hCommandList)
+{
+    (void)hDevice;
+    (void)hCommandList;
+    ++command_list_calls;
+}
+
+static void check_command_list_handle(void)
+{
+    D3D11DDI_HCOMMANDLIST command_list;
+
+    memset(&command_list, 0, sizeof(command_list));
+
+    CHECK_FIELD(command_list, D3D11DDI_HCOMMANDLIST, pDrvPrivate);
+
+    /* One wrapped pointer, like every other driver handle.  A handle that grew
+     * would have the runtime passing a different object than the driver
+     * reads. */
+    check_size("D3D11DDI_HCOMMANDLIST", 8, (unsigned long)sizeof(command_list));
+}
+
+/* The promoted slots, filled and called through the table.  Three of the four
+ * promoted typedefs take the same parameters, and pfnDestroyCommandList and
+ * pfnRecycleDestroyCommandList share one type outright, so what this checks
+ * beyond callability is that the sharing still holds. */
+static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
+{
+    D3D10DDI_HDEVICE device;
+    D3D11DDI_HCOMMANDLIST command_list;
+
+    memset(&device, 0, sizeof(device));
+    memset(&command_list, 0, sizeof(command_list));
+
+    funcs->pfnAbandonCommandList = stub_abandon_command_list;
+    funcs->pfnCommandListExecute = stub_command_list_execute;
+    funcs->pfnDestroyCommandList = stub_command_list_execute;
+    funcs->pfnRecycleCommandList = stub_command_list_execute;
+    funcs->pfnRecycleDestroyCommandList = stub_command_list_execute;
+
+    command_list_calls = 0;
+    CHECK_STACK("PFND3D11DDI_ABANDONCOMMANDLIST",
+            funcs->pfnAbandonCommandList(device));
+    CHECK_STACK("PFND3D11DDI_COMMANDLISTEXECUTE",
+            funcs->pfnCommandListExecute(device, command_list));
+    CHECK_STACK("PFND3D11DDI_DESTROYCOMMANDLIST",
+            funcs->pfnDestroyCommandList(device, command_list));
+    CHECK_STACK("PFND3D11DDI_RECYCLECOMMANDLIST",
+            funcs->pfnRecycleCommandList(device, command_list));
+    CHECK_STACK("PFND3D11DDI_DESTROYCOMMANDLIST (recycle)",
+            funcs->pfnRecycleDestroyCommandList(device, command_list));
+
+    if (command_list_calls == 5)
+    {
+        printf("[ ok ] the promoted command-list slots are callable as "
+                "declared\n");
+    }
+    else
+    {
+        printf("[fail] %d of 5 promoted command-list slots reached their "
+                "implementation\n", command_list_calls);
+        ++failures;
+    }
+
+    /* The specification says a driver may point pfnRecycleDestroyCommandList
+     * at its own DestroyCommandList, so the two slots take one type.  One
+     * implementation had to fit both above; this is the same claim made where
+     * a divergence would show. */
+    if (funcs->pfnDestroyCommandList == funcs->pfnRecycleDestroyCommandList)
+    {
+        printf("[ ok ] the destroy and recycle-destroy slots share a type\n");
+    }
+    else
+    {
+        printf("[fail] the destroy and recycle-destroy slots no longer accept "
+                "one implementation\n");
+        ++failures;
+    }
+}
+
+static void check_device_funcs(void)
+{
+    D3DWDDM2_6DDI_DEVICEFUNCS funcs;
+
+    memset(&funcs, 0, sizeof(funcs));
+
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDefaultConstantBufferUpdateSubresourceUP);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnVsSetConstantBuffers);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnPsSetShaderResources);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnPsSetShader);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnPsSetSamplers);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnVsSetShader);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDrawIndexed);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDraw);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDynamicIABufferMapNoOverwrite);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDynamicIABufferUnmap);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDynamicConstantBufferMapDiscard);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDynamicIABufferMapDiscard);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDynamicConstantBufferUnmap);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnPsSetConstantBuffers);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnIaSetInputLayout);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnIaSetVertexBuffers);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnIaSetIndexBuffer);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDrawIndexedInstanced);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDrawInstanced);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDynamicResourceMapDiscard);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDynamicResourceUnmap);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnGsSetConstantBuffers);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnGsSetShader);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnIaSetTopology);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnStagingResourceMap);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnStagingResourceUnmap);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnVsSetShaderResources);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnVsSetSamplers);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnGsSetShaderResources);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnGsSetSamplers);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetRenderTargets);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnShaderResourceViewReadAfterWriteHazard);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnResourceReadAfterWriteHazard);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetBlendState);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetDepthStencilState);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetRasterizerState);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnQueryEnd);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnQueryBegin);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnResourceCopyRegion);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnResourceUpdateSubresourceUP);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnSoSetTargets);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDrawAuto);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetViewports);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetScissorRects);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnClearRenderTargetView);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnClearDepthStencilView);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetPredication);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnQueryGetData);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnFlush);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnGenMips);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnResourceCopy);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnResourceResolveSubresource);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnResourceMap);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnResourceUnmap);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnResourceIsStagingBusy);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnRelocateDeviceFuncs);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateResourceSize);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateOpenedResourceSize);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateResource);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnOpenResource);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyResource);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateShaderResourceViewSize);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateShaderResourceView);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyShaderResourceView);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateRenderTargetViewSize);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateRenderTargetView);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyRenderTargetView);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateDepthStencilViewSize);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateDepthStencilView);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyDepthStencilView);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateElementLayoutSize);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateElementLayout);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyElementLayout);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateBlendStateSize);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateBlendState);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyBlendState);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateDepthStencilStateSize);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateDepthStencilState);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyDepthStencilState);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateRasterizerStateSize);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateRasterizerState);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyRasterizerState);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateShaderSize);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateVertexShader);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateGeometryShader);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreatePixelShader);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateGeometryShaderWithStreamOutput);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateGeometryShaderWithStreamOutput);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyShader);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateSamplerSize);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateSampler);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroySampler);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateQuerySize);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateQuery);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyQuery);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCheckFormatSupport);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCheckMultisampleQualityLevels);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCheckCounterInfo);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCheckCounter);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyDevice);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetTextFilterSize);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnResourceConvert);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnResourceConvertRegion);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnResetPrimitiveID);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetVertexPipelineOutput);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDrawIndexedInstancedIndirect);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDrawInstancedIndirect);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCommandListExecute);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnHsSetShaderResources);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnHsSetShader);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnHsSetSamplers);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnHsSetConstantBuffers);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDsSetShaderResources);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDsSetShader);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDsSetSamplers);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDsSetConstantBuffers);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateHullShader);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateDomainShader);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCheckDeferredContextHandleSizes);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcDeferredContextHandleSize);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateDeferredContextSize);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateDeferredContext);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnAbandonCommandList);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateCommandListSize);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateCommandList);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyCommandList);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateTessellationShaderSize);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnPsSetShaderWithIfaces);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnVsSetShaderWithIfaces);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnGsSetShaderWithIfaces);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnHsSetShaderWithIfaces);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDsSetShaderWithIfaces);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCsSetShaderWithIfaces);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateComputeShader);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCsSetShader);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCsSetShaderResources);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCsSetSamplers);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCsSetConstantBuffers);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateUnorderedAccessViewSize);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateUnorderedAccessView);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyUnorderedAccessView);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnClearUnorderedAccessViewUint);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnClearUnorderedAccessViewFloat);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCsSetUnorderedAccessViews);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDispatch);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDispatchIndirect);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetResourceMinLOD);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCopyStructureCount);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnRecycleCommandList);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnRecycleCreateCommandList);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnRecycleCreateDeferredContext);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnRecycleDestroyCommandList);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDiscard);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnAssignDebugBinary);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDynamicConstantBufferMapNoOverwrite);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCheckDirectFlipSupport);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnClearView);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnUpdateTileMappings);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCopyTileMappings);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCopyTiles);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnUpdateTiles);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnTiledResourceBarrier);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnGetMipPacking);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnResizeTilePool);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetMarker);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetMarkerMode);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetHardwareProtection);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnGetResourceLayout);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnRetrieveShaderComment);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetHardwareProtectionState);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnAcquireResource);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnReleaseResource);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateShaderCacheSessionSize);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateShaderCacheSession);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyShaderCacheSession);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnSetShaderCacheSession);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnQueryScanoutCaps);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnPrepareScanoutTransformation);
+    check_size("D3DWDDM2_6DDI_DEVICEFUNCS", 1424,
+            (unsigned long)sizeof(funcs));
+
+    /* Last, and against the same object the offsets were just walked on:
+     * promoting a slot must not have moved anything, and the size asserted
+     * above is what says so. */
+    check_promoted_device_funcs(&funcs);
+}
+
 int main(void)
 {
     check_dirty_memory_padding();
@@ -775,6 +1146,8 @@ int main(void)
     check_open_adapter();
     check_device_handles();
     check_create_device();
+    check_command_list_handle();
+    check_device_funcs();
     check_corelayer_callbacks();
     check_kernel_callbacks();
     check_version_arithmetic();

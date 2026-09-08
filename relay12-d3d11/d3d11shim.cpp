@@ -37,6 +37,7 @@ struct Backend
 };
 
 INIT_ONCE initOnce = INIT_ONCE_STATIC_INIT;
+/* shared-state: published once through initOnce */
 Backend backend = {};
 
 template<typename Function>

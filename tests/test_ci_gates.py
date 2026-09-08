@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPOSITORY / "scripts"))
 import check_ddi_header  # noqa: E402
 import check_interface_acquisition  # noqa: E402
 import check_pe_audit  # noqa: E402
+import check_shared_state  # noqa: E402
 import gen_ddi_layout  # noqa: E402
 
 DDI_HEADER = REPOSITORY / "relay12-d3d11" / "ddi" / "wine_d3d11ddi.h"
@@ -311,6 +312,87 @@ class LayoutModel(unittest.TestCase):
         self.assertNotEqual(broken, self.header)
         self.assertTrue(any("88 bytes" in error for error in self.check(broken)))
 
+    def test_the_model_derives_the_padding_it_expects_to_be_named(self):
+        """The gate is worthless if the model finds no gaps to name, so pin
+        the set.  Every other group is all-pointer or all-4-byte and pads
+        nowhere; if one of these three stops padding, or a fourth starts, that
+        is a layout change and this is where it surfaces."""
+        padding = {
+            struct.name: struct.padding()
+            for struct in gen_ddi_layout.GROUPS
+            if struct.padding()
+        }
+        self.assertEqual(padding, {
+            "D3D10DDIARG_CREATEDEVICE": [(76, 4)],
+            "D3DDDICB_ESCAPE": [(12, 4), (28, 4)],
+            "D3DDDICB_SYNCTOKEN": [(12, 4)],
+        })
+
+    def test_unasserted_padding_is_caught(self):
+        """This model reads the header's assertions, not its declarations, so
+        what it catches is a gap nothing asserts.  A pad member deleted from
+        the declaration while its assertion stays would not compile, and the
+        -Wpadded gate in tests/d3d11ddipadding.c is what catches one deleted
+        from both."""
+        broken = self.header.replace(
+            "WINE_DDI_ASSERT_FIELD(D3DDDICB_ESCAPE, WinePad1, 28);\n", "")
+        self.assertNotEqual(broken, self.header)
+        errors = self.check(broken)
+        self.assertTrue(any("padding at 28 that no member names" in error
+                            for error in errors), errors)
+
+    def test_a_pad_asserted_where_nothing_pads_is_caught(self):
+        broken = self.header.replace(
+            "WINE_DDI_ASSERT_FIELD(D3DDDICB_SYNCTOKEN, WinePad0, 12);",
+            "WINE_DDI_ASSERT_FIELD(D3DDDICB_SYNCTOKEN, WinePad0, 16);")
+        self.assertNotEqual(broken, self.header)
+        errors = self.check(broken)
+        self.assertTrue(any("where the model derives no padding" in error
+                            for error in errors), errors)
+
+    def test_pads_numbered_out_of_offset_order_are_caught(self):
+        broken = self.header.replace(
+            "WINE_DDI_ASSERT_FIELD(D3DDDICB_ESCAPE, WinePad0, 12);",
+            "WINE_DDI_ASSERT_FIELD(D3DDDICB_ESCAPE, WinePad2, 12);")
+        self.assertNotEqual(broken, self.header)
+        errors = self.check(broken)
+        self.assertTrue(any("numbered in offset order" in error
+                            for error in errors), errors)
+
+    def test_every_promoted_slot_is_authored(self):
+        """Promotion is the one change to the device table no layout
+        assertion can see: a promoted pointer and a placeholder pointer are
+        both eight bytes at the same offset."""
+        self.assertTrue(gen_ddi_layout.PROMOTED_SLOTS)
+        for type_name in gen_ddi_layout.PROMOTED_SLOTS:
+            with self.subTest(slot=type_name):
+                self.assertNotIn(
+                    f"typedef PFNWINE_D3D11DDI_UNDECLARED_CB {type_name};",
+                    self.header)
+                self.assertIn(f"(*{type_name})(", self.header)
+
+    def test_a_promoted_slot_regressed_to_a_placeholder_is_caught(self):
+        broken = self.header.replace(
+            "typedef VOID (*PFND3D11DDI_RECYCLECOMMANDLIST)(\n"
+            "        D3D10DDI_HDEVICE hDevice,\n"
+            "        D3D11DDI_HCOMMANDLIST hCommandList);",
+            "typedef PFNWINE_D3D11DDI_UNDECLARED_CB "
+            "PFND3D11DDI_RECYCLECOMMANDLIST;")
+        self.assertNotEqual(broken, self.header)
+        errors = self.check(broken)
+        self.assertTrue(any("still placeholder aliases" in error
+                            for error in errors), errors)
+
+    def test_an_unrecorded_promotion_is_caught(self):
+        broken = self.header.replace(
+            "typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DRAW;",
+            "typedef VOID (*PFND3D10DDI_DRAW)(D3D10DDI_HDEVICE hDevice, "
+            "UINT VertexCount, UINT StartVertex);")
+        self.assertNotEqual(broken, self.header)
+        errors = self.check(broken)
+        self.assertTrue(any("PFND3D10DDI_DRAW" in error for error in errors),
+                        errors)
+
     def test_the_declared_and_published_arms_agree(self):
         """Dropping the union arms the driver does not read must not move
         anything; this is what makes that a declaration choice."""
@@ -325,6 +407,96 @@ class LayoutModel(unittest.TestCase):
                         self.assertEqual(offset, published[0][name])
 
 
+class SharedStateGate(unittest.TestCase):
+    """Every rule the shared-state gate claims, given something that breaks
+    it.  The gate reads C++ without a C++ parser, so the first thing to pin is
+    that it finds the functions at all: anchored on the wrong brace style it
+    would report success having inspected nothing."""
+
+    SHIM = REPOSITORY / "relay12-d3d11" / "d3d11shim.cpp"
+    DIAG = REPOSITORY / "relay12-d3d11" / "wine_d3d11_diag.cpp"
+    CORE = REPOSITORY / "relay12-d3d11" / "d3d11on12core.cpp"
+
+    def setUp(self):
+        self.shim = self.SHIM.read_text()
+        self.diag = self.DIAG.read_text()
+        self.core = self.CORE.read_text()
+
+    def check(self, text):
+        return check_shared_state.check_source("probe.cpp", text)
+
+    def test_the_committed_sources_pass(self):
+        for path in (self.SHIM, self.DIAG, self.CORE):
+            with self.subTest(source=path.name):
+                self.assertEqual(
+                    check_shared_state.check_source(path, path.read_text()), [])
+
+    def test_the_gate_finds_the_functions_it_inspects(self):
+        self.assertEqual(
+            sorted(check_shared_state.function_bodies(self.diag)),
+            ["resolveSinks", "wineD3D11DiagReport", "wineD3D11DiagReportOnce"])
+        self.assertIn("initialize",
+                      check_shared_state.function_bodies(self.shim))
+
+    def test_the_gate_follows_a_wrapped_InitOnceExecuteOnce(self):
+        """The router wraps the call in initialize() and every entry point
+        calls that, so a gate looking only for the literal call would reject
+        the committed tree."""
+        lines = self.shim.splitlines()
+        bodies = check_shared_state.function_bodies(self.shim)
+        initializers = check_shared_state.initializers_for(
+            "initOnce", lines, bodies)
+        self.assertIn("initialize", initializers)
+        self.assertIn("shimD3D11On12CreateDevice", initializers)
+
+    def test_a_latch_assigned_directly_is_rejected(self):
+        broken = self.core.replace(
+            "    return DXGI_ERROR_UNSUPPORTED;",
+            "    reportedNoHost = 1;\n    return DXGI_ERROR_UNSUPPORTED;")
+        self.assertNotEqual(broken, self.core)
+        self.assertTrue(any("must move through an Interlocked* call" in error
+                            for error in self.check(broken)))
+
+    def test_a_latch_stepped_directly_is_rejected(self):
+        broken = self.core.replace(
+            "    return DXGI_ERROR_UNSUPPORTED;",
+            "    ++reportedNoHost;\n    return DXGI_ERROR_UNSUPPORTED;")
+        self.assertNotEqual(broken, self.core)
+        self.assertTrue(any("must move through an Interlocked* call" in error
+                            for error in self.check(broken)))
+
+    def test_unannotated_shared_state_is_rejected(self):
+        broken = self.diag.replace(
+            "/* shared-state: published once through sinkOnce */\n", "")
+        self.assertNotEqual(broken, self.diag)
+        self.assertTrue(any("is shared mutable state at namespace scope"
+                            in error for error in self.check(broken)))
+
+    def test_an_annotation_naming_no_INIT_ONCE_is_rejected(self):
+        broken = self.diag.replace("published once through sinkOnce",
+                                   "published once through notAThing")
+        self.assertNotEqual(broken, self.diag)
+        self.assertTrue(any("is not an INIT_ONCE in this file" in error
+                            for error in self.check(broken)))
+
+    def test_a_touch_before_the_barrier_is_rejected(self):
+        broken = self.shim.replace(
+            "    initialize();\n    if (!backend.createDevice)",
+            "    if (!backend.createDevice)\n        initialize();\n"
+            "    if (!backend.createDevice)")
+        self.assertNotEqual(broken, self.shim)
+        self.assertTrue(any("before it executes 'initOnce'" in error
+                            for error in self.check(broken)))
+
+    def test_a_touch_with_no_barrier_is_rejected(self):
+        broken = self.shim.replace(
+            "    initialize();\n    if (!backend.on12Interface.createDevice)",
+            "    if (!backend.on12Interface.createDevice)")
+        self.assertNotEqual(broken, self.shim)
+        self.assertTrue(any("without executing 'initOnce' first" in error
+                            for error in self.check(broken)))
+
+
 class GateEntryPoints(unittest.TestCase):
     """Each gate must also work as CI invokes it: from the repository root,
     with an exit status."""
@@ -337,6 +509,7 @@ class GateEntryPoints(unittest.TestCase):
     def test_the_gates_pass_on_the_committed_tree(self):
         for gate in (["scripts/check_ddi_header.py"],
                      ["scripts/check_interface_acquisition.py"],
+                     ["scripts/check_shared_state.py"],
                      ["scripts/gen_ddi_layout.py", "--check"]):
             with self.subTest(gate=gate[0]):
                 result = self.run_gate(*gate)
