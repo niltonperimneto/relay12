@@ -1138,7 +1138,7 @@ WINE_DDI_STATIC_ASSERT(
         "the core-layer callback table is 47 function pointers");
 
 /*
- * Group: command list handle
+ * Group: command-list handles and creation arguments
  * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_commandlistexecute
  * Retrieved: 2026-09-08
  *
@@ -1146,6 +1146,8 @@ WINE_DDI_STATIC_ASSERT(
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_destroycommandlist
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_recyclecommandlist
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_abandoncommandlist
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d11ddiarg_createcommandlist
+ *   https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs-ddi/staging/wdk-ddi-src/content/d3d10umddi/ns-d3d10umddi-d3d11ddiarg_createcommandlist.md
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/display/introduction-to-deferred-contexts
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/display/supporting-command-lists
  *
@@ -1158,11 +1160,6 @@ WINE_DDI_STATIC_ASSERT(
  * may declare a D3D11DDI_HDEFERREDCONTEXT later: no specification names one,
  * so it would be an invented type behind a provenance block, which rule 1
  * forbids and which this note exists to prevent.
- *
- * The runtime counterpart, hRTCommandList, is deliberately absent.  It is a
- * parameter of CreateCommandList, which cannot be promoted until
- * D3D11DDIARG_CREATECOMMANDLIST is authored, and declaring a handle no
- * declared slot takes would be the speculative version rule 4 rejects.
  *
  * The member name follows the documented convention, as the other driver
  * handles' do: this is the handle to "the driver's private data for the
@@ -1181,6 +1178,28 @@ WINE_DDI_ASSERT_ALIGN(D3D11DDI_HCOMMANDLIST, 8);
 WINE_DDI_ASSERT_FIELD(D3D11DDI_HCOMMANDLIST, pDrvPrivate, 0);
 WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDI_HCOMMANDLIST, pDrvPrivate, 8);
 
+typedef struct D3D11DDI_HRTCOMMANDLIST
+{
+    void *handle;
+} D3D11DDI_HRTCOMMANDLIST;
+
+typedef struct D3D11DDIARG_CREATECOMMANDLIST
+{
+    D3D10DDI_HDEVICE hDeferredContext;
+} D3D11DDIARG_CREATECOMMANDLIST;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D11DDI_HRTCOMMANDLIST);
+WINE_DDI_ASSERT_SIZE(D3D11DDI_HRTCOMMANDLIST, 8);
+WINE_DDI_ASSERT_ALIGN(D3D11DDI_HRTCOMMANDLIST, 8);
+WINE_DDI_ASSERT_FIELD(D3D11DDI_HRTCOMMANDLIST, handle, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDI_HRTCOMMANDLIST, handle, 8);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D11DDIARG_CREATECOMMANDLIST);
+WINE_DDI_ASSERT_SIZE(D3D11DDIARG_CREATECOMMANDLIST, 8);
+WINE_DDI_ASSERT_ALIGN(D3D11DDIARG_CREATECOMMANDLIST, 8);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATECOMMANDLIST, hDeferredContext, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CREATECOMMANDLIST, hDeferredContext, 8);
+
 /*
  * Group: WDDM 2.6 device function table
  * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3dwddm2_6ddi_devicefuncs
@@ -1194,9 +1213,8 @@ WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDI_HCOMMANDLIST, pDrvPrivate, 8);
  * accidental calls a compile error while keeping promotion local to one
  * typedef at a time.
  *
- * Four typedefs are promoted, covering five slots.  They are the command-list
- * family whose parameters are handles and nothing else, so they need only the
- * group above and no argument structure; each is quoted from its own
+ * Seven typedefs are promoted, covering eight slots. They are the command-list
+ * family; each is quoted from its own
  * reference page, cited beside it.  Promotion moves no offset -- a promoted
  * function pointer is still a function pointer, and the table's size and
  * every slot's offset are asserted unchanged below, which is the point of
@@ -1211,11 +1229,9 @@ WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDI_HCOMMANDLIST, pDrvPrivate, 8);
  * is the declaration this header already carried and which the
  * DestroyCommandList page sanctions: it states that a driver may set
  * pfnRecycleDestroyCommandList to point at its DestroyCommandList, so the two
- * members take one type.  Nothing else in the family is promotable yet.
+ * members take one type.
  * pfnRecycleDestroyCommandList has no reference page of its own -- the URL
- * its siblings would predict returns 404 -- and pfnCreateCommandList,
- * pfnCalcPrivateCommandListSize and pfnRecycleCreateCommandList all take
- * D3D11DDIARG_CREATECOMMANDLIST, which is a group of its own and unauthored.
+ * its siblings would predict returns 404.
  */
 
 /* The promoted command-list signatures.  Each returns nothing and reports
@@ -1245,6 +1261,25 @@ typedef VOID (*PFND3D11DDI_DESTROYCOMMANDLIST)(
 typedef VOID (*PFND3D11DDI_RECYCLECOMMANDLIST)(
         D3D10DDI_HDEVICE hDevice,
         D3D11DDI_HCOMMANDLIST hCommandList);
+
+/* https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_calcprivatecommandlistsize */
+typedef SIZE_T (*PFND3D11DDI_CALCPRIVATECOMMANDLISTSIZE)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CREATECOMMANDLIST *pCreateCommandList);
+
+/* https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_createcommandlist */
+typedef VOID (*PFND3D11DDI_CREATECOMMANDLIST)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CREATECOMMANDLIST *pCreateCommandList,
+        D3D11DDI_HCOMMANDLIST hCommandList,
+        D3D11DDI_HRTCOMMANDLIST hRTCommandList);
+
+/* https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_recyclecreatecommandlist */
+typedef HRESULT (*PFND3D11DDI_RECYCLECREATECOMMANDLIST)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CREATECOMMANDLIST *pCreateCommandList,
+        D3D11DDI_HCOMMANDLIST hCommandList,
+        D3D11DDI_HRTCOMMANDLIST hRTCommandList);
 
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_RESOURCEUPDATESUBRESOURCEUP;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_SETCONSTANTBUFFERS;
@@ -1339,8 +1374,6 @@ typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CHECKDEFERREDCONTEXTHANDLESIZ
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CALCDEFERREDCONTEXTHANDLESIZE;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CALCPRIVATEDEFERREDCONTEXTSIZE;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CREATEDEFERREDCONTEXT;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CALCPRIVATECOMMANDLISTSIZE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CREATECOMMANDLIST;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CALCPRIVATETESSELLATIONSHADERSIZE;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_SETSHADER_WITH_IFACES;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CREATECOMPUTESHADER;
@@ -1354,7 +1387,6 @@ typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_DISPATCH;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_DISPATCHINDIRECT;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_SETRESOURCEMINLOD;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_COPYSTRUCTURECOUNT;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_RECYCLECREATECOMMANDLIST;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_RECYCLECREATEDEFERREDCONTEXT;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_DISCARD;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_ASSIGNDEBUGBINARY;
