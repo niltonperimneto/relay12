@@ -20,6 +20,16 @@ Layout and per-slot callability are necessary and not sufficient. Every driver h
 * **`tests/d3d11ddi_triangle.c`:** drives the promoted device function table through the MVP frame — create, bind, clear, draw, copy to staging, map, verify, unmap, tear down — with recording stubs, then asserts the recorded call sequence against a written-out expected order and checks that each binding received the handle the matching creation produced. The clear stub fills a backing image, draw replaces its centre texel, and readback requires the centre to carry the drawn red and a corner the cleared blue, matching the application-level test. Objects get distinct driver private blocks, allocated by the test the way the runtime allocates them, which is what makes the identity checks discriminating rather than vacuous. Compiled in C and C++ and run under Wine, like the layout harness.
 * **What it does not claim:** nothing renders. There is no host behind the table. The application-level counterpart that would prove pixels is `tests/e2e_d3d11_triangle.cpp`, built but not run by the manual `integration-test.yml` job; when a host exists the two must agree.
 
+## 1b. Portability Debt as a Tested Input
+
+`scripts/inventory_dtl_portability.py` inventories the pinned
+D3D12TranslationLayer tree by category, occurrence count, and file. Its golden
+record is `docs/dtl-portability-baseline.json`. Unit tests verify comment
+filtering, locations, counts, and mutation detection. CI also performs a
+MinGW expected-failure compile that must reach exactly the currently recorded
+`atlbase.h` boundary. See `docs/PORT-QUALITY-ROADMAP.md` for the rule that each
+negative milestone becomes a positive compile gate when its blocker is removed.
+
 ## 2. Memory & Boundary Security: Sanitizers & Padding Traps
 Manual C/C++ memory management frequently introduces vulnerabilities, and failing to account for implicit compiler padding leads to "dirty memory" leaking over the ABI boundary.
 * **Dirty Memory Initialization:** All test models must allocate memory using a `malloc_dirty()` helper that primes heap space with `0xCC` or `0xAA` values. If a struct initialization drops fields, the padding trap will catch the uninitialized bytes.
