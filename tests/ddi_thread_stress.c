@@ -186,8 +186,12 @@ static DWORD WINAPI stress_thread(void *parameter)
                 create_with(good_device, 0, good_queue, 1, 0),
                 DXGI_ERROR_UNSUPPORTED);
 
-        /* One call per diagnostic latch, so all seven are contended by all
-         * twelve threads rather than won by whichever thread started first. */
+        /* One call per rejection path, reaching all seven diagnostic latches,
+         * so each is contended by all twelve threads rather than won by
+         * whichever happened to start first.  Two of these reach one latch:
+         * an object that is not a D3D12 device and one that claims to be
+         * without returning an interface are the same finding by different
+         * routes, and both routes are worth driving. */
         expect_hr("flags validated but not translated",
                 create_with(good_device, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
                         good_queue, 1, 0),
@@ -229,9 +233,10 @@ static DWORD WINAPI stress_thread(void *parameter)
     return 0;
 }
 
-/* Reference counts, checked against what the objects were created with rather
- * than against one.  A core that leaked an AddRef, or a mock whose count tore,
- * shows up here and nowhere else in this suite. */
+/* Every mock is created holding one reference and the storm hands none of them
+ * out, so one is what each must be back to.  A core that leaked an AddRef on
+ * some rejection path, or a mock whose count tore under twelve threads, shows
+ * up here and nowhere else in this suite. */
 static void check_refcount(const char *what, LONG got)
 {
     if (got == 1)
@@ -306,7 +311,7 @@ int main(void)
     if (waited == WAIT_FAILED)
     {
         printf("[fail] waiting for the stress threads failed: %lu\n",
-                GetLastError());
+                (unsigned long)GetLastError());
         return 1;
     }
 

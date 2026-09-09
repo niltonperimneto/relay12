@@ -26,3 +26,18 @@ void execute_with_the_wrong_handle(D3DWDDM2_6DDI_DEVICEFUNCS *funcs,
 {
     funcs->pfnCommandListExecute(hDevice, hDevice);
 }
+
+/* pfnCreateCommandList takes a driver handle (D3D11DDI_HCOMMANDLIST) and a
+ * runtime handle (D3D11DDI_HRTCOMMANDLIST) as two of its four parameters, and
+ * both are one wrapped pointer with no member a caller could tell apart at a
+ * glance.  Passing hCommandList a second time, where the runtime handle
+ * belongs, is the same shape of mistake execute_with_the_wrong_handle catches
+ * above, on the pair of parameters the strong typing exists to keep apart. */
+void create_with_the_wrong_runtime_handle(
+        D3DWDDM2_6DDI_DEVICEFUNCS *funcs,
+        D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CREATECOMMANDLIST *create,
+        D3D11DDI_HCOMMANDLIST hCommandList)
+{
+    funcs->pfnCreateCommandList(hDevice, create, hCommandList, hCommandList);
+}

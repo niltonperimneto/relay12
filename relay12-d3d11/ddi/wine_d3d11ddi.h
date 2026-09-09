@@ -154,9 +154,11 @@
  *     two slots the public set does not document;
  *   - the command list handle, which is the whole of the context handle types:
  *     a deferred context has none of its own, and reuses D3D10DDI_HDEVICE;
- *   - the 178-slot WDDM 2.6 device function table, with the handle-only
- *     command-list family promoted and the remaining published PFN names held
- *     behind non-callable placeholders pending signature promotion;
+ *   - the 178-slot WDDM 2.6 device function table, with the command-list,
+ *     deferred-context, resource, shader/render-target view, and
+ *     vertex/pixel shader creation families promoted and the remaining
+ *     published PFN names held behind non-callable placeholders pending
+ *     signature promotion;
  *   - the kernel device callback table, with the three slots the pinned driver
  *     invokes promoted and the rest holding their offsets only, and the two
  *     argument structures those three take.
@@ -164,9 +166,9 @@
  * Still required by docs/D3D11ON12.md, each to land with its own provenance
  * block and layout assertions:
  *
- *   - resource, view, shader, state, query, and command structures, which are
- *     what gate the remaining device slots; docs/DDI-REMAINING-ROADMAP.md maps
- *     each group to the slot families it unblocks;
+ *   - shader, state, query, and command structures, which are what gate the
+ *     remaining device slots; docs/DDI-REMAINING-ROADMAP.md maps each group
+ *     to the slot families it unblocks;
  *   - the literal DDI version numbers, which the public specification elides;
  *   - DXGI DDI interoperability structures.
  *
@@ -221,6 +223,35 @@ typedef struct D3D10DDI_HRTRESOURCE
     void *handle;
 } D3D10DDI_HRTRESOURCE;
 
+/* State-object handles are one wrapped driver/runtime pointer pair each. */
+#define WINE_DDI_DECLARE_STATE_HANDLES(name) \
+    typedef struct D3D10DDI_H##name { void *pDrvPrivate; } D3D10DDI_H##name; \
+    typedef struct D3D10DDI_HRT##name { void *handle; } D3D10DDI_HRT##name
+
+WINE_DDI_DECLARE_STATE_HANDLES(BLENDSTATE);
+WINE_DDI_DECLARE_STATE_HANDLES(DEPTHSTENCILSTATE);
+WINE_DDI_DECLARE_STATE_HANDLES(RASTERIZERSTATE);
+WINE_DDI_DECLARE_STATE_HANDLES(SAMPLER);
+
+#undef WINE_DDI_DECLARE_STATE_HANDLES
+
+#define WINE_DDI_ASSERT_STATE_HANDLES(name) \
+    WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_H##name); \
+    WINE_DDI_ASSERT_SIZE(D3D10DDI_H##name, 8); \
+    WINE_DDI_ASSERT_ALIGN(D3D10DDI_H##name, 8); \
+    WINE_DDI_ASSERT_FIELD(D3D10DDI_H##name, pDrvPrivate, 0); \
+    WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_HRT##name); \
+    WINE_DDI_ASSERT_SIZE(D3D10DDI_HRT##name, 8); \
+    WINE_DDI_ASSERT_ALIGN(D3D10DDI_HRT##name, 8); \
+    WINE_DDI_ASSERT_FIELD(D3D10DDI_HRT##name, handle, 0)
+
+WINE_DDI_ASSERT_STATE_HANDLES(BLENDSTATE);
+WINE_DDI_ASSERT_STATE_HANDLES(DEPTHSTENCILSTATE);
+WINE_DDI_ASSERT_STATE_HANDLES(RASTERIZERSTATE);
+WINE_DDI_ASSERT_STATE_HANDLES(SAMPLER);
+
+#undef WINE_DDI_ASSERT_STATE_HANDLES
+
 WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_HADAPTER);
 WINE_DDI_ASSERT_SIZE(D3D10DDI_HADAPTER, 8);
 WINE_DDI_ASSERT_ALIGN(D3D10DDI_HADAPTER, 8);
@@ -257,6 +288,10 @@ WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_HRTRESOURCE, handle, 8);
 typedef struct D3D10DDIARG_CALCPRIVATEDEVICESIZE D3D10DDIARG_CALCPRIVATEDEVICESIZE;
 typedef struct D3D10_2DDIARG_GETCAPS D3D10_2DDIARG_GETCAPS;
 typedef struct _D3DDDI_ADAPTERCALLBACKS D3DDDI_ADAPTERCALLBACKS;
+typedef struct D3D11_1_DDI_BLEND_DESC D3D11_1_DDI_BLEND_DESC;
+typedef struct D3D10_DDI_DEPTH_STENCIL_DESC D3D10_DDI_DEPTH_STENCIL_DESC;
+typedef struct D3D11_1_DDI_RASTERIZER_DESC D3D11_1_DDI_RASTERIZER_DESC;
+typedef struct D3D10_DDI_SAMPLER_DESC D3D10_DDI_SAMPLER_DESC;
 
 /* D3D10DDIARG_CREATEDEVICE is completed by the device-creation group below,
  * and D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS by the core-layer group at the
@@ -1138,7 +1173,7 @@ WINE_DDI_STATIC_ASSERT(
         "the core-layer callback table is 47 function pointers");
 
 /*
- * Group: command list handle
+ * Group: command-list handles and creation arguments
  * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_commandlistexecute
  * Retrieved: 2026-09-08
  *
@@ -1146,6 +1181,8 @@ WINE_DDI_STATIC_ASSERT(
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_destroycommandlist
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_recyclecommandlist
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_abandoncommandlist
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d11ddiarg_createcommandlist
+ *   https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs-ddi/staging/wdk-ddi-src/content/d3d10umddi/ns-d3d10umddi-d3d11ddiarg_createcommandlist.md
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/display/introduction-to-deferred-contexts
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/display/supporting-command-lists
  *
@@ -1158,11 +1195,6 @@ WINE_DDI_STATIC_ASSERT(
  * may declare a D3D11DDI_HDEFERREDCONTEXT later: no specification names one,
  * so it would be an invented type behind a provenance block, which rule 1
  * forbids and which this note exists to prevent.
- *
- * The runtime counterpart, hRTCommandList, is deliberately absent.  It is a
- * parameter of CreateCommandList, which cannot be promoted until
- * D3D11DDIARG_CREATECOMMANDLIST is authored, and declaring a handle no
- * declared slot takes would be the speculative version rule 4 rejects.
  *
  * The member name follows the documented convention, as the other driver
  * handles' do: this is the handle to "the driver's private data for the
@@ -1181,6 +1213,643 @@ WINE_DDI_ASSERT_ALIGN(D3D11DDI_HCOMMANDLIST, 8);
 WINE_DDI_ASSERT_FIELD(D3D11DDI_HCOMMANDLIST, pDrvPrivate, 0);
 WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDI_HCOMMANDLIST, pDrvPrivate, 8);
 
+typedef struct D3D11DDI_HRTCOMMANDLIST
+{
+    void *handle;
+} D3D11DDI_HRTCOMMANDLIST;
+
+typedef struct D3D11DDIARG_CREATECOMMANDLIST
+{
+    D3D10DDI_HDEVICE hDeferredContext;
+} D3D11DDIARG_CREATECOMMANDLIST;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D11DDI_HRTCOMMANDLIST);
+WINE_DDI_ASSERT_SIZE(D3D11DDI_HRTCOMMANDLIST, 8);
+WINE_DDI_ASSERT_ALIGN(D3D11DDI_HRTCOMMANDLIST, 8);
+WINE_DDI_ASSERT_FIELD(D3D11DDI_HRTCOMMANDLIST, handle, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDI_HRTCOMMANDLIST, handle, 8);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D11DDIARG_CREATECOMMANDLIST);
+WINE_DDI_ASSERT_SIZE(D3D11DDIARG_CREATECOMMANDLIST, 8);
+WINE_DDI_ASSERT_ALIGN(D3D11DDIARG_CREATECOMMANDLIST, 8);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATECOMMANDLIST, hDeferredContext, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CREATECOMMANDLIST, hDeferredContext, 8);
+
+/*
+ * Group: deferred-context creation and handle sizing
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d11ddiarg_createdeferredcontext
+ * Retrieved: 2026-09-08
+ * Companion specifications:
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ne-d3d10umddi-d3d11ddi_handletype
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d11ddi_handlesize
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d11ddiarg_calcprivatedeferredcontextsize
+ * Source mirror:
+ *   https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs-ddi/staging/wdk-ddi-src/content/d3d10umddi/ns-d3d10umddi-d3d11ddiarg_createdeferredcontext.md
+ *
+ * The create structure publishes unions for every interface generation.  This
+ * target negotiates WDDM 2.6, so only the WDDM 2.6 arms are declared.  Every
+ * published arm is one pointer; the independent model retains all of them and
+ * proves that this subset has the same offsets, size, and alignment.
+ * WinePad0 in each structure names padding derived from natural Win64
+ * alignment.  It is not a specification member and must not be read by a
+ * host.
+ */
+typedef enum D3D11DDI_HANDLETYPE
+{
+    D3D10DDI_HT_RESOURCE = 0,
+    D3D10DDI_HT_SHADERRESOURCEVIEW,
+    D3D10DDI_HT_RENDERTARGETVIEW,
+    D3D10DDI_HT_DEPTHSTENCILVIEW,
+    D3D10DDI_HT_SHADER,
+    D3D10DDI_HT_ELEMENTLAYOUT,
+    D3D10DDI_HT_BLENDSTATE,
+    D3D10DDI_HT_DEPTHSTENCILSTATE,
+    D3D10DDI_HT_RASTERIZERSTATE,
+    D3D10DDI_HT_SAMPLERSTATE,
+    D3D10DDI_HT_QUERY,
+    D3D11DDI_HT_COMMANDLIST,
+    D3D11DDI_HT_UNORDEREDACCESSVIEW,
+    D3D11_1DDI_HT_DECODE,
+    D3D11_1DDI_HT_VIDEOPROCESSORENUM,
+    D3D11_1DDI_HT_VIDEOPROCESSOR,
+    D3D11_1DDI_HT_VIDEODECODEROUTPUTVIEW,
+    D3D11_1DDI_HT_VIDEOPROCESSORINPUTVIEW,
+    D3D11_1DDI_HT_VIDEOPROCESSOROUTPUTVIEW,
+    D3DWDDM2_2DDI_HT_CACHESESSION
+} D3D11DDI_HANDLETYPE;
+
+WINE_DDI_STATIC_ASSERT(sizeof(D3D11DDI_HANDLETYPE) == 4,
+        "D3D11DDI_HANDLETYPE is a four-byte enum");
+WINE_DDI_STATIC_ASSERT(D3D10DDI_HT_RESOURCE == 0,
+        "the first handle type has value zero");
+WINE_DDI_STATIC_ASSERT(D3DWDDM2_2DDI_HT_CACHESESSION == 19,
+        "the published handle types remain contiguous");
+
+typedef struct D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE
+{
+    UINT Flags;
+} D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE;
+
+typedef struct D3D11DDI_HANDLESIZE
+{
+    D3D11DDI_HANDLETYPE HandleType;
+    UINT32              WinePad0;
+    SIZE_T              DriverPrivateSize;
+} D3D11DDI_HANDLESIZE;
+
+typedef struct D3D11DDIARG_CREATEDEFERREDCONTEXT
+{
+    union
+    {
+        D3DWDDM2_6DDI_DEVICEFUNCS *pWDDM2_6ContextFuncs;
+    };
+    D3D10DDI_HDEVICE      hDrvContext;
+    D3D10DDI_HRTCORELAYER hRTCoreLayer;
+    union
+    {
+        const D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS *pWDDM2_6UMCallbacks;
+    };
+    UINT   Flags;
+    UINT32 WinePad0;
+} D3D11DDIARG_CREATEDEFERREDCONTEXT;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE);
+WINE_DDI_ASSERT_SIZE(D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE, 4);
+WINE_DDI_ASSERT_ALIGN(D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE, 4);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE, Flags, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE, Flags, 4);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D11DDI_HANDLESIZE);
+WINE_DDI_ASSERT_SIZE(D3D11DDI_HANDLESIZE, 16);
+WINE_DDI_ASSERT_ALIGN(D3D11DDI_HANDLESIZE, 8);
+WINE_DDI_ASSERT_FIELD(D3D11DDI_HANDLESIZE, HandleType, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDI_HANDLESIZE, HandleType, 4);
+WINE_DDI_ASSERT_FIELD(D3D11DDI_HANDLESIZE, WinePad0, 4);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDI_HANDLESIZE, WinePad0, 4);
+WINE_DDI_ASSERT_FIELD(D3D11DDI_HANDLESIZE, DriverPrivateSize, 8);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDI_HANDLESIZE, DriverPrivateSize, 8);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D11DDIARG_CREATEDEFERREDCONTEXT);
+WINE_DDI_ASSERT_SIZE(D3D11DDIARG_CREATEDEFERREDCONTEXT, 40);
+WINE_DDI_ASSERT_ALIGN(D3D11DDIARG_CREATEDEFERREDCONTEXT, 8);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATEDEFERREDCONTEXT, pWDDM2_6ContextFuncs, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CREATEDEFERREDCONTEXT, pWDDM2_6ContextFuncs, 8);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATEDEFERREDCONTEXT, hDrvContext, 8);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CREATEDEFERREDCONTEXT, hDrvContext, 8);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATEDEFERREDCONTEXT, hRTCoreLayer, 16);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CREATEDEFERREDCONTEXT, hRTCoreLayer, 8);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATEDEFERREDCONTEXT, pWDDM2_6UMCallbacks, 24);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CREATEDEFERREDCONTEXT, pWDDM2_6UMCallbacks, 8);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATEDEFERREDCONTEXT, Flags, 32);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CREATEDEFERREDCONTEXT, Flags, 4);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATEDEFERREDCONTEXT, WinePad0, 36);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CREATEDEFERREDCONTEXT, WinePad0, 4);
+
+/*
+ * Group: resource creation and shared-resource opening arguments
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_createresource
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d11ddiarg_createresource
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_openresource
+ * Retrieved: 2026-09-08
+ *
+ * The resource structures contain pointers to specification-defined helper
+ * structures.  Those helpers are not yet needed by the promoted callbacks, so
+ * they remain incomplete here: a pointer preserves the ABI while preventing
+ * unverified field access.  The scalar enum-like values are represented as
+ * UINT, which records their published four-byte ABI without inventing enum
+ * members.  The D3D11 form appends ByteStride, DecoderBufferType, and
+ * TextureLayout to the D3D10 form.
+ */
+typedef struct D3D10DDI_MIPINFO D3D10DDI_MIPINFO;
+typedef struct D3D10_DDIARG_SUBRESOURCE_UP D3D10_DDIARG_SUBRESOURCE_UP;
+typedef struct DXGI_DDI_PRIMARY_DESC DXGI_DDI_PRIMARY_DESC;
+typedef struct D3DDDI_OPENALLOCATIONINFO D3DDDI_OPENALLOCATIONINFO;
+typedef struct D3DDDI_OPENALLOCATIONINFO2 D3DDDI_OPENALLOCATIONINFO2;
+typedef UINT D3D10DDIRESOURCE_TYPE;
+typedef UINT DXGI_FORMAT;
+typedef struct DXGI_SAMPLE_DESC
+{
+    UINT Count;
+    UINT Quality;
+} DXGI_SAMPLE_DESC;
+typedef UINT D3D11_1DDI_VIDEO_DECODER_BUFFER_TYPE;
+typedef UINT D3DWDDM2_0DDI_TEXTURE_LAYOUT;
+typedef void *D3D10DDI_HKMRESOURCE;
+
+typedef struct D3D10DDIARG_CREATERESOURCE
+{
+    const D3D10DDI_MIPINFO *pMipInfoList;
+    const D3D10_DDIARG_SUBRESOURCE_UP *pInitialDataUP;
+    D3D10DDIRESOURCE_TYPE ResourceDimension;
+    UINT Usage;
+    UINT BindFlags;
+    UINT MapFlags;
+    UINT MiscFlags;
+    DXGI_FORMAT Format;
+    DXGI_SAMPLE_DESC SampleDesc;
+    UINT MipLevels;
+    UINT ArraySize;
+    DXGI_DDI_PRIMARY_DESC *pPrimaryDesc;
+} D3D10DDIARG_CREATERESOURCE;
+
+typedef struct D3D11DDIARG_CREATERESOURCE
+{
+    const D3D10DDI_MIPINFO *pMipInfoList;
+    const D3D10_DDIARG_SUBRESOURCE_UP *pInitialDataUP;
+    D3D10DDIRESOURCE_TYPE ResourceDimension;
+    UINT Usage;
+    UINT BindFlags;
+    UINT MapFlags;
+    UINT MiscFlags;
+    DXGI_FORMAT Format;
+    DXGI_SAMPLE_DESC SampleDesc;
+    UINT MipLevels;
+    UINT ArraySize;
+    DXGI_DDI_PRIMARY_DESC *pPrimaryDesc;
+    UINT ByteStride;
+    D3D11_1DDI_VIDEO_DECODER_BUFFER_TYPE DecoderBufferType;
+    D3DWDDM2_0DDI_TEXTURE_LAYOUT TextureLayout;
+    UINT WinePad0;
+} D3D11DDIARG_CREATERESOURCE;
+
+typedef struct D3D10DDIARG_OPENRESOURCE
+{
+    UINT NumAllocations;
+    UINT WinePad0;
+    union
+    {
+        D3DDDI_OPENALLOCATIONINFO *pOpenAllocationInfo;
+        D3DDDI_OPENALLOCATIONINFO2 *pOpenAllocationInfo2;
+    };
+    D3D10DDI_HKMRESOURCE hKMResource;
+    void *pPrivateDriverData;
+    UINT PrivateDriverDataSize;
+    UINT WinePad1;
+} D3D10DDIARG_OPENRESOURCE;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDIARG_CREATERESOURCE);
+WINE_DDI_ASSERT_SIZE(D3D10DDIARG_CREATERESOURCE, 64);
+WINE_DDI_ASSERT_ALIGN(D3D10DDIARG_CREATERESOURCE, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATERESOURCE, pMipInfoList, 0);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATERESOURCE, pInitialDataUP, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATERESOURCE, ResourceDimension, 16);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATERESOURCE, Usage, 20);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATERESOURCE, BindFlags, 24);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATERESOURCE, MapFlags, 28);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATERESOURCE, MiscFlags, 32);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATERESOURCE, Format, 36);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATERESOURCE, SampleDesc, 40);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATERESOURCE, MipLevels, 48);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATERESOURCE, ArraySize, 52);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATERESOURCE, pPrimaryDesc, 56);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D11DDIARG_CREATERESOURCE);
+WINE_DDI_ASSERT_SIZE(D3D11DDIARG_CREATERESOURCE, 80);
+WINE_DDI_ASSERT_ALIGN(D3D11DDIARG_CREATERESOURCE, 8);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATERESOURCE, pMipInfoList, 0);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATERESOURCE, pInitialDataUP, 8);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATERESOURCE, ResourceDimension, 16);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATERESOURCE, Usage, 20);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATERESOURCE, BindFlags, 24);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATERESOURCE, MapFlags, 28);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATERESOURCE, MiscFlags, 32);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATERESOURCE, Format, 36);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATERESOURCE, SampleDesc, 40);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATERESOURCE, MipLevels, 48);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATERESOURCE, ArraySize, 52);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATERESOURCE, pPrimaryDesc, 56);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATERESOURCE, ByteStride, 64);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATERESOURCE, DecoderBufferType, 68);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATERESOURCE, TextureLayout, 72);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_CREATERESOURCE, WinePad0, 76);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDIARG_OPENRESOURCE);
+WINE_DDI_ASSERT_SIZE(D3D10DDIARG_OPENRESOURCE, 40);
+WINE_DDI_ASSERT_ALIGN(D3D10DDIARG_OPENRESOURCE, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENRESOURCE, NumAllocations, 0);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENRESOURCE, WinePad0, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENRESOURCE, pOpenAllocationInfo, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENRESOURCE, pOpenAllocationInfo2, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENRESOURCE, hKMResource, 16);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENRESOURCE, pPrivateDriverData, 24);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENRESOURCE, PrivateDriverDataSize, 32);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENRESOURCE, WinePad1, 36);
+
+/*
+ * Group: shader resource view and render target view creation arguments
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3dwddm2_0ddiarg_createshaderresourceview
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_buffer_shaderresourceview
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_tex1d_shaderresourceview
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3dwddm2_0ddiarg_tex2d_shaderresourceview
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_tex3d_shaderresourceview
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10_1ddiarg_texcube_shaderresourceview
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d11ddiarg_bufferex_shaderresourceview
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_createrendertargetview
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_buffer_rendertargetview
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_tex1d_rendertargetview
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_tex2d_rendertargetview
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_tex3d_rendertargetview
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_texcube_rendertargetview
+ * Retrieved: 2026-09-08
+ *
+ * The handles follow the documented convention (see the handle group above):
+ * a driver handle is pDrvPrivate, a runtime handle is handle.  Declared here,
+ * with the creation arguments, because this is the first group that needs
+ * them; no specification page collects the view handle pair the way the
+ * direct3d-version-10-runtime-and-driver-handles page collects the resource
+ * and adapter ones, so their members are a derivation from that same
+ * convention, not a quotation.
+ *
+ * D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW never received a published WDDM
+ * 2.0-named revision the way the SRV and UAV creation-argument structures
+ * did: the pinned driver's own signature (src/view.cpp) names its argument
+ * D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW, but both documentation surfaces
+ * 404 for that exact name.  Every field the driver reads through it --
+ * including TexCube.ArraySize, .FirstArraySlice and .MipSlice in
+ * GetTranslationDesc, which would have forced a revision had the base
+ * structure lacked them -- is already present on the published
+ * D3D10DDIARG_CREATERENDERTARGETVIEW and its arms.  The local type name
+ * follows the ABI call site; the fields are the cross-validated public ones,
+ * unchanged.
+ *
+ * The SRV TexCube arm has a genuine surface disagreement, investigated rather
+ * than picked arbitrarily.  The rendered syntax block for
+ * D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW types the arm
+ * D3D10_1DDIARG_TEXCUBE_SHADERRESOURCEVIEW (4 fields, with cube-array
+ * support), but the markdown mirror's member prose links the older, 2-field
+ * D3D10DDIARG_TEXCUBE_SHADERRESOURCEVIEW instead.  The pinned driver's
+ * GetTranslationDesc reads pDDIDesc->TexCube.First2DArrayFace and ->NumCubes
+ * for the TEXTURECUBE case, fields only the D3D10_1 arm has, so the rendered
+ * surface is what the ABI actually requires and the mirror's link is stale.
+ * Both arms' own pages were fetched directly to confirm this rather than
+ * guessing from the parent page's prose.
+ *
+ * Every other arm and every Buffer-shaped structure's FirstElement/
+ * ElementOffset and NumElements/ElementWidth pairs are anonymous unions of
+ * two names for one four-byte member, exactly as both surfaces print them;
+ * this header declares the name the pinned driver's CopyViewDimensions
+ * template reads (FirstElement, NumElements).
+ */
+typedef struct D3D10DDI_HSHADERRESOURCEVIEW
+{
+    void *pDrvPrivate;
+} D3D10DDI_HSHADERRESOURCEVIEW;
+
+typedef struct D3D10DDI_HRTSHADERRESOURCEVIEW
+{
+    void *handle;
+} D3D10DDI_HRTSHADERRESOURCEVIEW;
+
+typedef struct D3D10DDI_HRENDERTARGETVIEW
+{
+    void *pDrvPrivate;
+} D3D10DDI_HRENDERTARGETVIEW;
+
+typedef struct D3D10DDI_HRTRENDERTARGETVIEW
+{
+    void *handle;
+} D3D10DDI_HRTRENDERTARGETVIEW;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_HSHADERRESOURCEVIEW);
+WINE_DDI_ASSERT_SIZE(D3D10DDI_HSHADERRESOURCEVIEW, 8);
+WINE_DDI_ASSERT_ALIGN(D3D10DDI_HSHADERRESOURCEVIEW, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_HSHADERRESOURCEVIEW, pDrvPrivate, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_HSHADERRESOURCEVIEW, pDrvPrivate, 8);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_HRTSHADERRESOURCEVIEW);
+WINE_DDI_ASSERT_SIZE(D3D10DDI_HRTSHADERRESOURCEVIEW, 8);
+WINE_DDI_ASSERT_ALIGN(D3D10DDI_HRTSHADERRESOURCEVIEW, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_HRTSHADERRESOURCEVIEW, handle, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_HRTSHADERRESOURCEVIEW, handle, 8);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_HRENDERTARGETVIEW);
+WINE_DDI_ASSERT_SIZE(D3D10DDI_HRENDERTARGETVIEW, 8);
+WINE_DDI_ASSERT_ALIGN(D3D10DDI_HRENDERTARGETVIEW, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_HRENDERTARGETVIEW, pDrvPrivate, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_HRENDERTARGETVIEW, pDrvPrivate, 8);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_HRTRENDERTARGETVIEW);
+WINE_DDI_ASSERT_SIZE(D3D10DDI_HRTRENDERTARGETVIEW, 8);
+WINE_DDI_ASSERT_ALIGN(D3D10DDI_HRTRENDERTARGETVIEW, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_HRTRENDERTARGETVIEW, handle, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_HRTRENDERTARGETVIEW, handle, 8);
+
+typedef struct D3D10DDIARG_BUFFER_SHADERRESOURCEVIEW
+{
+    union
+    {
+        UINT FirstElement;
+    };
+    union
+    {
+        UINT NumElements;
+    };
+} D3D10DDIARG_BUFFER_SHADERRESOURCEVIEW;
+
+typedef struct D3D10DDIARG_TEX1D_SHADERRESOURCEVIEW
+{
+    UINT MostDetailedMip;
+    UINT FirstArraySlice;
+    UINT MipLevels;
+    UINT ArraySize;
+} D3D10DDIARG_TEX1D_SHADERRESOURCEVIEW;
+
+typedef struct D3DWDDM2_0DDIARG_TEX2D_SHADERRESOURCEVIEW
+{
+    UINT MostDetailedMip;
+    UINT FirstArraySlice;
+    UINT MipLevels;
+    UINT ArraySize;
+    UINT PlaneSlice;
+    UINT PlaneIndex;
+} D3DWDDM2_0DDIARG_TEX2D_SHADERRESOURCEVIEW;
+
+typedef struct D3D10DDIARG_TEX3D_SHADERRESOURCEVIEW
+{
+    UINT MostDetailedMip;
+    UINT MipLevels;
+} D3D10DDIARG_TEX3D_SHADERRESOURCEVIEW;
+
+typedef struct D3D10_1DDIARG_TEXCUBE_SHADERRESOURCEVIEW
+{
+    UINT MostDetailedMip;
+    UINT MipLevels;
+    UINT First2DArrayFace;
+    UINT NumCubes;
+} D3D10_1DDIARG_TEXCUBE_SHADERRESOURCEVIEW;
+
+typedef struct D3D11DDIARG_BUFFEREX_SHADERRESOURCEVIEW
+{
+    union
+    {
+        UINT FirstElement;
+    };
+    union
+    {
+        UINT NumElements;
+    };
+    UINT Flags;
+} D3D11DDIARG_BUFFEREX_SHADERRESOURCEVIEW;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDIARG_BUFFER_SHADERRESOURCEVIEW);
+WINE_DDI_ASSERT_SIZE(D3D10DDIARG_BUFFER_SHADERRESOURCEVIEW, 8);
+WINE_DDI_ASSERT_ALIGN(D3D10DDIARG_BUFFER_SHADERRESOURCEVIEW, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_BUFFER_SHADERRESOURCEVIEW, FirstElement, 0);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_BUFFER_SHADERRESOURCEVIEW, NumElements, 4);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDIARG_TEX1D_SHADERRESOURCEVIEW);
+WINE_DDI_ASSERT_SIZE(D3D10DDIARG_TEX1D_SHADERRESOURCEVIEW, 16);
+WINE_DDI_ASSERT_ALIGN(D3D10DDIARG_TEX1D_SHADERRESOURCEVIEW, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_TEX1D_SHADERRESOURCEVIEW, MostDetailedMip, 0);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_TEX1D_SHADERRESOURCEVIEW, FirstArraySlice, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_TEX1D_SHADERRESOURCEVIEW, MipLevels, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_TEX1D_SHADERRESOURCEVIEW, ArraySize, 12);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3DWDDM2_0DDIARG_TEX2D_SHADERRESOURCEVIEW);
+WINE_DDI_ASSERT_SIZE(D3DWDDM2_0DDIARG_TEX2D_SHADERRESOURCEVIEW, 24);
+WINE_DDI_ASSERT_ALIGN(D3DWDDM2_0DDIARG_TEX2D_SHADERRESOURCEVIEW, 4);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_TEX2D_SHADERRESOURCEVIEW, MostDetailedMip, 0);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_TEX2D_SHADERRESOURCEVIEW, FirstArraySlice, 4);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_TEX2D_SHADERRESOURCEVIEW, MipLevels, 8);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_TEX2D_SHADERRESOURCEVIEW, ArraySize, 12);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_TEX2D_SHADERRESOURCEVIEW, PlaneSlice, 16);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_TEX2D_SHADERRESOURCEVIEW, PlaneIndex, 20);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDIARG_TEX3D_SHADERRESOURCEVIEW);
+WINE_DDI_ASSERT_SIZE(D3D10DDIARG_TEX3D_SHADERRESOURCEVIEW, 8);
+WINE_DDI_ASSERT_ALIGN(D3D10DDIARG_TEX3D_SHADERRESOURCEVIEW, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_TEX3D_SHADERRESOURCEVIEW, MostDetailedMip, 0);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_TEX3D_SHADERRESOURCEVIEW, MipLevels, 4);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10_1DDIARG_TEXCUBE_SHADERRESOURCEVIEW);
+WINE_DDI_ASSERT_SIZE(D3D10_1DDIARG_TEXCUBE_SHADERRESOURCEVIEW, 16);
+WINE_DDI_ASSERT_ALIGN(D3D10_1DDIARG_TEXCUBE_SHADERRESOURCEVIEW, 4);
+WINE_DDI_ASSERT_FIELD(D3D10_1DDIARG_TEXCUBE_SHADERRESOURCEVIEW, MostDetailedMip, 0);
+WINE_DDI_ASSERT_FIELD(D3D10_1DDIARG_TEXCUBE_SHADERRESOURCEVIEW, MipLevels, 4);
+WINE_DDI_ASSERT_FIELD(D3D10_1DDIARG_TEXCUBE_SHADERRESOURCEVIEW, First2DArrayFace, 8);
+WINE_DDI_ASSERT_FIELD(D3D10_1DDIARG_TEXCUBE_SHADERRESOURCEVIEW, NumCubes, 12);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D11DDIARG_BUFFEREX_SHADERRESOURCEVIEW);
+WINE_DDI_ASSERT_SIZE(D3D11DDIARG_BUFFEREX_SHADERRESOURCEVIEW, 12);
+WINE_DDI_ASSERT_ALIGN(D3D11DDIARG_BUFFEREX_SHADERRESOURCEVIEW, 4);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_BUFFEREX_SHADERRESOURCEVIEW, FirstElement, 0);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_BUFFEREX_SHADERRESOURCEVIEW, NumElements, 4);
+WINE_DDI_ASSERT_FIELD(D3D11DDIARG_BUFFEREX_SHADERRESOURCEVIEW, Flags, 8);
+
+typedef struct D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW
+{
+    D3D10DDI_HRESOURCE hDrvResource;
+    DXGI_FORMAT Format;
+    D3D10DDIRESOURCE_TYPE ResourceDimension;
+    union
+    {
+        D3D10DDIARG_BUFFER_SHADERRESOURCEVIEW Buffer;
+        D3D10DDIARG_TEX1D_SHADERRESOURCEVIEW Tex1D;
+        D3DWDDM2_0DDIARG_TEX2D_SHADERRESOURCEVIEW Tex2D;
+        D3D10DDIARG_TEX3D_SHADERRESOURCEVIEW Tex3D;
+        D3D10_1DDIARG_TEXCUBE_SHADERRESOURCEVIEW TexCube;
+        D3D11DDIARG_BUFFEREX_SHADERRESOURCEVIEW BufferEx;
+    };
+} D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW);
+WINE_DDI_ASSERT_SIZE(D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW, 40);
+WINE_DDI_ASSERT_ALIGN(D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW, 8);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW, hDrvResource, 0);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW, Format, 8);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW, ResourceDimension, 12);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW, Buffer, 16);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW, Tex1D, 16);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW, Tex2D, 16);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW, Tex3D, 16);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW, TexCube, 16);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW, BufferEx, 16);
+
+typedef struct D3D10DDIARG_BUFFER_RENDERTARGETVIEW
+{
+    union
+    {
+        UINT FirstElement;
+    };
+    union
+    {
+        UINT NumElements;
+    };
+} D3D10DDIARG_BUFFER_RENDERTARGETVIEW;
+
+typedef struct D3D10DDIARG_TEX1D_RENDERTARGETVIEW
+{
+    UINT MipSlice;
+    UINT FirstArraySlice;
+    UINT ArraySize;
+} D3D10DDIARG_TEX1D_RENDERTARGETVIEW;
+
+typedef struct D3D10DDIARG_TEX2D_RENDERTARGETVIEW
+{
+    UINT MipSlice;
+    UINT FirstArraySlice;
+    UINT ArraySize;
+} D3D10DDIARG_TEX2D_RENDERTARGETVIEW;
+
+typedef struct D3D10DDIARG_TEX3D_RENDERTARGETVIEW
+{
+    UINT MipSlice;
+    UINT FirstW;
+    UINT WSize;
+} D3D10DDIARG_TEX3D_RENDERTARGETVIEW;
+
+typedef struct D3D10DDIARG_TEXCUBE_RENDERTARGETVIEW
+{
+    UINT MipSlice;
+    UINT FirstArraySlice;
+    UINT ArraySize;
+} D3D10DDIARG_TEXCUBE_RENDERTARGETVIEW;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDIARG_BUFFER_RENDERTARGETVIEW);
+WINE_DDI_ASSERT_SIZE(D3D10DDIARG_BUFFER_RENDERTARGETVIEW, 8);
+WINE_DDI_ASSERT_ALIGN(D3D10DDIARG_BUFFER_RENDERTARGETVIEW, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_BUFFER_RENDERTARGETVIEW, FirstElement, 0);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_BUFFER_RENDERTARGETVIEW, NumElements, 4);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDIARG_TEX1D_RENDERTARGETVIEW);
+WINE_DDI_ASSERT_SIZE(D3D10DDIARG_TEX1D_RENDERTARGETVIEW, 12);
+WINE_DDI_ASSERT_ALIGN(D3D10DDIARG_TEX1D_RENDERTARGETVIEW, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_TEX1D_RENDERTARGETVIEW, MipSlice, 0);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_TEX1D_RENDERTARGETVIEW, FirstArraySlice, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_TEX1D_RENDERTARGETVIEW, ArraySize, 8);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDIARG_TEX2D_RENDERTARGETVIEW);
+WINE_DDI_ASSERT_SIZE(D3D10DDIARG_TEX2D_RENDERTARGETVIEW, 12);
+WINE_DDI_ASSERT_ALIGN(D3D10DDIARG_TEX2D_RENDERTARGETVIEW, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_TEX2D_RENDERTARGETVIEW, MipSlice, 0);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_TEX2D_RENDERTARGETVIEW, FirstArraySlice, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_TEX2D_RENDERTARGETVIEW, ArraySize, 8);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDIARG_TEX3D_RENDERTARGETVIEW);
+WINE_DDI_ASSERT_SIZE(D3D10DDIARG_TEX3D_RENDERTARGETVIEW, 12);
+WINE_DDI_ASSERT_ALIGN(D3D10DDIARG_TEX3D_RENDERTARGETVIEW, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_TEX3D_RENDERTARGETVIEW, MipSlice, 0);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_TEX3D_RENDERTARGETVIEW, FirstW, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_TEX3D_RENDERTARGETVIEW, WSize, 8);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDIARG_TEXCUBE_RENDERTARGETVIEW);
+WINE_DDI_ASSERT_SIZE(D3D10DDIARG_TEXCUBE_RENDERTARGETVIEW, 12);
+WINE_DDI_ASSERT_ALIGN(D3D10DDIARG_TEXCUBE_RENDERTARGETVIEW, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_TEXCUBE_RENDERTARGETVIEW, MipSlice, 0);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_TEXCUBE_RENDERTARGETVIEW, FirstArraySlice, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_TEXCUBE_RENDERTARGETVIEW, ArraySize, 8);
+
+typedef struct D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW
+{
+    D3D10DDI_HRESOURCE hDrvResource;
+    DXGI_FORMAT Format;
+    D3D10DDIRESOURCE_TYPE ResourceDimension;
+    union
+    {
+        D3D10DDIARG_BUFFER_RENDERTARGETVIEW Buffer;
+        D3D10DDIARG_TEX1D_RENDERTARGETVIEW Tex1D;
+        D3D10DDIARG_TEX2D_RENDERTARGETVIEW Tex2D;
+        D3D10DDIARG_TEX3D_RENDERTARGETVIEW Tex3D;
+        D3D10DDIARG_TEXCUBE_RENDERTARGETVIEW TexCube;
+    };
+    UINT32 WinePad0;
+} D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW);
+WINE_DDI_ASSERT_SIZE(D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW, 32);
+WINE_DDI_ASSERT_ALIGN(D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW, 8);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW, hDrvResource, 0);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW, Format, 8);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW, ResourceDimension, 12);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW, Buffer, 16);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW, Tex1D, 16);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW, Tex2D, 16);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW, Tex3D, 16);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW, TexCube, 16);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW, WinePad0, 28);
+
+/*
+ * Group: shader object handles
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/display/direct3d-version-10-runtime-and-driver-handles
+ * Retrieved: 2026-09-08
+ *
+ * The handles follow the documented convention (see the object-handle group
+ * above): a driver handle is pDrvPrivate, a runtime handle is handle. One
+ * pair covers every shader stage -- vertex, pixel, geometry, hull, domain,
+ * and compute all share D3D10DDI_HSHADER and D3D10DDI_HRTSHADER on every
+ * documented create/destroy page -- so it is declared once here, with the
+ * first two stages this header promotes.
+ *
+ * D3D11_1DDIARG_STAGE_IO_SIGNATURES is the other type CreateVertexShader and
+ * CreatePixelShader take, but only ever behind a pointer: no promoted slot
+ * dereferences it, so per the resource group's precedent (D3D10DDI_MIPINFO
+ * and its neighbours) it stays an incomplete forward declaration rather than
+ * an unverified layout.
+ */
+typedef struct D3D10DDI_HSHADER
+{
+    void *pDrvPrivate;
+} D3D10DDI_HSHADER;
+
+typedef struct D3D10DDI_HRTSHADER
+{
+    void *handle;
+} D3D10DDI_HRTSHADER;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_HSHADER);
+WINE_DDI_ASSERT_SIZE(D3D10DDI_HSHADER, 8);
+WINE_DDI_ASSERT_ALIGN(D3D10DDI_HSHADER, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_HSHADER, pDrvPrivate, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_HSHADER, pDrvPrivate, 8);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_HRTSHADER);
+WINE_DDI_ASSERT_SIZE(D3D10DDI_HRTSHADER, 8);
+WINE_DDI_ASSERT_ALIGN(D3D10DDI_HRTSHADER, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_HRTSHADER, handle, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_HRTSHADER, handle, 8);
+
+typedef struct D3D11_1DDIARG_STAGE_IO_SIGNATURES D3D11_1DDIARG_STAGE_IO_SIGNATURES;
+
 /*
  * Group: WDDM 2.6 device function table
  * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3dwddm2_6ddi_devicefuncs
@@ -1194,9 +1863,8 @@ WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDI_HCOMMANDLIST, pDrvPrivate, 8);
  * accidental calls a compile error while keeping promotion local to one
  * typedef at a time.
  *
- * Four typedefs are promoted, covering five slots.  They are the command-list
- * family whose parameters are handles and nothing else, so they need only the
- * group above and no argument structure; each is quoted from its own
+ * Twelve typedefs are promoted, covering thirteen slots. They are the
+ * command-list and deferred-context creation families; each is quoted from its own
  * reference page, cited beside it.  Promotion moves no offset -- a promoted
  * function pointer is still a function pointer, and the table's size and
  * every slot's offset are asserted unchanged below, which is the point of
@@ -1211,11 +1879,9 @@ WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDI_HCOMMANDLIST, pDrvPrivate, 8);
  * is the declaration this header already carried and which the
  * DestroyCommandList page sanctions: it states that a driver may set
  * pfnRecycleDestroyCommandList to point at its DestroyCommandList, so the two
- * members take one type.  Nothing else in the family is promotable yet.
+ * members take one type.
  * pfnRecycleDestroyCommandList has no reference page of its own -- the URL
- * its siblings would predict returns 404 -- and pfnCreateCommandList,
- * pfnCalcPrivateCommandListSize and pfnRecycleCreateCommandList all take
- * D3D11DDIARG_CREATECOMMANDLIST, which is a group of its own and unauthored.
+ * its siblings would predict returns 404.
  */
 
 /* The promoted command-list signatures.  Each returns nothing and reports
@@ -1245,6 +1911,210 @@ typedef VOID (*PFND3D11DDI_DESTROYCOMMANDLIST)(
 typedef VOID (*PFND3D11DDI_RECYCLECOMMANDLIST)(
         D3D10DDI_HDEVICE hDevice,
         D3D11DDI_HCOMMANDLIST hCommandList);
+
+/* https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_calcprivatecommandlistsize */
+typedef SIZE_T (*PFND3D11DDI_CALCPRIVATECOMMANDLISTSIZE)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CREATECOMMANDLIST *pCreateCommandList);
+
+/* https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_createcommandlist */
+typedef VOID (*PFND3D11DDI_CREATECOMMANDLIST)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CREATECOMMANDLIST *pCreateCommandList,
+        D3D11DDI_HCOMMANDLIST hCommandList,
+        D3D11DDI_HRTCOMMANDLIST hRTCommandList);
+
+/* https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_recyclecreatecommandlist */
+typedef HRESULT (*PFND3D11DDI_RECYCLECREATECOMMANDLIST)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CREATECOMMANDLIST *pCreateCommandList,
+        D3D11DDI_HCOMMANDLIST hCommandList,
+        D3D11DDI_HRTCOMMANDLIST hRTCommandList);
+
+/* https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_checkdeferredcontexthandlesizes */
+typedef VOID (*PFND3D11DDI_CHECKDEFERREDCONTEXTHANDLESIZES)(
+        D3D10DDI_HDEVICE hDevice,
+        UINT *pHSizes,
+        D3D11DDI_HANDLESIZE *pHandleSize);
+
+/* https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_calcdeferredcontexthandlesize */
+typedef SIZE_T (*PFND3D11DDI_CALCDEFERREDCONTEXTHANDLESIZE)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D11DDI_HANDLETYPE HandleType,
+        VOID *pICObject);
+
+/* https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_calcprivatedeferredcontextsize */
+typedef SIZE_T (*PFND3D11DDI_CALCPRIVATEDEFERREDCONTEXTSIZE)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE *pCalcPrivateDeferredContextSize);
+
+/* https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_createdeferredcontext */
+typedef VOID (*PFND3D11DDI_CREATEDEFERREDCONTEXT)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CREATEDEFERREDCONTEXT *pCreateDeferredContext);
+
+/* https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_recyclecreatedeferredcontext */
+typedef HRESULT (*PFND3D11DDI_RECYCLECREATEDEFERREDCONTEXT)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CREATEDEFERREDCONTEXT *pCreateDeferredContext);
+
+/* Resource-family signatures, authored from the public callback pages. */
+typedef SIZE_T (*PFND3D11DDI_CALCPRIVATERESOURCESIZE)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CREATERESOURCE *pCreateResource);
+
+typedef SIZE_T (*PFND3D10DDI_CALCPRIVATEOPENEDRESOURCESIZE)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D10DDIARG_OPENRESOURCE *pOpenResource);
+
+typedef VOID (*PFND3D11DDI_CREATERESOURCE)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CREATERESOURCE *pCreateResource,
+        D3D10DDI_HRESOURCE hResource,
+        D3D10DDI_HRTRESOURCE hRTResource);
+
+typedef VOID (*PFND3D10DDI_OPENRESOURCE)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D10DDIARG_OPENRESOURCE *pOpenResource,
+        D3D10DDI_HRESOURCE hResource,
+        D3D10DDI_HRTRESOURCE hRTResource);
+
+typedef VOID (*PFND3D10DDI_DESTROYRESOURCE)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRESOURCE hResource);
+
+/*
+ * Group: base pipeline state callbacks
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddi_devicefuncs
+ * Retrieved: 2026-09-08
+ *
+ * Companion callback specifications:
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11_1ddi_createblendstate
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_createdepthstencilstate
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11_1ddi_createrasterizerstate
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_createsampler
+ *
+ * The descriptor structures remain opaque until their nested enum and array
+ * groups are authored.  A pointer to an incomplete type is ABI-complete and
+ * keeps callers from reading fields that this clean-room header has not yet
+ * derived.  The object handles are declared above and asserted as wrapped
+ * pointers, matching the resource and command-list handle convention.
+ */
+typedef SIZE_T (*PFND3D11_1DDI_CALCPRIVATEBLENDSTATESIZE)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D11_1_DDI_BLEND_DESC *pBlendDesc);
+
+typedef VOID (*PFND3D11_1DDI_CREATEBLENDSTATE)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D11_1_DDI_BLEND_DESC *pBlendDesc,
+        D3D10DDI_HBLENDSTATE hBlendState,
+        D3D10DDI_HRTBLENDSTATE hRTBlendState);
+
+typedef VOID (*PFND3D10DDI_DESTROYBLENDSTATE)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HBLENDSTATE hBlendState);
+
+typedef SIZE_T (*PFND3D10DDI_CALCPRIVATEDEPTHSTENCILSTATESIZE)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D10_DDI_DEPTH_STENCIL_DESC *pDepthStencilDesc);
+
+typedef VOID (*PFND3D10DDI_CREATEDEPTHSTENCILSTATE)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D10_DDI_DEPTH_STENCIL_DESC *pDepthStencilDesc,
+        D3D10DDI_HDEPTHSTENCILSTATE hDepthStencilState,
+        D3D10DDI_HRTDEPTHSTENCILSTATE hRTDepthStencilState);
+
+typedef VOID (*PFND3D10DDI_DESTROYDEPTHSTENCILSTATE)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HDEPTHSTENCILSTATE hDepthStencilState);
+
+typedef SIZE_T (*PFND3DWDDM2_0DDI_CALCPRIVATERASTERIZERSTATESIZE)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D11_1_DDI_RASTERIZER_DESC *pRasterizerDesc);
+
+typedef VOID (*PFND3DWDDM2_0DDI_CREATERASTERIZERSTATE)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D11_1_DDI_RASTERIZER_DESC *pRasterizerDesc,
+        D3D10DDI_HRASTERIZERSTATE hRasterizerState,
+        D3D10DDI_HRTRASTERIZERSTATE hRTRasterizerState);
+
+typedef VOID (*PFND3D10DDI_DESTROYRASTERIZERSTATE)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRASTERIZERSTATE hRasterizerState);
+
+typedef SIZE_T (*PFND3D10DDI_CALCPRIVATESAMPLERSIZE)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D10_DDI_SAMPLER_DESC *pSamplerDesc);
+
+typedef VOID (*PFND3D10DDI_CREATESAMPLER)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D10_DDI_SAMPLER_DESC *pSamplerDesc,
+        D3D10DDI_HSAMPLER hSampler,
+        D3D10DDI_HRTSAMPLER hRTSampler);
+
+typedef VOID (*PFND3D10DDI_DESTROYSAMPLER)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HSAMPLER hSampler);
+
+/* View-family signatures, authored from the public callback pages.  The
+ * render target pair has no published WDDM 2.0-named callback page (see the
+ * group's provenance note); the base D3D10-era CalcPrivateRenderTargetView
+ * and CreateRenderTargetView pages describe the identical parameter list. */
+typedef SIZE_T (*PFND3DWDDM2_0DDI_CALCPRIVATESHADERRESOURCEVIEWSIZE)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW *pCreateShaderResourceView);
+
+typedef VOID (*PFND3DWDDM2_0DDI_CREATESHADERRESOURCEVIEW)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW *pCreateShaderResourceView,
+        D3D10DDI_HSHADERRESOURCEVIEW hShaderResourceView,
+        D3D10DDI_HRTSHADERRESOURCEVIEW hRTShaderResourceView);
+
+typedef VOID (*PFND3D10DDI_DESTROYSHADERRESOURCEVIEW)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HSHADERRESOURCEVIEW hShaderResourceView);
+
+typedef SIZE_T (*PFND3DWDDM2_0DDI_CALCPRIVATERENDERTARGETVIEWSIZE)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW *pCreateRenderTargetView);
+
+typedef VOID (*PFND3DWDDM2_0DDI_CREATERENDERTARGETVIEW)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW *pCreateRenderTargetView,
+        D3D10DDI_HRENDERTARGETVIEW hRenderTargetView,
+        D3D10DDI_HRTRENDERTARGETVIEW hRTRenderTargetView);
+
+typedef VOID (*PFND3D10DDI_DESTROYRENDERTARGETVIEW)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRENDERTARGETVIEW hRenderTargetView);
+
+/* Shader-family signatures, authored from the public callback pages.
+ * pfnCalcPrivateShaderSize and pfnDestroyShader are shared by every shader
+ * stage, not just the two promoted here; the geometry/hull/domain/compute
+ * create slots stay behind placeholders until their own argument types are
+ * authored. */
+typedef SIZE_T (*PFND3D11_1DDI_CALCPRIVATESHADERSIZE)(
+        D3D10DDI_HDEVICE hDevice,
+        const UINT *pShaderCode,
+        const D3D11_1DDIARG_STAGE_IO_SIGNATURES *pSignatures);
+
+typedef VOID (*PFND3D11_1DDI_CREATEVERTEXSHADER)(
+        D3D10DDI_HDEVICE hDevice,
+        const UINT *pShaderCode,
+        D3D10DDI_HSHADER hShader,
+        D3D10DDI_HRTSHADER hRTShader,
+        const D3D11_1DDIARG_STAGE_IO_SIGNATURES *pSignatures);
+
+typedef VOID (*PFND3D11_1DDI_CREATEPIXELSHADER)(
+        D3D10DDI_HDEVICE hDevice,
+        const UINT *pShaderCode,
+        D3D10DDI_HSHADER hShader,
+        D3D10DDI_HRTSHADER hRTShader,
+        const D3D11_1DDIARG_STAGE_IO_SIGNATURES *pSignatures);
+
+typedef VOID (*PFND3D10DDI_DESTROYSHADER)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HSHADER hShader);
 
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_RESOURCEUPDATESUBRESOURCEUP;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_SETCONSTANTBUFFERS;
@@ -1284,42 +2154,15 @@ typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCECOPY;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCERESOLVESUBRESOURCE;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCEISSTAGINGBUSY;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_6DDI_RELOCATEDEVICEFUNCS;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CALCPRIVATERESOURCESIZE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CALCPRIVATEOPENEDRESOURCESIZE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CREATERESOURCE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_OPENRESOURCE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYRESOURCE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_CALCPRIVATESHADERRESOURCEVIEWSIZE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_CREATESHADERRESOURCEVIEW;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYSHADERRESOURCEVIEW;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_CALCPRIVATERENDERTARGETVIEWSIZE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_CREATERENDERTARGETVIEW;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYRENDERTARGETVIEW;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CALCPRIVATEDEPTHSTENCILVIEWSIZE;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CREATEDEPTHSTENCILVIEW;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYDEPTHSTENCILVIEW;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CALCPRIVATEELEMENTLAYOUTSIZE;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CREATEELEMENTLAYOUT;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYELEMENTLAYOUT;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CALCPRIVATEBLENDSTATESIZE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CREATEBLENDSTATE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYBLENDSTATE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CALCPRIVATEDEPTHSTENCILSTATESIZE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CREATEDEPTHSTENCILSTATE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYDEPTHSTENCILSTATE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_CALCPRIVATERASTERIZERSTATESIZE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_CREATERASTERIZERSTATE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYRASTERIZERSTATE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CALCPRIVATESHADERSIZE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CREATEVERTEXSHADER;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CREATEGEOMETRYSHADER;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CREATEPIXELSHADER;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CALCPRIVATEGEOMETRYSHADERWITHSTREAMOUTPUT;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CREATEGEOMETRYSHADERWITHSTREAMOUTPUT;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYSHADER;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CALCPRIVATESAMPLERSIZE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CREATESAMPLER;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYSAMPLER;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_CALCPRIVATEQUERYSIZE;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_CREATEQUERY;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYQUERY;
@@ -1335,12 +2178,6 @@ typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_DRAWINDEXEDINSTANCEDINDIRECT;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_DRAWINSTANCEDINDIRECT;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CREATEHULLSHADER;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CREATEDOMAINSHADER;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CHECKDEFERREDCONTEXTHANDLESIZES;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CALCDEFERREDCONTEXTHANDLESIZE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CALCPRIVATEDEFERREDCONTEXTSIZE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CREATEDEFERREDCONTEXT;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CALCPRIVATECOMMANDLISTSIZE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CREATECOMMANDLIST;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CALCPRIVATETESSELLATIONSHADERSIZE;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_SETSHADER_WITH_IFACES;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CREATECOMPUTESHADER;
@@ -1354,8 +2191,6 @@ typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_DISPATCH;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_DISPATCHINDIRECT;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_SETRESOURCEMINLOD;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_COPYSTRUCTURECOUNT;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_RECYCLECREATECOMMANDLIST;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_RECYCLECREATEDEFERREDCONTEXT;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_DISCARD;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_ASSIGNDEBUGBINARY;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CHECKDIRECTFLIPSUPPORT;
