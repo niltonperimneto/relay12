@@ -31,6 +31,7 @@ import check_interface_acquisition  # noqa: E402
 import check_pe_audit  # noqa: E402
 import check_shared_state  # noqa: E402
 import gen_ddi_layout  # noqa: E402
+import inventory_dtl_portability  # noqa: E402
 
 DDI_HEADER = REPOSITORY / "relay12-d3d11" / "ddi" / "wine_d3d11ddi.h"
 
@@ -70,6 +71,40 @@ class D3D11On12PortGate(unittest.TestCase):
     def test_comment_only_mentions_do_not_trip_the_gate(self):
         source = "// CComPtr<IUnknown> was removed\nint value; // _com_error"
         self.assertEqual(check_d3d11on12_port.check_source("notes.cpp", source), [])
+
+
+class DtlPortabilityInventory(unittest.TestCase):
+    def test_comments_do_not_inflate_the_inventory(self):
+        source = "CComPtr<IUnknown> live; // CComPtr<IUnknown> old\n/* _com_error */"
+        stripped = inventory_dtl_portability.without_comments(source)
+        self.assertEqual(
+            len(inventory_dtl_portability.PATTERNS["atl_com_ptr"].findall(stripped)),
+            1)
+        self.assertNotIn("_com_error", stripped)
+
+    def test_inventory_records_occurrences_and_locations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "include").mkdir()
+            (root / "include" / "probe.hpp").write_text(
+                "#include <atlbase.h>\nCComPtr<IUnknown> first, second;")
+            result = inventory_dtl_portability.inventory(root, revision="probe")
+        self.assertEqual(result["revision"], "probe")
+        self.assertEqual(result["categories"]["atl_headers"]["occurrences"], 1)
+        self.assertEqual(result["categories"]["atl_com_ptr"]["files"],
+                         {"include/probe.hpp": 1})
+
+    def test_new_blocker_changes_the_baseline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "src").mkdir()
+            path = root / "src" / "probe.cpp"
+            path.write_text("int portable;")
+            before = inventory_dtl_portability.inventory(root)
+            path.write_text("throw _com_error(E_FAIL);")
+            after = inventory_dtl_portability.inventory(root)
+        self.assertNotEqual(before, after)
+        self.assertEqual(after["categories"]["com_error"]["occurrences"], 1)
 
 
 class DdiHeaderGate(unittest.TestCase):
