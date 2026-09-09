@@ -51,6 +51,14 @@ jobs:
             -o "$RUNNER_TEMP/relay_com_ptr_test"
           "$RUNNER_TEMP/relay_com_ptr_test"
 
+      - name: Measure the pinned D3D12TranslationLayer portability baseline
+        run: |
+          set -euo pipefail
+          worktree="$RUNNER_TEMP/dtl-port-source"
+          git clone --quiet --no-hardlinks third_party/D3D12TranslationLayer "$worktree"
+          scripts/prepare-dtl-source.sh "$worktree"
+          git -C "$worktree" diff --check
+
       - name: Test the gates
         run: |
           set -euo pipefail
@@ -94,6 +102,25 @@ jobs:
           # diagnostic to an application that handles DBG_PRINTEXCEPTION_C.
           if ! grep -q '__wine_dbg_output' winecx/dlls/ntdll/ntdll.spec; then
             echo 'the pinned Wine no longer exports __wine_dbg_output' >&2
+            exit 1
+          fi
+
+      - name: Pin the current D3D12TranslationLayer compiler boundary
+        run: |
+          set -euo pipefail
+          worktree="$RUNNER_TEMP/dtl-port-source"
+          diagnostics="$RUNNER_TEMP/dtl-dependency-probe.log"
+          if x86_64-w64-mingw32-g++ -std=c++17 -Wall -Wextra -Werror \
+              -I"$worktree/include" -I"$worktree/external" \
+              -Ithird_party/DirectX-Headers/include \
+              -fsyntax-only tests/dtl_dependency_probe.cpp \
+              >"$diagnostics" 2>&1; then
+            echo 'DTL dependency probe unexpectedly compiled; advance the milestone' >&2
+            exit 1
+          fi
+          if ! grep -Eq 'atlbase[.]h.*(No such file|file not found)' "$diagnostics"; then
+            cat "$diagnostics" >&2
+            echo 'DTL failed before or after the recorded ATL boundary' >&2
             exit 1
           fi
 
