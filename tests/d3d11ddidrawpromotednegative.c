@@ -23,3 +23,10 @@ void set_input_layout_with_the_wrong_handle(
 {
     funcs->pfnIaSetInputLayout(hDevice, wrongHandle);
 }
+
+void map_with_the_wrong_output_type(D3DWDDM2_6DDI_DEVICEFUNCS *funcs,
+        D3D10DDI_HDEVICE hDevice, D3D10DDI_HRESOURCE resource,
+        D3D10DDI_HSHADER *wrongOutput)
+{
+    funcs->pfnResourceMap(hDevice, resource, 0, 0, 0, wrongOutput);
+}
