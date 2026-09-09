@@ -47,6 +47,15 @@ The next authoring phase must strictly promote and implement only:
 1. **Resource Management:** `CreateResource`, `OpenResource` — done, see `docs/DDI-REMAINING-ROADMAP.md` §3.1.
 2. **Basic Views:** `CreateRenderTargetView`, `CreateShaderResourceView` — done, see `docs/DDI-REMAINING-ROADMAP.md` §3.1. Depth-stencil and unordered-access views are deliberately not part of this pair and stay unpromoted.
 3. **Core Shaders:** `CreateVertexShader`, `CreatePixelShader` — done, see `docs/DDI-REMAINING-ROADMAP.md` §3.1. Geometry, hull, domain, and compute shader creation are deliberately not part of this pair and stay unpromoted.
-4. **Base Pipeline State:** Blend, Depth-Stencil, Rasterizer, and Sampler bounds.
+4. **Base Pipeline State:** Blend, Depth-Stencil, Rasterizer, and Sampler bounds — done, see `docs/DDI-REMAINING-ROADMAP.md` §3.1.
 
 Everything else must remain locked inside `PFNWINE_D3D11DDI_UNDECLARED_CB` placeholders, allowing the compiler to statically enforce their absence while the core rendering loop is brought online.
+
+## After creation: the frame
+
+All four items above are now authored, and the group that consumes them has followed — element layout, input-assembly binding, shader binding, render-target binding, viewports, the three state binds, the clear, and the draw. `tests/d3d11ddi_triangle.c` drives them in frame order and checks the handles flow from each creation to the binding that consumes it, so the "Triangle on Screen" path is expressible against the declarations end to end.
+
+Two things stand between that and a triangle:
+
+1. **Readback.** `pfnResourceMap`, `pfnResourceUnmap` and `pfnResourceCopy` are still placeholders. Promoting them needs `D3D10_DDI_MAP` and a fully modelled `D3D10DDI_MAPPED_SUBRESOURCE` — the first structure in this effort whose members a test must actually read, so it cannot stay an incomplete type.
+2. **A host.** Nothing stands behind the function table: `relay12-d3d11/d3d11on12core.cpp` still reports the device as validated but not translated. Declarations and harnesses are not an implementation, and no test in this repository currently claims otherwise.

@@ -1,41 +1,61 @@
-name: "GPTK4 D3D11->Metal E2E Integration"
+name: "GPTK D3D11->Metal E2E (manual, not yet executable)"
 
+# Manual only, and deliberately so.  This job cross-compiles the application-
+# level E2E harnesses and stops before running them, because there is nothing
+# to run them against yet: relay12-d3d11/d3d11on12core.cpp reports the device
+# as "validated but not yet translated to the DDI's create-device path", so no
+# host stands behind the DDI function table.  A run would fail at
+# D3D11CreateDevice for a reason that has nothing to do with the change under
+# test.
+#
+# It is not a pull_request trigger and it does not report a pass.  The gating
+# DDI coverage lives in pull-request.yml, whose triangle harness exercises the
+# promoted surface under Wine; this job exists so the harnesses that will
+# eventually replace it do not rot in the meantime.
 on:
-  pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  e2e-matrix-test:
+  build-e2e-harnesses:
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - name: Install Rosetta & Dependencies
-        run: |
-          /usr/sbin/softwareupdate --install-rosetta --agree-to-license || true
-          arch -x86_64 /usr/bin/true && echo "rosetta ok"
-          brew install mingw-w64 wget
+      - name: Install MinGW-w64
+        run: brew install mingw-w64
 
-      - name: Compile E2E Harness (MinGW)
+      - name: Cross-compile the E2E harnesses
         run: |
-          # Cross compile the E2E Windows application 
-          x86_64-w64-mingw32-g++ -O2 -o d3d11_e2e_harness.exe tests/e2e_d3d11_harness.cpp -ld3d11 -ld3dcompiler
+          set -euo pipefail
+          # The triangle harness is the MVP target: VS+PS, one render target,
+          # a draw, and a staging readback.  It mirrors, at the application
+          # level, what tests/d3d11ddi_triangle.c asserts at the DDI level.
+          x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Werror \
+            -o d3d11_e2e_triangle.exe tests/e2e_d3d11_triangle.cpp \
+            -ld3d11 -ld3dcompiler -ldxgi -luuid
+          # The compute harness is kept as a future target.  It exercises a
+          # compute shader and a UAV, neither of which is in the MVP scope
+          # described by docs/D3D11ON12-SKIPPABLE-ELEMENTS.md, so it will stay
+          # unrunnable for longer than the triangle does.
+          x86_64-w64-mingw32-g++ -std=c++17 -O2 \
+            -o d3d11_e2e_harness.exe tests/e2e_d3d11_harness.cpp \
+            -ld3d11 -ld3dcompiler
 
-      - name: Fetch & Setup Minimal Wine+GPTK4 Environment
+      - name: Report why execution is skipped
         run: |
-          # In a real environment, you pull down the compiled GPTK artifact from the repo 
-          # or use a cached Whisky/Wine-CX layer.
-          echo "Setting up WINEPREFIX and ensuring GPTK4 d3dmetal.dll is hooked"
-          # Mock:
-          # wget https://.../wineCX.tar.gz && tar xf wineCX.tar.gz
-          # export WINEPREFIX=$PWD/wineprefix
-          # WINEDLLOVERRIDES="d3d11=n,b;dxgi=n,b" wine d3d11_e2e_harness.exe
-          echo "Done setup"
+          echo 'Both harnesses cross-compiled.  Neither was executed: no DDI'
+          echo 'host is implemented, so D3D11CreateDevice cannot reach the'
+          echo 'relay.  This job does not assert that the stack works.'
 
-      - name: Execute Relay Pipeline Validation
-        run: |
-          # Here we run the E2E harness which triggers D3D11 -> relay12 -> D3D12 -> GPTK -> Metal.
-          # The script returns exit code 0 if all memory outputs map exactly as expected.
-          
-          # wine d3d11_e2e_harness.exe
-          echo "Simulated Pass for E2E Validation"
+      - name: Upload the harnesses
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-harnesses-${{ github.sha }}
+          path: |
+            d3d11_e2e_triangle.exe
+            d3d11_e2e_harness.exe
+          if-no-files-found: error
+          retention-days: 14
