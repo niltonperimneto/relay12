@@ -47,9 +47,16 @@ jobs:
           git -C "$worktree" diff --check
           test -n "$(git -C "$worktree" diff --stat)"
           c++ -std=c++17 -Wall -Wextra -Werror \
-            -I"$worktree/include" tests/relay_com_ptr_test.cpp \
+            -Icompat tests/relay_com_ptr_test.cpp \
             -o "$RUNNER_TEMP/relay_com_ptr_test"
           "$RUNNER_TEMP/relay_com_ptr_test"
+          c++ -std=c++17 -Wall -Wextra -Werror \
+            -Icompat tests/relay_ownership_negative.cpp \
+            -o "$RUNNER_TEMP/relay_ownership_negative"
+          if "$RUNNER_TEMP/relay_ownership_negative"; then
+            echo 'live COM output slot did not fail closed' >&2
+            exit 1
+          fi
 
       - name: Measure the pinned D3D12TranslationLayer portability baseline
         run: |
@@ -108,6 +115,10 @@ jobs:
       - name: Pin the current D3D12TranslationLayer compiler boundary
         run: |
           set -euo pipefail
+          x86_64-w64-mingw32-g++ -std=c++17 -Wall -Wextra -Werror \
+            -Icompat tests/relay_com_ptr_test.cpp \
+            -o "$RUNNER_TEMP/relay_ownership_test.exe"
+          wine "$RUNNER_TEMP/relay_ownership_test.exe"
           worktree="$RUNNER_TEMP/dtl-port-source"
           diagnostics="$RUNNER_TEMP/dtl-dependency-probe.log"
           if x86_64-w64-mingw32-g++ -std=c++17 -Wall -Wextra -Werror \
