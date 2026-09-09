@@ -116,6 +116,7 @@ jobs:
         run: |
           set -euo pipefail
           x86_64-w64-mingw32-g++ -std=c++17 -Wall -Wextra -Werror \
+            -static-libgcc -static-libstdc++ \
             -Icompat tests/relay_com_ptr_test.cpp \
             -o "$RUNNER_TEMP/relay_ownership_test.exe"
           wine "$RUNNER_TEMP/relay_ownership_test.exe"
