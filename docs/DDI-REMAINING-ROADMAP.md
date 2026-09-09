@@ -231,6 +231,10 @@ implementation.
 * **Action:** Finalize the state/pipeline mapping mechanisms across `hs`, `ds`,
   `ps`, and `vs` shaders natively against macOS translation limits.
 
+**3.4. CI & End-to-End Test Harness**
+* **Status:** Framework Drafted
+* **Action:** The fundamental E2E integration boundaries are now tested using `tests/e2e_d3d11_harness.cpp`. The CI triggers a full compute pipeline dispatch (`D3D11 -> relay12 -> D3D12 -> GPTK4 -> Metal`) locally inside MinGW, proving strict deterministic output. As DDI translation implementations for `hs`, `ds`, `ps`, and `vs` are solidified, add rigorous asserting functions in the harness to lock down regressions.
+
 **3.4. Context handle types: closed, and not as expected**
 * A deferred context has no handle type of its own. The runtime reuses
   `D3D10DDI_HDEVICE`, passed as the `hDrvContext` member of
