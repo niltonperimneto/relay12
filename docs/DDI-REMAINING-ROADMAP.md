@@ -99,7 +99,7 @@ Below is the structured roadmap of what is yet to be done.
 ## 3. Core DDI Function Implementations
 
 **3.1. Removing Placeholders**
-* **Status:** Ongoing — 39 of 138 PFN typedefs promoted, covering 40 of 178 slots
+* **Status:** Ongoing — 53 of 138 PFN typedefs promoted, covering 59 of 178 slots
 * **Done:** the command-list family — `pfnAbandonCommandList`,
   `pfnCommandListExecute`,
   `pfnDestroyCommandList`, `pfnRecycleCommandList`, and
@@ -146,6 +146,28 @@ Below is the structured roadmap of what is yet to be done.
   private-size, create, and destroy callbacks promoted. `pfnCreateSampler`
   is included explicitly, and the layout harness exercises all twelve slots
   with distinct state handles.
+* **Done:** the element-layout, binding, and draw group — the callbacks that
+  turn the objects above into a frame. `pfnCalcPrivateElementLayoutSize`,
+  `pfnCreateElementLayout`, `pfnDestroyElementLayout`, `pfnIaSetInputLayout`,
+  `pfnIaSetVertexBuffers`, `pfnIaSetTopology`, `pfnSetRenderTargets`,
+  `pfnSetViewports`, `pfnSetBlendState`, `pfnSetDepthStencilState`,
+  `pfnSetRasterizerState`, `pfnClearRenderTargetView`, and `pfnDraw`, plus
+  `PFND3D10DDI_SETSHADER`. Fourteen typedefs, nineteen slots: the SetShader
+  typedef covers all six stages, because its page gives one parameter list for
+  all of them. That promotes `pfnGsSetShader`, `pfnHsSetShader`,
+  `pfnDsSetShader` and `pfnCsSetShader` as a consequence of the shared type
+  and not as a scope decision — *creation* for those stages still takes
+  argument types this header has not authored, and stays behind placeholders.
+  Three variances are recorded at the group in `wine_d3d11ddi.h`: the
+  ClearRenderTargetView page transposes its parameter names against its own
+  Syntax block, SetBlendState publishes an unnamed `const FLOAT[4]`, and
+  `D3D10_DDI_PRIMITIVE_TOPOLOGY` publishes enumerator names with no values, so
+  it is declared as a transport typedef and names no constant.
+* **Not promoted with that group, deliberately:** `PFNWDDM2_0DDI_FLUSH`'s
+  WDDM 2.0-named page is a 404 and the base `PFND3D10DDI_FLUSH` page's
+  one-parameter list cannot be attributed to the WDDM 2.0-named typedef the
+  table holds. `PFND3D10DDI_SETSCISSORRECTS` would need `D3D10_DDI_RECT` and
+  the frame does not require a scissor.
 * **The mechanism the pilot established, and which every later promotion
   reuses:**
   * `PROMOTED_SLOTS` in `gen_ddi_layout.py` holds the promoted typedefs, and
@@ -179,7 +201,10 @@ makes the worklist a dependency order on structure groups, not a list of slots:
 | DSV/UAV creation arguments | every remaining `pfnCalcPrivate*ViewSize`/`pfnCreate*View`/`pfnDestroy*View`, `pfnClearRenderTargetView`, `pfnClearDepthStencilView`, `pfnClearView`, `pfnClearUnorderedAccessView*` |
 | Vertex/pixel shader creation (`D3D10DDI_H(RT)SHADER`) — **done** | `pfnCalcPrivateShaderSize`, `pfnCreateVertexShader`, `pfnCreatePixelShader`, `pfnDestroyShader` |
 | Stream-output and tessellation shader structures | `pfnCreateGeometryShader`, `pfnCalcPrivateGeometryShaderWithStreamOutput`, `pfnCreateGeometryShaderWithStreamOutput`, `pfnCreateHullShader`, `pfnCreateDomainShader`, `pfnCreateComputeShader`, `pfnCalcPrivateTessellationShaderSize`, `pfnCreateElementLayout`, the `pfn*SetShaderWithIfaces` family, `pfnRetrieveShaderComment`, `pfnAssignDebugBinary` |
-| State structures (blend, depth-stencil, rasterizer, sampler) — **done** | the remaining `pfnSet*State` slots and state-binding callbacks |
+| State structures (blend, depth-stencil, rasterizer, sampler) — **done** | `pfnSetBlendState`, `pfnSetDepthStencilState`, `pfnSetRasterizerState` — **done**; `pfnPsSetSamplers` and the rest of the `pfn*SetSamplers` family remain, an untextured frame not needing them |
+| Element layout and input assembly — **done** | `pfnCalcPrivateElementLayoutSize`, `pfnCreateElementLayout`, `pfnDestroyElementLayout`, `pfnIaSetInputLayout`, `pfnIaSetVertexBuffers`, `pfnIaSetTopology` |
+| Depth-stencil and unordered-access view *handles* — **done** | `pfnSetRenderTargets`. The handles are declared; nothing promoted can create either kind of view, which is the MVP state |
+| Shader binding (`D3D10DDI_HSHADER`) — **done** | `pfnVsSetShader`, `pfnPsSetShader`, `pfnGsSetShader`, `pfnHsSetShader`, `pfnDsSetShader`, `pfnCsSetShader` — one typedef |
 | Query structures and `D3D10DDI_QUERY` | `pfnCalcPrivateQuerySize`, `pfnCreateQuery`, `pfnDestroyQuery`, `pfnQueryBegin`, `pfnQueryEnd`, `pfnQueryGetData`, `pfnSetPredication` |
 | Tiled-resource structures | `pfnUpdateTileMappings`, `pfnCopyTileMappings`, `pfnCopyTiles`, `pfnUpdateTiles`, `pfnTiledResourceBarrier`, `pfnGetMipPacking`, `pfnResizeTilePool` |
 | GetCaps group (`D3D11DDI_THREADING_CAPS`, `D3D11DDI_3DPIPELINELEVEL`) | nothing in this table directly, but it is what tells the runtime the command-list slots above may be called at all |
