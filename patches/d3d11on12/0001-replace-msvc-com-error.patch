@@ -1,0 +1,119 @@
+From: relay12 contributors
+Subject: [PATCH] d3d11on12: replace MSVC-only _com_error
+
+The MinGW build does not provide Microsoft's compiler-specific _com_error
+type. Keep the driver's existing internal exception flow, but carry HRESULT
+in a local, dependency-free type. Exported boundaries continue translating
+the exception back to HRESULT exactly as before.
+
+diff --git a/include/pch.hpp b/include/pch.hpp
+index 1f27005..648763f 100644
+--- a/include/pch.hpp
++++ b/include/pch.hpp
+@@ -24,12 +24,22 @@
+ 
+ #include "D3D11On12DDI.h"
+ 
++class D3D11On12Error
++{
++public:
++    explicit D3D11On12Error(HRESULT error) noexcept : error_(error) {}
++    HRESULT Error() const noexcept { return error_; }
++
++private:
++    HRESULT error_;
++};
++
+ _At_(return, _When_(FAILED(hr), __analysis_noreturn))
+ inline void ThrowFailure(HRESULT hr)
+ {
+     if (FAILED(hr))
+     {
+-        throw _com_error(hr);
++        throw D3D11On12Error(hr);
+     }
+ }
+ 
+diff --git a/include/layer.hpp b/include/layer.hpp
+index 2eb57e5..96937e2 100644
+--- a/include/layer.hpp
++++ b/include/layer.hpp
+@@ -19,7 +19,7 @@ namespace D3D11On12
+ #define CLOSE_TRYCATCH_AND_STORE_HRESULT(hr) \
+         EntryPointHr = hr; \
+     } \
+-    catch (_com_error& hrEx) \
++    catch (D3D11On12Error& hrEx) \
+     { \
+         EntryPointHr = hrEx.Error(); \
+     } \
+diff --git a/src/adapter.cpp b/src/adapter.cpp
+index 6ea944d..41cbb4c 100644
+--- a/src/adapter.cpp
++++ b/src/adapter.cpp
+@@ -9,7 +9,7 @@ HRESULT WINAPI OpenAdapter_D3D11On12(_Inout_ D3D10DDIARG_OPENADAPTER* pArgs, _In
+         pArgs->hAdapter.pDrvPrivate = new D3D11On12::Adapter(pArgs, *pArgs2); // throw( _com_error, bad_alloc )
+         return S_OK;
+     }
+-    catch (_com_error& hrEx) { return hrEx.Error(); }
++    catch (D3D11On12Error& hrEx) { return hrEx.Error(); }
+     catch (std::bad_alloc&) { return E_OUTOFMEMORY; }
+ }
+ 
+diff --git a/src/device.cpp b/src/device.cpp
+index b166d3c..3579ac3 100644
+--- a/src/device.cpp
++++ b/src/device.cpp
+@@ -1087,7 +1087,7 @@ namespace D3D11On12
+         m_SharedResourceHelpers.QueryResourceInfoFromKMTHandle(hKMTHandle, pFlagOverrides, &resourceInfoNextLayer);
+         switch (resourceInfoNextLayer.m_Type)
+         {
+-        default: throw _com_error(E_UNEXPECTED);
++        default: throw D3D11On12Error(E_UNEXPECTED);
+         case D3D12TranslationLayer::ResourceType:
+             pResourceInfo->m_Type = ResourceType;
+             pResourceInfo->Resource.m_ResourceDesc = resourceInfoNextLayer.Resource.m_ResourceDesc;
+@@ -1218,7 +1218,7 @@ namespace D3D11On12
+         {
+             return E_OUTOFMEMORY;
+         }
+-        catch( _com_error& ex )
++        catch( D3D11On12Error& ex )
+         {
+             return ex.Error();
+         }
+diff --git a/src/present.cpp b/src/present.cpp
+index 3e5db9d..c0956da 100644
+--- a/src/present.cpp
++++ b/src/present.cpp
+@@ -272,7 +272,7 @@ namespace D3D11On12
+                     forwardToPresent11On12CB);
+                 hr = S_OK;
+             }
+-            catch (_com_error& hrEx)
++            catch (D3D11On12Error& hrEx)
+             {
+                 hr = hrEx.Error();
+             }
+diff --git a/src/resource.cpp b/src/resource.cpp
+index 3ab92fa..8ca7bc8 100644
+--- a/src/resource.cpp
++++ b/src/resource.cpp
+@@ -249,7 +249,7 @@ namespace D3D11On12
+             {
+                 return CreateFunc();
+             }
+-            catch (_com_error&)
++            catch (D3D11On12Error&)
+             {
+                 if (pDevice->GetBatchedContext().ProcessBatch())
+                 {
+@@ -435,7 +435,7 @@ namespace D3D11On12
+         {
+             pDevice->GetBatchedContext().ResourceUpdateSubresourceUP(Resource::CastFromAndGetImmediateResource(hDst), DstSubresource, (D3D12_BOX*)pDstBox, pMem, SrcPitch, SrcDepth);
+         }
+-        catch (_com_error& err)
++        catch (D3D11On12Error& err)
+         {
+             if (err.Error() == E_OUTOFMEMORY)
+             {

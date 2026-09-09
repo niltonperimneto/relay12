@@ -1,0 +1,174 @@
+From: relay12 contributors
+Subject: [PATCH] d3d11on12: replace ATL COM pointer dependency
+
+Keep the small ownership surface used by D3D11On12 without depending on ATL.
+The replacement retains CComPtr's AddRef/Release, move, attach/detach, and
+release-before-output behavior.
+---
+ include/adapter.hpp       |  4 +-
+ include/pch.hpp           |  1 +
+ include/relay_com_ptr.hpp | 99 ++++++++++++++++++++++++++++++++++++++++
+ src/shader.cpp            |  6 +--
+ 4 files changed, 105 insertions(+), 5 deletions(-)
+
+diff --git a/include/adapter.hpp b/include/adapter.hpp
+--- a/include/adapter.hpp
++++ b/include/adapter.hpp
+@@ -27,7 +27,7 @@ namespace D3D11On12
+ 
+     public:
+-        CComPtr<ID3D12Device1> m_pUnderlyingDevice;
++        RelayComPtr<ID3D12Device1> m_pUnderlyingDevice;
+         ID3D12CommandQueue* m_p3DCommandQueue;
+-        CComPtr<ID3D12CompatibilityDevice> m_pCompatDevice;
++        RelayComPtr<ID3D12CompatibilityDevice> m_pCompatDevice;
+ 
+         UINT m_NodeIndex;
+diff --git a/include/pch.hpp b/include/pch.hpp
+--- a/include/pch.hpp
++++ b/include/pch.hpp
+@@ -8,5 +8,6 @@
+ #include <d3dx11on12.h>
+ 
+ #include "SharedResourceHelpers.hpp"
++#include "relay_com_ptr.hpp"
+ 
+ #ifdef WIN32_LEAN_AND_MEAN
+diff --git a/include/relay_com_ptr.hpp b/include/relay_com_ptr.hpp
+new file mode 100644
+--- /dev/null
++++ b/include/relay_com_ptr.hpp
+@@ -0,0 +1,109 @@
++// Copyright (c) relay12 contributors.
++// SPDX-License-Identifier: GPL-3.0-only
++#pragma once
++
++#include <cstddef>
++#include <memory>
++#include <utility>
++
++// D3D11On12 needs only ATL CComPtr's ownership operations. Keeping this type
++// deliberately small makes every AddRef/Release transition visible and avoids
++// bringing ATL or an MSVC runtime dependency into the MinGW build.
++template <typename Interface>
++class RelayComPtr
++{
++public:
++    RelayComPtr() noexcept = default;
++    RelayComPtr(std::nullptr_t) noexcept {}
++
++    explicit RelayComPtr(Interface* pointer) noexcept : pointer_(pointer)
++    {
++        addRef();
++    }
++
++    RelayComPtr(const RelayComPtr& other) noexcept : pointer_(other.pointer_)
++    {
++        addRef();
++    }
++
++    RelayComPtr(RelayComPtr&& other) noexcept
++        : pointer_(std::exchange(other.pointer_, nullptr))
++    {
++    }
++
++    ~RelayComPtr() noexcept
++    {
++        release();
++    }
++
++    RelayComPtr& operator=(const RelayComPtr& other) noexcept
++    {
++        if (this != std::addressof(other))
++        {
++            RelayComPtr copy(other);
++            swap(copy);
++        }
++        return *this;
++    }
++
++    RelayComPtr& operator=(RelayComPtr&& other) noexcept
++    {
++        if (this != std::addressof(other))
++        {
++            release();
++            pointer_ = std::exchange(other.pointer_, nullptr);
++        }
++        return *this;
++    }
++
++    RelayComPtr& operator=(std::nullptr_t) noexcept
++    {
++        release();
++        return *this;
++    }
++
++    Interface* get() const noexcept { return pointer_; }
++    Interface* operator->() const noexcept { return pointer_; }
++    explicit operator bool() const noexcept { return pointer_ != nullptr; }
++
++    Interface** operator&() noexcept
++    {
++        release();
++        return std::addressof(pointer_);
++    }
++
++    void attach(Interface* pointer) noexcept
++    {
++        if (pointer_ != pointer)
++        {
++            release();
++            pointer_ = pointer;
++        }
++    }
++
++    Interface* detach() noexcept
++    {
++        return std::exchange(pointer_, nullptr);
++    }
++
++    void swap(RelayComPtr& other) noexcept
++    {
++        std::swap(pointer_, other.pointer_);
++    }
++
++private:
++    void addRef() noexcept
++    {
++        if (pointer_)
++            pointer_->AddRef();
++    }
++
++    void release() noexcept
++    {
++        Interface* old = std::exchange(pointer_, nullptr);
++        if (old)
++            old->Release();
++    }
++
++    Interface* pointer_ = nullptr;
++};
+diff --git a/src/shader.cpp b/src/shader.cpp
+--- a/src/shader.cpp
++++ b/src/shader.cpp
+@@ -311,6 +311,6 @@ namespace D3D11On12
+         }
+         if (spDxil.m_pData == nullptr)
+         {
+-            CComPtr<IDxbcConverter> spConverter;
++            RelayComPtr<IDxbcConverter> spConverter;
+             ThrowFailure(pfnDxcCreateInstance(CLSID_DxbcConverter, IID_PPV_ARGS(&spConverter)));
+ 
+@@ -321,4 +321,4 @@ namespace D3D11On12
+             {
+                 auto pfnCreateValidator = reinterpret_cast<decltype(&DxcCreateInstance)>(GetProcAddress(hDXIL, "DxcCreateInstance"));
+-                CComPtr<IDxcValidator> spValidator;
++                RelayComPtr<IDxcValidator> spValidator;
+                 ThrowFailure(pfnCreateValidator(CLSID_DxcValidator, IID_PPV_ARGS(&spValidator)));
+@@ -334,3 +334,3 @@ namespace D3D11On12
+                 } Blob = { spDxil.m_pData, DxilSize };
+-                CComPtr<IDxcOperationResult> spResult;
++                RelayComPtr<IDxcOperationResult> spResult;
+                 ThrowFailure(spValidator->Validate(&Blob, 0, &spResult));
+-- 
+2.51.0
