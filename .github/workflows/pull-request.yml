@@ -65,6 +65,17 @@ jobs:
           git clone --quiet --no-hardlinks third_party/D3D12TranslationLayer "$worktree"
           scripts/prepare-dtl-source.sh "$worktree"
           git -C "$worktree" diff --check
+          c++ -std=c++17 -Wall -Wextra -Werror \
+            -Icompat tests/relay_hresult_error_test.cpp \
+            -o "$RUNNER_TEMP/relay_hresult_error_test"
+          "$RUNNER_TEMP/relay_hresult_error_test"
+          c++ -std=c++17 -Wall -Wextra -Werror \
+            -Icompat tests/relay_hresult_error_negative.cpp \
+            -o "$RUNNER_TEMP/relay_hresult_error_negative"
+          if "$RUNNER_TEMP/relay_hresult_error_negative"; then
+            echo 'non-HRESULT exception was swallowed at HRESULT boundary' >&2
+            exit 1
+          fi
 
       - name: Test the gates
         run: |
