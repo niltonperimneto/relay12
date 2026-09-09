@@ -179,16 +179,20 @@ class Struct:
 
 # D3D11DDI_HCOMMANDLIST is a driver handle by the same convention: the
 # CommandListExecute page calls it "a handle to the driver's private data for
-# the command list".  Its runtime counterpart belongs with CreateCommandList
-# and is not declared, so it is not modelled.
+# the command list". D3D11DDI_HRTCOMMANDLIST is its runtime counterpart.
 DRIVER_HANDLES = ["D3D10DDI_HADAPTER", "D3D10DDI_HRESOURCE", "D3D10DDI_HDEVICE",
-                  "D3D11DDI_HCOMMANDLIST"]
+                  "D3D11DDI_HCOMMANDLIST", "D3D10DDI_HSHADERRESOURCEVIEW",
+                  "D3D10DDI_HRENDERTARGETVIEW", "D3D10DDI_HSHADER"]
 RUNTIME_HANDLES = [
     "D3D10DDI_HRTADAPTER",
     "D3D10DDI_HRTRESOURCE",
     "D3D10DDI_HRTDEVICE",
     "D3D10DDI_HRTCORELAYER",
     "D3DWDDM2_2DDI_HRTCACHESESSION",
+    "D3D11DDI_HRTCOMMANDLIST",
+    "D3D10DDI_HRTSHADERRESOURCEVIEW",
+    "D3D10DDI_HRTRENDERTARGETVIEW",
+    "D3D10DDI_HRTSHADER",
 ]
 
 HANDLES = [
@@ -198,6 +202,327 @@ HANDLES = [
 
 def handle(name):
     return (name, POINTER[0], POINTER[1])
+
+
+# Group: command-list creation arguments
+# Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d11ddiarg_createcommandlist
+# Retrieved: 2026-09-08
+
+CREATECOMMANDLIST = Struct(
+    "D3D11DDIARG_CREATECOMMANDLIST",
+    [Field("hDeferredContext", "D3D10DDI_HDEVICE")],
+)
+
+# Group: deferred-context creation and handle sizing
+# Specifications: D3D11DDIARG_CREATEDEFERREDCONTEXT,
+# D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE, and D3D11DDI_HANDLESIZE
+# Retrieved: 2026-09-08
+
+CALCPRIVATEDEFERREDCONTEXTSIZE = Struct(
+    "D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE",
+    [Field("Flags", "UINT", *UINT)],
+)
+
+HANDLESIZE = Struct(
+    "D3D11DDI_HANDLESIZE",
+    [
+        Field("HandleType", "D3D11DDI_HANDLETYPE", *UINT),
+        Field("DriverPrivateSize", "SIZE_T"),
+    ],
+)
+
+CREATEDEFERREDCONTEXT = Struct(
+    "D3D11DDIARG_CREATEDEFERREDCONTEXT",
+    [
+        Union(
+            arms=[Field("pWDDM2_6ContextFuncs",
+                        "D3DWDDM2_6DDI_DEVICEFUNCS *")],
+            published=[
+                Field("p11ContextFuncs", "D3D11DDI_DEVICEFUNCS *"),
+                Field("p11_1ContextFuncs", "D3D11_1DDI_DEVICEFUNCS *"),
+                Field("pWDDM1_3ContextFuncs", "D3DWDDM1_3DDI_DEVICEFUNCS *"),
+                Field("pWDDM2_0ContextFuncs", "D3DWDDM2_0DDI_DEVICEFUNCS *"),
+                Field("pWDDM2_1ContextFuncs", "D3DWDDM2_1DDI_DEVICEFUNCS *"),
+                Field("pWDDM2_2ContextFuncs", "D3DWDDM2_2DDI_DEVICEFUNCS *"),
+                Field("pWDDM2_6ContextFuncs", "D3DWDDM2_6DDI_DEVICEFUNCS *"),
+            ],
+        ),
+        Field("hDrvContext", "D3D10DDI_HDEVICE"),
+        Field("hRTCoreLayer", "D3D10DDI_HRTCORELAYER"),
+        Union(
+            arms=[Field("pWDDM2_6UMCallbacks",
+                        "const D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS *")],
+            published=[
+                Field("p11UMCallbacks",
+                      "const D3D11DDI_CORELAYER_DEVICECALLBACKS *"),
+                Field("pWDDM2_0UMCallbacks",
+                      "const D3DWDDM2_0DDI_CORELAYER_DEVICECALLBACKS *"),
+                Field("pWDDM2_2UMCallbacks",
+                      "const D3DWDDM2_2DDI_CORELAYER_DEVICECALLBACKS *"),
+                Field("pWDDM2_6UMCallbacks",
+                      "const D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS *"),
+            ],
+        ),
+        Field("Flags", "UINT", *UINT),
+    ],
+)
+
+# Group: resource creation and shared-resource opening arguments
+# Specification:
+#   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_createresource
+#   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d11ddiarg_createresource
+#   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_openresource
+# Retrieved: 2026-09-08
+
+CREATERESOURCE = Struct(
+    "D3D10DDIARG_CREATERESOURCE",
+    [
+        Field("pMipInfoList", "const D3D10DDI_MIPINFO *"),
+        Field("pInitialDataUP", "const D3D10_DDIARG_SUBRESOURCE_UP *"),
+        Field("ResourceDimension", "D3D10DDIRESOURCE_TYPE", *UINT),
+        Field("Usage", "UINT", *UINT),
+        Field("BindFlags", "UINT", *UINT),
+        Field("MapFlags", "UINT", *UINT),
+        Field("MiscFlags", "UINT", *UINT),
+        Field("Format", "DXGI_FORMAT", *UINT),
+        Field("SampleDesc", "DXGI_SAMPLE_DESC", 8, 4),
+        Field("MipLevels", "UINT", *UINT),
+        Field("ArraySize", "UINT", *UINT),
+        Field("pPrimaryDesc", "DXGI_DDI_PRIMARY_DESC *"),
+    ],
+)
+
+CREATE11RESOURCE = Struct(
+    "D3D11DDIARG_CREATERESOURCE",
+    CREATERESOURCE.members
+    + [
+        Field("ByteStride", "UINT", *UINT),
+        Field("DecoderBufferType", "D3D11_1DDI_VIDEO_DECODER_BUFFER_TYPE", *UINT),
+        Field("TextureLayout", "D3DWDDM2_0DDI_TEXTURE_LAYOUT", *UINT),
+    ],
+)
+
+OPENRESOURCE = Struct(
+    "D3D10DDIARG_OPENRESOURCE",
+    [
+        Field("NumAllocations", "UINT", *UINT),
+        Union(
+            arms=[
+                Field("pOpenAllocationInfo", "D3DDDI_OPENALLOCATIONINFO *"),
+                Field("pOpenAllocationInfo2", "D3DDDI_OPENALLOCATIONINFO2 *"),
+            ],
+            published=[
+                Field("pOpenAllocationInfo", "D3DDDI_OPENALLOCATIONINFO *"),
+                Field("pOpenAllocationInfo2", "D3DDDI_OPENALLOCATIONINFO2 *"),
+            ],
+        ),
+        Field("hKMResource", "D3D10DDI_HKMRESOURCE"),
+        Field("pPrivateDriverData", "VOID *"),
+        Field("PrivateDriverDataSize", "UINT", *UINT),
+    ],
+)
+
+# Group: shader resource view and render target view creation arguments
+# Specification:
+#   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3dwddm2_0ddiarg_createshaderresourceview
+#   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_buffer_shaderresourceview
+#   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_tex1d_shaderresourceview
+#   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3dwddm2_0ddiarg_tex2d_shaderresourceview
+#   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_tex3d_shaderresourceview
+#   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10_1ddiarg_texcube_shaderresourceview
+#   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d11ddiarg_bufferex_shaderresourceview
+#   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_createrendertargetview
+#   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_buffer_rendertargetview
+#   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_tex1d_rendertargetview
+#   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_tex2d_rendertargetview
+#   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_tex3d_rendertargetview
+#   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_texcube_rendertargetview
+# Retrieved: 2026-09-08
+#
+# hDrvResource is a real D3D11On12 (MIT) parameter name, but its type on the
+# ABI boundary is one of this project's own handle wrappers; that handle
+# group is declared alongside these structures rather than with the resource
+# group, because this is the first place its layout is load-bearing.
+#
+# D3D10DDIARG_CREATERENDERTARGETVIEW never received a published WDDM 2.0-named
+# revision the way the SRV and UAV structures did: the pinned driver's own
+# signature (view.cpp) names its argument D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW,
+# but both documentation surfaces 404 for that exact name, and every field the
+# driver reads through it -- including TexCube.ArraySize/FirstArraySlice, which
+# would have forced a revision had the base struct lacked them -- is already
+# present on the published D3D10DDIARG_CREATERENDERTARGETVIEW and its arms. The
+# local name follows the ABI call site; the fields are the cross-validated
+# public ones, unchanged.
+#
+# The SRV TexCube arm has a genuine surface disagreement: the rendered syntax
+# block for D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW types the arm
+# D3D10_1DDIARG_TEXCUBE_SHADERRESOURCEVIEW (4 fields, with array support), but
+# the markdown mirror's prose links the older, 2-field D3D10DDIARG_TEXCUBE_SHADERRESOURCEVIEW
+# instead. The pinned driver's GetTranslationDesc reads pDDIDesc->TexCube.First2DArrayFace
+# and ->NumCubes for the TEXTURECUBE case, fields only the D3D10_1 arm has, so
+# the rendered surface is what the ABI actually requires; the mirror's link is
+# stale. Both arms' own pages were fetched directly to confirm this rather than
+# guessing from the parent page alone.
+
+BUFFER_SRV = Struct(
+    "D3D10DDIARG_BUFFER_SHADERRESOURCEVIEW",
+    [
+        Union(arms=[Field("FirstElement", "UINT", *UINT)],
+              published=[Field("FirstElement", "UINT", *UINT),
+                         Field("ElementOffset", "UINT", *UINT)]),
+        Union(arms=[Field("NumElements", "UINT", *UINT)],
+              published=[Field("NumElements", "UINT", *UINT),
+                         Field("ElementWidth", "UINT", *UINT)]),
+    ],
+)
+
+TEX1D_SRV = Struct(
+    "D3D10DDIARG_TEX1D_SHADERRESOURCEVIEW",
+    [
+        Field("MostDetailedMip", "UINT", *UINT),
+        Field("FirstArraySlice", "UINT", *UINT),
+        Field("MipLevels", "UINT", *UINT),
+        Field("ArraySize", "UINT", *UINT),
+    ],
+)
+
+TEX2D_SRV = Struct(
+    "D3DWDDM2_0DDIARG_TEX2D_SHADERRESOURCEVIEW",
+    [
+        Field("MostDetailedMip", "UINT", *UINT),
+        Field("FirstArraySlice", "UINT", *UINT),
+        Field("MipLevels", "UINT", *UINT),
+        Field("ArraySize", "UINT", *UINT),
+        Field("PlaneSlice", "UINT", *UINT),
+        Field("PlaneIndex", "UINT", *UINT),
+    ],
+)
+
+TEX3D_SRV = Struct(
+    "D3D10DDIARG_TEX3D_SHADERRESOURCEVIEW",
+    [
+        Field("MostDetailedMip", "UINT", *UINT),
+        Field("MipLevels", "UINT", *UINT),
+    ],
+)
+
+TEXCUBE_SRV = Struct(
+    "D3D10_1DDIARG_TEXCUBE_SHADERRESOURCEVIEW",
+    [
+        Field("MostDetailedMip", "UINT", *UINT),
+        Field("MipLevels", "UINT", *UINT),
+        Field("First2DArrayFace", "UINT", *UINT),
+        Field("NumCubes", "UINT", *UINT),
+    ],
+)
+
+BUFFEREX_SRV = Struct(
+    "D3D11DDIARG_BUFFEREX_SHADERRESOURCEVIEW",
+    [
+        Union(arms=[Field("FirstElement", "UINT", *UINT)],
+              published=[Field("FirstElement", "UINT", *UINT),
+                         Field("ElementOffset", "UINT", *UINT)]),
+        Union(arms=[Field("NumElements", "UINT", *UINT)],
+              published=[Field("NumElements", "UINT", *UINT),
+                         Field("ElementWidth", "UINT", *UINT)]),
+        Field("Flags", "UINT", *UINT),
+    ],
+)
+
+_SRV_ARM_TYPES = [
+    ("Buffer", BUFFER_SRV),
+    ("Tex1D", TEX1D_SRV),
+    ("Tex2D", TEX2D_SRV),
+    ("Tex3D", TEX3D_SRV),
+    ("TexCube", TEXCUBE_SRV),
+    ("BufferEx", BUFFEREX_SRV),
+]
+
+_SRV_ARM_FIELDS = [
+    Field(name, arm.name, arm.walk()[1], arm.walk()[2])
+    for name, arm in _SRV_ARM_TYPES
+]
+
+CREATESHADERRESOURCEVIEW = Struct(
+    "D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW",
+    [
+        Field("hDrvResource", "D3D10DDI_HRESOURCE"),
+        Field("Format", "DXGI_FORMAT", *UINT),
+        Field("ResourceDimension", "D3D10DDIRESOURCE_TYPE", *UINT),
+        Union(arms=_SRV_ARM_FIELDS, published=_SRV_ARM_FIELDS),
+    ],
+)
+
+BUFFER_RTV = Struct(
+    "D3D10DDIARG_BUFFER_RENDERTARGETVIEW",
+    [
+        Union(arms=[Field("FirstElement", "UINT", *UINT)],
+              published=[Field("FirstElement", "UINT", *UINT),
+                         Field("ElementOffset", "UINT", *UINT)]),
+        Union(arms=[Field("NumElements", "UINT", *UINT)],
+              published=[Field("NumElements", "UINT", *UINT),
+                         Field("ElementWidth", "UINT", *UINT)]),
+    ],
+)
+
+TEX1D_RTV = Struct(
+    "D3D10DDIARG_TEX1D_RENDERTARGETVIEW",
+    [
+        Field("MipSlice", "UINT", *UINT),
+        Field("FirstArraySlice", "UINT", *UINT),
+        Field("ArraySize", "UINT", *UINT),
+    ],
+)
+
+TEX2D_RTV = Struct(
+    "D3D10DDIARG_TEX2D_RENDERTARGETVIEW",
+    [
+        Field("MipSlice", "UINT", *UINT),
+        Field("FirstArraySlice", "UINT", *UINT),
+        Field("ArraySize", "UINT", *UINT),
+    ],
+)
+
+TEX3D_RTV = Struct(
+    "D3D10DDIARG_TEX3D_RENDERTARGETVIEW",
+    [
+        Field("MipSlice", "UINT", *UINT),
+        Field("FirstW", "UINT", *UINT),
+        Field("WSize", "UINT", *UINT),
+    ],
+)
+
+TEXCUBE_RTV = Struct(
+    "D3D10DDIARG_TEXCUBE_RENDERTARGETVIEW",
+    [
+        Field("MipSlice", "UINT", *UINT),
+        Field("FirstArraySlice", "UINT", *UINT),
+        Field("ArraySize", "UINT", *UINT),
+    ],
+)
+
+_RTV_ARM_TYPES = [
+    ("Buffer", BUFFER_RTV),
+    ("Tex1D", TEX1D_RTV),
+    ("Tex2D", TEX2D_RTV),
+    ("Tex3D", TEX3D_RTV),
+    ("TexCube", TEXCUBE_RTV),
+]
+
+_RTV_ARM_FIELDS = [
+    Field(name, arm.name, arm.walk()[1], arm.walk()[2])
+    for name, arm in _RTV_ARM_TYPES
+]
+
+CREATERENDERTARGETVIEW = Struct(
+    "D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW",
+    [
+        Field("hDrvResource", "D3D10DDI_HRESOURCE"),
+        Field("Format", "DXGI_FORMAT", *UINT),
+        Field("ResourceDimension", "D3D10DDIRESOURCE_TYPE", *UINT),
+        Union(arms=_RTV_ARM_FIELDS, published=_RTV_ARM_FIELDS),
+    ],
+)
 
 
 # Group: adapter function tables and OpenAdapter arguments
@@ -772,9 +1097,44 @@ DEVICEFUNCS = Struct(
 # the header for why the rest of the family cannot follow yet.
 PROMOTED_SLOTS = {
     "PFND3D11DDI_ABANDONCOMMANDLIST",
+    "PFND3D11DDI_CALCPRIVATECOMMANDLISTSIZE",
     "PFND3D11DDI_COMMANDLISTEXECUTE",
+    "PFND3D11DDI_CREATECOMMANDLIST",
     "PFND3D11DDI_DESTROYCOMMANDLIST",
     "PFND3D11DDI_RECYCLECOMMANDLIST",
+    "PFND3D11DDI_RECYCLECREATECOMMANDLIST",
+    "PFND3D11DDI_CHECKDEFERREDCONTEXTHANDLESIZES",
+    "PFND3D11DDI_CALCDEFERREDCONTEXTHANDLESIZE",
+    "PFND3D11DDI_CALCPRIVATEDEFERREDCONTEXTSIZE",
+    "PFND3D11DDI_CREATEDEFERREDCONTEXT",
+    "PFND3D11DDI_RECYCLECREATEDEFERREDCONTEXT",
+    "PFND3D11DDI_CALCPRIVATERESOURCESIZE",
+    "PFND3D10DDI_CALCPRIVATEOPENEDRESOURCESIZE",
+    "PFND3D11DDI_CREATERESOURCE",
+    "PFND3D10DDI_OPENRESOURCE",
+    "PFND3D10DDI_DESTROYRESOURCE",
+    "PFND3D11_1DDI_CALCPRIVATEBLENDSTATESIZE",
+    "PFND3D11_1DDI_CREATEBLENDSTATE",
+    "PFND3D10DDI_DESTROYBLENDSTATE",
+    "PFND3D10DDI_CALCPRIVATEDEPTHSTENCILSTATESIZE",
+    "PFND3D10DDI_CREATEDEPTHSTENCILSTATE",
+    "PFND3D10DDI_DESTROYDEPTHSTENCILSTATE",
+    "PFND3DWDDM2_0DDI_CALCPRIVATERASTERIZERSTATESIZE",
+    "PFND3DWDDM2_0DDI_CREATERASTERIZERSTATE",
+    "PFND3D10DDI_DESTROYRASTERIZERSTATE",
+    "PFND3D10DDI_CALCPRIVATESAMPLERSIZE",
+    "PFND3D10DDI_CREATESAMPLER",
+    "PFND3D10DDI_DESTROYSAMPLER",
+    "PFND3DWDDM2_0DDI_CALCPRIVATESHADERRESOURCEVIEWSIZE",
+    "PFND3DWDDM2_0DDI_CREATESHADERRESOURCEVIEW",
+    "PFND3D10DDI_DESTROYSHADERRESOURCEVIEW",
+    "PFND3DWDDM2_0DDI_CALCPRIVATERENDERTARGETVIEWSIZE",
+    "PFND3DWDDM2_0DDI_CREATERENDERTARGETVIEW",
+    "PFND3D10DDI_DESTROYRENDERTARGETVIEW",
+    "PFND3D11_1DDI_CALCPRIVATESHADERSIZE",
+    "PFND3D11_1DDI_CREATEVERTEXSHADER",
+    "PFND3D11_1DDI_CREATEPIXELSHADER",
+    "PFND3D10DDI_DESTROYSHADER",
 }
 
 if not PROMOTED_SLOTS <= {type_name for _, type_name in DEVICEFUNC_SLOTS}:
@@ -800,6 +1160,26 @@ GROUPS = HANDLES + [
     OPENADAPTER,
     DXGI_BASE_ARGS,
     CREATEDEVICE,
+    CREATECOMMANDLIST,
+    CALCPRIVATEDEFERREDCONTEXTSIZE,
+    HANDLESIZE,
+    CREATEDEFERREDCONTEXT,
+    CREATERESOURCE,
+    CREATE11RESOURCE,
+    OPENRESOURCE,
+    BUFFER_SRV,
+    TEX1D_SRV,
+    TEX2D_SRV,
+    TEX3D_SRV,
+    TEXCUBE_SRV,
+    BUFFEREX_SRV,
+    CREATESHADERRESOURCEVIEW,
+    BUFFER_RTV,
+    TEX1D_RTV,
+    TEX2D_RTV,
+    TEX3D_RTV,
+    TEXCUBE_RTV,
+    CREATERENDERTARGETVIEW,
     DEVICEFUNCS,
     CORELAYER_CALLBACKS,
     KERNEL_CALLBACKS,
