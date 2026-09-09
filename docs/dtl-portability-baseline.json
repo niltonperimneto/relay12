@@ -21,22 +21,8 @@
       "occurrences": 7
     },
     "com_error": {
-      "files": {
-        "include/ImmediateContext.hpp": 1,
-        "include/ImmediateContext.inl": 10,
-        "include/ThreadPool.hpp": 4,
-        "include/Util.hpp": 2,
-        "src/BatchedContext.cpp": 2,
-        "src/BlitHelper.cpp": 3,
-        "src/CommandListManager.cpp": 1,
-        "src/ImmediateContext.cpp": 3,
-        "src/PipelineState.cpp": 1,
-        "src/Query.cpp": 1,
-        "src/Resource.cpp": 1,
-        "src/VideoDecode.cpp": 1,
-        "src/VideoProcess.cpp": 1
-      },
-      "occurrences": 31
+      "files": {},
+      "occurrences": 0
     },
     "dxbc_parser": {
       "files": {

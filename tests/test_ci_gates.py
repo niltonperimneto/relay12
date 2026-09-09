@@ -16,6 +16,7 @@
 # Run: python3 -m unittest discover -s tests -p 'test_*.py'
 
 import pathlib
+import json
 import os
 import subprocess
 import sys
@@ -105,6 +106,24 @@ class DtlPortabilityInventory(unittest.TestCase):
             after = inventory_dtl_portability.inventory(root)
         self.assertNotEqual(before, after)
         self.assertEqual(after["categories"]["com_error"]["occurrences"], 1)
+
+    def test_dtl_baseline_has_no_executable_com_error(self):
+        baseline = (REPOSITORY / "docs" /
+                    "dtl-portability-baseline.json").read_text()
+        self.assertEqual(
+            json.loads(baseline)["categories"]["com_error"],
+            {"files": {}, "occurrences": 0})
+
+    def test_hresult_replacement_is_expression_for_expression(self):
+        patch = (REPOSITORY / "patches" / "dtl" /
+                 "0002-replace-msvc-com-error.patch").read_text()
+        removed = [line[1:].replace("_com_error", "RelayHResultError")
+                   for line in patch.splitlines()
+                   if line.startswith("-") and "_com_error" in line]
+        added = [line[1:] for line in patch.splitlines()
+                 if line.startswith("+") and "RelayHResultError" in line]
+        self.assertEqual(len(removed), 31)
+        self.assertEqual(added, removed)
 
 
 class DdiHeaderGate(unittest.TestCase):
