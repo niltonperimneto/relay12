@@ -1851,6 +1851,105 @@ WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_HRTSHADER, handle, 8);
 typedef struct D3D11_1DDIARG_STAGE_IO_SIGNATURES D3D11_1DDIARG_STAGE_IO_SIGNATURES;
 
 /*
+ * Group: input-assembler and output-merger binding types
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/display/direct3d-version-10-runtime-and-driver-handles
+ * Retrieved: 2026-09-08
+ *
+ * Companion callback specifications:
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_createelementlayout
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_setrendertargets
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_setviewports
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ne-d3d10umddi-d3d10_ddi_primitive_topology
+ *
+ * The handles follow the documented convention (see the object-handle group
+ * above): a driver handle is pDrvPrivate, a runtime handle is handle.
+ *
+ * Only the driver halves of the depth-stencil and unordered-access view
+ * handles are declared.  SetRenderTargets is the only promoted slot that
+ * names them and it takes no runtime half; the create-view callbacks that
+ * would are still placeholders, and declaring their handles before their
+ * argument structures exist would be a type nothing yet constrains.  Note
+ * what this does and does not enable: a promoted SetRenderTargets can be
+ * handed a depth-stencil or unordered-access view, but no promoted slot can
+ * produce one, which is the state docs/D3D11ON12-SKIPPABLE-ELEMENTS.md
+ * describes for the MVP.
+ */
+typedef struct D3D10DDI_HELEMENTLAYOUT
+{
+    void *pDrvPrivate;
+} D3D10DDI_HELEMENTLAYOUT;
+
+typedef struct D3D10DDI_HRTELEMENTLAYOUT
+{
+    void *handle;
+} D3D10DDI_HRTELEMENTLAYOUT;
+
+typedef struct D3D10DDI_HDEPTHSTENCILVIEW
+{
+    void *pDrvPrivate;
+} D3D10DDI_HDEPTHSTENCILVIEW;
+
+typedef struct D3D11DDI_HUNORDEREDACCESSVIEW
+{
+    void *pDrvPrivate;
+} D3D11DDI_HUNORDEREDACCESSVIEW;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_HELEMENTLAYOUT);
+WINE_DDI_ASSERT_SIZE(D3D10DDI_HELEMENTLAYOUT, 8);
+WINE_DDI_ASSERT_ALIGN(D3D10DDI_HELEMENTLAYOUT, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_HELEMENTLAYOUT, pDrvPrivate, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_HELEMENTLAYOUT, pDrvPrivate, 8);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_HRTELEMENTLAYOUT);
+WINE_DDI_ASSERT_SIZE(D3D10DDI_HRTELEMENTLAYOUT, 8);
+WINE_DDI_ASSERT_ALIGN(D3D10DDI_HRTELEMENTLAYOUT, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_HRTELEMENTLAYOUT, handle, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_HRTELEMENTLAYOUT, handle, 8);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_HDEPTHSTENCILVIEW);
+WINE_DDI_ASSERT_SIZE(D3D10DDI_HDEPTHSTENCILVIEW, 8);
+WINE_DDI_ASSERT_ALIGN(D3D10DDI_HDEPTHSTENCILVIEW, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_HDEPTHSTENCILVIEW, pDrvPrivate, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_HDEPTHSTENCILVIEW, pDrvPrivate, 8);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D11DDI_HUNORDEREDACCESSVIEW);
+WINE_DDI_ASSERT_SIZE(D3D11DDI_HUNORDEREDACCESSVIEW, 8);
+WINE_DDI_ASSERT_ALIGN(D3D11DDI_HUNORDEREDACCESSVIEW, 8);
+WINE_DDI_ASSERT_FIELD(D3D11DDI_HUNORDEREDACCESSVIEW, pDrvPrivate, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDI_HUNORDEREDACCESSVIEW, pDrvPrivate, 8);
+
+/* Both are named only behind a const pointer by the slots promoted here, so
+ * per the resource group's precedent they stay incomplete.  A pointer to an
+ * incomplete type is ABI-complete and it stops a caller reading fields this
+ * header has not derived. */
+typedef struct D3D10DDIARG_CREATEELEMENTLAYOUT D3D10DDIARG_CREATEELEMENTLAYOUT;
+typedef struct D3D10_DDI_VIEWPORT D3D10_DDI_VIEWPORT;
+
+/* IaSetTopology takes its topology by value, so the transport type has to be
+ * declared -- but the enumeration's page publishes the enumerator names in
+ * order and an initialiser for none of them.
+ *
+ * C's default numbering would make that list sequential from zero.  The
+ * runtime's D3D_PRIMITIVE_TOPOLOGY, whose enumerator names these mirror one
+ * for one, is not sequential: its adjacency and patch-list ranges sit at
+ * values consecutive numbering cannot produce.  Which of the two the DDI
+ * enumeration uses is exactly what the page does not say, so neither may be
+ * written down here, and the authoring rule for that case is explicit --
+ * leave unspecified constants undefined.
+ *
+ * The header therefore declares the transport and names no constant.  An
+ * unscoped enumeration whose values fit in int has underlying type int in
+ * both the MSVC and the MinGW model, so INT is the parameter's ABI and the
+ * only part of it a caller through this slot depends on.  A host that needs a
+ * particular topology takes the constant from the WDK header it compiles
+ * against.
+ *
+ * One consequence, recorded because it is a real loss: this slot's topology
+ * argument cannot be type-checked, so tests/d3d11ddidrawpromotednegative.c
+ * rests on the handle parameters instead. */
+typedef INT D3D10_DDI_PRIMITIVE_TOPOLOGY;
+
+/*
  * Group: WDDM 2.6 device function table
  * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3dwddm2_6ddi_devicefuncs
  * Source mirror: https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs-ddi/staging/wdk-ddi-src/content/d3d10umddi/ns-d3d10umddi-d3dwddm2_6ddi_devicefuncs.md
@@ -2116,35 +2215,168 @@ typedef VOID (*PFND3D10DDI_DESTROYSHADER)(
         D3D10DDI_HDEVICE hDevice,
         D3D10DDI_HSHADER hShader);
 
+/*
+ * Group: element layout, binding, and draw callbacks
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddi_devicefuncs
+ * Retrieved: 2026-09-08
+ *
+ * Companion callback specifications:
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_calcprivateelementlayoutsize
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_createelementlayout
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_destroyelementlayout
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_setinputlayout
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_ia_setvertexbuffers
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_ia_settopology
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_setshader
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_setrendertargets
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_setviewports
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_clearrendertargetview
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_draw
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_setblendstate
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_setdepthstencilstate
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_setrasterizerstate
+ *
+ * This is the group that turns the objects the earlier groups can create into
+ * a frame.  It is what docs/D3D11ON12-SKIPPABLE-ELEMENTS.md calls the
+ * "Triangle on Screen" path, past creation: bind an element layout and a
+ * vertex buffer, bind the two shaders and the three state objects, name a
+ * render target, clear it, and draw.
+ *
+ * Variances recorded, in the order they were found:
+ *
+ * PFND3D10DDI_SETSHADER is one type for six slots.  Its page is titled
+ * CsSetShader and its Remarks then state, in the same words for each, that
+ * DsSetShader, VsSetShader, GsSetShader, HsSetShader and PsSetShader set the
+ * shader code for their stages.  One parameter list, one typedef, and so
+ * promoting it promotes all six.  That does not promote creation for those
+ * stages: geometry, hull, domain and compute shader *creation* takes argument
+ * types this header has not authored and stays behind placeholders.
+ *
+ * PFND3D10DDI_CLEARRENDERTARGETVIEW has a defect on its page.  The Syntax
+ * block reads (D3D10DDI_HDEVICE, D3D10DDI_HRENDERTARGETVIEW, FLOAT[4]) while
+ * the Parameters section below it labels the second parameter pColorRGBA and
+ * the third hRenderTargetView -- the names are transposed against the types.
+ * The Syntax block is what declares the ABI and it is the reading that
+ * type-checks, so it is what is transcribed; the prose ordering would put a
+ * handle where a float array is passed.  Recorded rather than silently
+ * resolved, because a later reader comparing the two will find the same
+ * discrepancy.
+ *
+ * PFND3D10DDI_SETBLENDSTATE's third parameter is published as an unnamed
+ * const FLOAT[4] -- the Parameters section lists the bare token "FLOAT[4]"
+ * with no description at all.  The array bound and constness are transcribed
+ * as published; the name is this header's, and marked so.
+ *
+ * PFND3D11DDI_SETRENDERTARGETS is the widest slot promoted so far at eleven
+ * parameters, and the only one to name a depth-stencil or unordered-access
+ * view.  It takes them; nothing promoted can make one.  See the binding-types
+ * group above for why the handles are declared anyway.
+ *
+ * Two slots the frame would otherwise use are deliberately not here.
+ * PFND3DWDDM2_0DDI_FLUSH has no published page -- the WDDM 2.0-named URL is a
+ * 404 -- and the base PFND3D10DDI_FLUSH page describes a one-parameter list
+ * that cannot be attributed to the WDDM 2.0-named typedef the table actually
+ * holds, so it stays a placeholder.  PFND3D10DDI_SETSCISSORRECTS would need
+ * D3D10_DDI_RECT, and the frame does not require a scissor.
+ */
+typedef SIZE_T (*PFND3D10DDI_CALCPRIVATEELEMENTLAYOUTSIZE)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D10DDIARG_CREATEELEMENTLAYOUT *pCreateElementLayout);
+
+typedef VOID (*PFND3D10DDI_CREATEELEMENTLAYOUT)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D10DDIARG_CREATEELEMENTLAYOUT *pCreateElementLayout,
+        D3D10DDI_HELEMENTLAYOUT hElementLayout,
+        D3D10DDI_HRTELEMENTLAYOUT hRTElementLayout);
+
+typedef VOID (*PFND3D10DDI_DESTROYELEMENTLAYOUT)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HELEMENTLAYOUT hElementLayout);
+
+typedef VOID (*PFND3D10DDI_SETINPUTLAYOUT)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HELEMENTLAYOUT hInputLayout);
+
+typedef VOID (*PFND3D10DDI_IA_SETVERTEXBUFFERS)(
+        D3D10DDI_HDEVICE hDevice,
+        UINT StartSlot,
+        UINT NumBuffers,
+        const D3D10DDI_HRESOURCE *phBuffers,
+        const UINT *pStrides,
+        const UINT *pOffsets);
+
+typedef VOID (*PFND3D10DDI_IA_SETTOPOLOGY)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D10_DDI_PRIMITIVE_TOPOLOGY PrimitiveTopology);
+
+typedef VOID (*PFND3D10DDI_SETSHADER)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HSHADER hShader);
+
+typedef VOID (*PFND3D11DDI_SETRENDERTARGETS)(
+        D3D10DDI_HDEVICE hDevice,
+        const D3D10DDI_HRENDERTARGETVIEW *phRenderTargetView,
+        UINT NumRTVs,
+        UINT ClearSlots,
+        D3D10DDI_HDEPTHSTENCILVIEW hDepthStencilView,
+        const D3D11DDI_HUNORDEREDACCESSVIEW *phUnorderedAccessView,
+        const UINT *pUAVInitialCounts,
+        UINT UAVStartSlot,
+        UINT NumUAVs,
+        UINT UAVRangeStart,
+        UINT UAVRangeSize);
+
+typedef VOID (*PFND3D10DDI_SETVIEWPORTS)(
+        D3D10DDI_HDEVICE hDevice,
+        UINT NumViewports,
+        UINT ClearViewports,
+        const D3D10_DDI_VIEWPORT *pViewports);
+
+/* Parameter order from the Syntax block; see the transposition note above. */
+typedef VOID (*PFND3D10DDI_CLEARRENDERTARGETVIEW)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRENDERTARGETVIEW hRenderTargetView,
+        FLOAT ColorRGBA[4]);
+
+typedef VOID (*PFND3D10DDI_DRAW)(
+        D3D10DDI_HDEVICE hDevice,
+        UINT VertexCount,
+        UINT StartVertexLocation);
+
+/* BlendFactor names an argument the specification leaves unnamed. */
+typedef VOID (*PFND3D10DDI_SETBLENDSTATE)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HBLENDSTATE hState,
+        const FLOAT BlendFactor[4],
+        UINT SampleMask);
+
+typedef VOID (*PFND3D10DDI_SETDEPTHSTENCILSTATE)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HDEPTHSTENCILSTATE hState,
+        UINT StencilRef);
+
+typedef VOID (*PFND3D10DDI_SETRASTERIZERSTATE)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRASTERIZERSTATE hRasterizerState);
+
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_RESOURCEUPDATESUBRESOURCEUP;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_SETCONSTANTBUFFERS;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETSHADERRESOURCES;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETSHADER;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETSAMPLERS;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DRAWINDEXED;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DRAW;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCEMAP;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCEUNMAP;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETINPUTLAYOUT;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_IA_SETVERTEXBUFFERS;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_IA_SETINDEXBUFFER;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DRAWINDEXEDINSTANCED;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DRAWINSTANCED;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_IA_SETTOPOLOGY;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_SETRENDERTARGETS;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SHADERRESOURCEVIEWREADAFTERWRITEHAZARD;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCEREADAFTERWRITEHAZARD;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETBLENDSTATE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETDEPTHSTENCILSTATE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETRASTERIZERSTATE;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_QUERYEND;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_QUERYBEGIN;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_RESOURCECOPYREGION;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SO_SETTARGETS;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DRAWAUTO;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETVIEWPORTS;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETSCISSORRECTS;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CLEARRENDERTARGETVIEW;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CLEARDEPTHSTENCILVIEW;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETPREDICATION;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_QUERYGETDATA;
@@ -2157,9 +2389,6 @@ typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_6DDI_RELOCATEDEVICEFUNCS;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CALCPRIVATEDEPTHSTENCILVIEWSIZE;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CREATEDEPTHSTENCILVIEW;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYDEPTHSTENCILVIEW;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CALCPRIVATEELEMENTLAYOUTSIZE;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CREATEELEMENTLAYOUT;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYELEMENTLAYOUT;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CREATEGEOMETRYSHADER;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CALCPRIVATEGEOMETRYSHADERWITHSTREAMOUTPUT;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CREATEGEOMETRYSHADERWITHSTREAMOUTPUT;
