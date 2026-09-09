@@ -26,6 +26,7 @@ REPOSITORY = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPOSITORY / "scripts"))
 
 import check_ddi_header  # noqa: E402
+import check_d3d11on12_port  # noqa: E402
 import check_interface_acquisition  # noqa: E402
 import check_pe_audit  # noqa: E402
 import check_shared_state  # noqa: E402
@@ -49,6 +50,26 @@ def written(text, suffix=".h"):
     with handle:
         handle.write(text)
     return pathlib.Path(handle.name)
+
+
+class D3D11On12PortGate(unittest.TestCase):
+    def test_portable_source_passes(self):
+        source = "RelayComPtr<IUnknown> pointer; // _com_error in a comment"
+        self.assertEqual(check_d3d11on12_port.check_source("good.cpp", source), [])
+
+    def test_executable_com_error_is_rejected(self):
+        errors = check_d3d11on12_port.check_source(
+            "bad.cpp", "throw _com_error(E_FAIL);")
+        self.assertTrue(any("MSVC _com_error" in error for error in errors))
+
+    def test_executable_atl_pointer_is_rejected(self):
+        errors = check_d3d11on12_port.check_source(
+            "bad.hpp", "CComPtr<IUnknown> pointer;")
+        self.assertTrue(any("ATL CComPtr" in error for error in errors))
+
+    def test_comment_only_mentions_do_not_trip_the_gate(self):
+        source = "// CComPtr<IUnknown> was removed\nint value; // _com_error"
+        self.assertEqual(check_d3d11on12_port.check_source("notes.cpp", source), [])
 
 
 class DdiHeaderGate(unittest.TestCase):
