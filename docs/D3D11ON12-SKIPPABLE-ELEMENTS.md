@@ -55,7 +55,14 @@ Everything else must remain locked inside `PFNWINE_D3D11DDI_UNDECLARED_CB` place
 
 All four items above are now authored, and the group that consumes them has followed — element layout, input-assembly binding, shader binding, render-target binding, viewports, the three state binds, the clear, and the draw. `tests/d3d11ddi_triangle.c` drives them in frame order and checks the handles flow from each creation to the binding that consumes it, so the "Triangle on Screen" path is expressible against the declarations end to end.
 
-Two things stand between that and a triangle:
+One thing stands between that and a triangle. Readback is now authored:
 
-1. **Readback.** `pfnResourceMap`, `pfnResourceUnmap` and `pfnResourceCopy` are still placeholders. Promoting them needs `D3D10_DDI_MAP` and a fully modelled `D3D10DDI_MAPPED_SUBRESOURCE` — the first structure in this effort whose members a test must actually read, so it cannot stay an incomplete type.
-2. **A host.** Nothing stands behind the function table: `relay12-d3d11/d3d11on12core.cpp` still reports the device as validated but not translated. Declarations and harnesses are not an implementation, and no test in this repository currently claims otherwise.
+* **Readback — done.** `pfnResourceCopy`, `pfnResourceMap`, and
+  `pfnResourceUnmap` now extend the frame after draw. The clear and draw stubs
+  populate real backing bytes, the copy moves them to staging, and the map
+  exposes `D3D10DDI_MAPPED_SUBRESOURCE.pData`; the harness checks the same red
+  centre and blue corner as `tests/e2e_d3d11_triangle.cpp`.
+* **A host — remaining.** Nothing stands behind the function table:
+  `relay12-d3d11/d3d11on12core.cpp` still reports the device as validated but
+  not translated. Declarations and harnesses are not an implementation, and
+  no test in this repository currently claims otherwise.

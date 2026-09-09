@@ -102,6 +102,14 @@ static void *allocate_private(SIZE_T size)
 #define ELEMENT_LAYOUT_PRIVATE_SIZE  48
 #define STATE_PRIVATE_SIZE           32
 #define VIEW_PRIVATE_SIZE            96
+#define TARGET_WIDTH                 64
+#define TARGET_HEIGHT                64
+#define BYTES_PER_TEXEL               4
+#define TARGET_ROW_PITCH (TARGET_WIDTH * BYTES_PER_TEXEL)
+#define TARGET_BYTES (TARGET_ROW_PITCH * TARGET_HEIGHT)
+
+static unsigned char render_target_pixels[TARGET_BYTES];
+static unsigned char staging_pixels[TARGET_BYTES];
 
 static SIZE_T stub_calc_private_resource_size(D3D10DDI_HDEVICE hDevice,
         const D3D11DDIARG_CREATERESOURCE *create)
@@ -313,6 +321,7 @@ static UINT drawn_vertex_count;
 static UINT drawn_start_vertex;
 static FLOAT recorded_clear[4];
 static UINT recorded_stride;
+static const void *copy_source_resource;
 
 static VOID stub_set_render_targets(D3D10DDI_HDEVICE hDevice,
         const D3D10DDI_HRENDERTARGETVIEW *rtvs, UINT num_rtvs,
@@ -414,19 +423,75 @@ static VOID stub_set_rasterizer_state(D3D10DDI_HDEVICE hDevice,
 static VOID stub_clear_render_target_view(D3D10DDI_HDEVICE hDevice,
         D3D10DDI_HRENDERTARGETVIEW view, FLOAT colour[4])
 {
+    unsigned int texel;
+
     (void)hDevice;
     if (colour)
+    {
         memcpy(recorded_clear, colour, sizeof(recorded_clear));
+        for (texel = 0; texel < TARGET_WIDTH * TARGET_HEIGHT; ++texel)
+        {
+            render_target_pixels[texel * BYTES_PER_TEXEL + 0] =
+                    (unsigned char)(colour[0] * 255.0f);
+            render_target_pixels[texel * BYTES_PER_TEXEL + 1] =
+                    (unsigned char)(colour[1] * 255.0f);
+            render_target_pixels[texel * BYTES_PER_TEXEL + 2] =
+                    (unsigned char)(colour[2] * 255.0f);
+            render_target_pixels[texel * BYTES_PER_TEXEL + 3] =
+                    (unsigned char)(colour[3] * 255.0f);
+        }
+    }
     record("ClearRenderTargetView", view.pDrvPrivate);
 }
 
 static VOID stub_draw(D3D10DDI_HDEVICE hDevice, UINT vertex_count,
         UINT start_vertex_location)
 {
+    const unsigned int centre = ((TARGET_HEIGHT / 2) * TARGET_WIDTH
+            + TARGET_WIDTH / 2) * BYTES_PER_TEXEL;
+
     (void)hDevice;
     drawn_vertex_count = vertex_count;
     drawn_start_vertex = start_vertex_location;
+    render_target_pixels[centre + 0] = 0xff;
+    render_target_pixels[centre + 1] = 0x00;
+    render_target_pixels[centre + 2] = 0x00;
+    render_target_pixels[centre + 3] = 0xff;
     record("Draw", NULL);
+}
+
+static VOID stub_resource_copy(D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRESOURCE destination, D3D10DDI_HRESOURCE source)
+{
+    (void)hDevice;
+    memcpy(staging_pixels, render_target_pixels, sizeof(staging_pixels));
+    copy_source_resource = source.pDrvPrivate;
+    record("ResourceCopy", destination.pDrvPrivate);
+}
+
+static VOID stub_resource_map(D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRESOURCE resource, UINT subresource, D3D10_DDI_MAP map,
+        UINT flags, D3D10DDI_MAPPED_SUBRESOURCE *mapped)
+{
+    (void)hDevice;
+    (void)subresource;
+    (void)map;
+    (void)flags;
+    if (mapped)
+    {
+        mapped->pData = staging_pixels;
+        mapped->RowPitch = TARGET_ROW_PITCH;
+        mapped->DepthPitch = TARGET_BYTES;
+    }
+    record("ResourceMap", resource.pDrvPrivate);
+}
+
+static VOID stub_resource_unmap(D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRESOURCE resource, UINT subresource)
+{
+    (void)hDevice;
+    (void)subresource;
+    record("ResourceUnmap", resource.pDrvPrivate);
 }
 
 static void install(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
@@ -471,12 +536,17 @@ static void install(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     funcs->pfnSetRasterizerState = stub_set_rasterizer_state;
     funcs->pfnClearRenderTargetView = stub_clear_render_target_view;
     funcs->pfnDraw = stub_draw;
+    funcs->pfnResourceCopy = stub_resource_copy;
+    funcs->pfnResourceMap = stub_resource_map;
+    funcs->pfnResourceUnmap = stub_resource_unmap;
 }
 
 /* The order the frame must be issued in. Creation before binding, binding
  * before the clear, the clear before the draw, and teardown after. Written
  * out rather than derived so that a reordering has to be argued for here. */
 static const char *const EXPECTED[] = {
+    "CalcPrivateResourceSize",
+    "CreateResource",
     "CalcPrivateResourceSize",
     "CreateResource",
     "CalcPrivateResourceSize",
@@ -507,6 +577,9 @@ static const char *const EXPECTED[] = {
     "SetRasterizerState",
     "ClearRenderTargetView",
     "Draw",
+    "ResourceCopy",
+    "ResourceMap",
+    "ResourceUnmap",
     "DestroyRenderTargetView",
     "DestroyRasterizerState",
     "DestroyDepthStencilState",
@@ -514,6 +587,7 @@ static const char *const EXPECTED[] = {
     "DestroyElementLayout",
     "DestroyShader",
     "DestroyShader",
+    "DestroyResource",
     "DestroyResource",
     "DestroyResource",
 };
@@ -581,6 +655,7 @@ int main(void)
     D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW create_rtv;
     D3D10DDI_HRESOURCE vertex_buffer;
     D3D10DDI_HRESOURCE render_target;
+    D3D10DDI_HRESOURCE staging_resource;
     D3D10DDI_HRESOURCE bound_buffers[1];
     D3D10DDI_HRENDERTARGETVIEW rtv;
     D3D10DDI_HRENDERTARGETVIEW bound_rtvs[1];
@@ -595,6 +670,10 @@ int main(void)
     const FLOAT clear_colour[4] = {0.0f, 0.0f, 1.0f, 1.0f};
     const FLOAT blend_factor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     FLOAT clear_argument[4];
+    D3D10DDI_MAPPED_SUBRESOURCE mapped;
+    const unsigned char *pixels;
+    const unsigned char *centre;
+    const unsigned char *corner;
 
     install(&funcs);
 
@@ -603,6 +682,7 @@ int main(void)
     memset(&create_rtv, 0, sizeof(create_rtv));
     memset(&vertex_buffer, 0, sizeof(vertex_buffer));
     memset(&render_target, 0, sizeof(render_target));
+    memset(&staging_resource, 0, sizeof(staging_resource));
     memset(&rtv, 0, sizeof(rtv));
     memset(&vertex_shader, 0, sizeof(vertex_shader));
     memset(&pixel_shader, 0, sizeof(pixel_shader));
@@ -610,6 +690,7 @@ int main(void)
     memset(&blend_state, 0, sizeof(blend_state));
     memset(&depth_stencil_state, 0, sizeof(depth_stencil_state));
     memset(&rasterizer_state, 0, sizeof(rasterizer_state));
+    memset(&mapped, 0, sizeof(mapped));
 
     /* Creation. Each object's private block is sized by the driver and
      * allocated by us, exactly as the runtime does it. */
@@ -621,6 +702,11 @@ int main(void)
     render_target.pDrvPrivate = allocate_private(
             funcs.pfnCalcPrivateResourceSize(device, &create_resource));
     funcs.pfnCreateResource(device, &create_resource, render_target,
+            (D3D10DDI_HRTRESOURCE){0});
+
+    staging_resource.pDrvPrivate = allocate_private(
+            funcs.pfnCalcPrivateResourceSize(device, &create_resource));
+    funcs.pfnCreateResource(device, &create_resource, staging_resource,
             (D3D10DDI_HRTRESOURCE){0});
 
     vertex_shader.pDrvPrivate = allocate_private(
@@ -687,6 +773,28 @@ int main(void)
     funcs.pfnClearRenderTargetView(device, rtv, clear_argument);
     funcs.pfnDraw(device, 3, 0);
 
+    /* Readback follows the application-level test's exact contract: copy the
+     * completed render target, map the staging resource, inspect the centre
+     * and corner texels, then unmap before teardown.  The DDI map page does
+     * not publish numeric enum values, so zero is only a transport sentinel
+     * for this recording stub and is not asserted as a named map mode. */
+    funcs.pfnResourceCopy(device, staging_resource, render_target);
+    funcs.pfnResourceMap(device, staging_resource, 0, 0, 0, &mapped);
+    pixels = (const unsigned char *)mapped.pData;
+    centre = pixels + (TARGET_HEIGHT / 2) * mapped.RowPitch
+            + (TARGET_WIDTH / 2) * BYTES_PER_TEXEL;
+    corner = pixels;
+    check(centre[0] == 0xff && centre[1] == 0x00
+            && centre[2] == 0x00 && centre[3] == 0xff,
+            "the centre texel carries the drawn colour");
+    check(corner[0] == 0x00 && corner[1] == 0x00
+            && corner[2] == 0xff && corner[3] == 0xff,
+            "the corner texel carries the clear colour");
+    check(mapped.RowPitch == TARGET_ROW_PITCH
+            && mapped.DepthPitch == TARGET_BYTES,
+            "the mapped pitches describe the staging buffer");
+    funcs.pfnResourceUnmap(device, staging_resource, 0);
+
     /* Teardown, in reverse. */
     funcs.pfnDestroyRenderTargetView(device, rtv);
     funcs.pfnDestroyRasterizerState(device, rasterizer_state);
@@ -695,6 +803,7 @@ int main(void)
     funcs.pfnDestroyElementLayout(device, element_layout);
     funcs.pfnDestroyShader(device, pixel_shader);
     funcs.pfnDestroyShader(device, vertex_shader);
+    funcs.pfnDestroyResource(device, staging_resource);
     funcs.pfnDestroyResource(device, render_target);
     funcs.pfnDestroyResource(device, vertex_buffer);
 
@@ -716,6 +825,11 @@ int main(void)
             "the pixel stage received the pixel shader");
     check(handle_at("ClearRenderTargetView", 0) == rtv.pDrvPrivate,
             "the clear targeted the bound view");
+    check(handle_at("ResourceCopy", 0) == staging_resource.pDrvPrivate
+            && copy_source_resource == render_target.pDrvPrivate
+            && handle_at("ResourceMap", 0) == staging_resource.pDrvPrivate
+            && handle_at("ResourceUnmap", 0) == staging_resource.pDrvPrivate,
+            "copy, map, and unmap used the staging resource");
     check(handle_at("SetBlendState", 0) == blend_state.pDrvPrivate
             && handle_at("SetDepthStencilState", 0)
                     == depth_stencil_state.pDrvPrivate
@@ -727,7 +841,8 @@ int main(void)
      * checks above discriminating rather than vacuous. */
     check(vertex_buffer.pDrvPrivate != render_target.pDrvPrivate
             && vertex_shader.pDrvPrivate != pixel_shader.pDrvPrivate
-            && rtv.pDrvPrivate != render_target.pDrvPrivate,
+            && rtv.pDrvPrivate != render_target.pDrvPrivate
+            && staging_resource.pDrvPrivate != render_target.pDrvPrivate,
             "the driver private blocks are distinct");
 
     /* Scalar arguments that carry the frame's meaning. */

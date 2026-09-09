@@ -1269,6 +1269,37 @@ static VOID stub_draw(D3D10DDI_HDEVICE hDevice, UINT vertex_count,
     ++command_list_calls;
 }
 
+static VOID stub_resource_map(D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRESOURCE resource, UINT subresource, D3D10_DDI_MAP map,
+        UINT flags, D3D10DDI_MAPPED_SUBRESOURCE *mapped)
+{
+    (void)hDevice;
+    (void)resource;
+    (void)subresource;
+    (void)map;
+    (void)flags;
+    (void)mapped;
+    ++command_list_calls;
+}
+
+static VOID stub_resource_unmap(D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRESOURCE resource, UINT subresource)
+{
+    (void)hDevice;
+    (void)resource;
+    (void)subresource;
+    ++command_list_calls;
+}
+
+static VOID stub_resource_copy(D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRESOURCE destination, D3D10DDI_HRESOURCE source)
+{
+    (void)hDevice;
+    (void)destination;
+    (void)source;
+    ++command_list_calls;
+}
+
 static VOID stub_set_blend_state(D3D10DDI_HDEVICE hDevice,
         D3D10DDI_HBLENDSTATE state, const FLOAT blend_factor[4],
         UINT sample_mask)
@@ -1359,10 +1390,12 @@ static void check_resource_arguments(void)
     D3D10DDIARG_CREATERESOURCE create10;
     D3D11DDIARG_CREATERESOURCE create11;
     D3D10DDIARG_OPENRESOURCE open;
+    D3D10DDI_MAPPED_SUBRESOURCE mapped;
 
     memset(&create10, 0, sizeof(create10));
     memset(&create11, 0, sizeof(create11));
     memset(&open, 0, sizeof(open));
+    memset(&mapped, 0, sizeof(mapped));
 
     CHECK_FIELD(create10, D3D10DDIARG_CREATERESOURCE, pMipInfoList);
     CHECK_FIELD(create10, D3D10DDIARG_CREATERESOURCE, pInitialDataUP);
@@ -1388,6 +1421,9 @@ static void check_resource_arguments(void)
     CHECK_FIELD(open, D3D10DDIARG_OPENRESOURCE, pPrivateDriverData);
     CHECK_FIELD(open, D3D10DDIARG_OPENRESOURCE, PrivateDriverDataSize);
     CHECK_FIELD(open, D3D10DDIARG_OPENRESOURCE, WinePad1);
+    CHECK_FIELD(mapped, D3D10DDI_MAPPED_SUBRESOURCE, pData);
+    CHECK_FIELD(mapped, D3D10DDI_MAPPED_SUBRESOURCE, RowPitch);
+    CHECK_FIELD(mapped, D3D10DDI_MAPPED_SUBRESOURCE, DepthPitch);
 
     check_size("D3D10DDIARG_CREATERESOURCE", 64,
             (unsigned long)sizeof(create10));
@@ -1395,6 +1431,8 @@ static void check_resource_arguments(void)
             (unsigned long)sizeof(create11));
     check_size("D3D10DDIARG_OPENRESOURCE", 40,
             (unsigned long)sizeof(open));
+    check_size("D3D10DDI_MAPPED_SUBRESOURCE", 16,
+            (unsigned long)sizeof(mapped));
 }
 
 static void check_view_arguments(void)
@@ -1551,6 +1589,7 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     UINT offsets[1] = {0};
     FLOAT clear_colour[4] = {0.0f, 0.0f, 0.0f, 1.0f};
     FLOAT blend_factor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    D3D10DDI_MAPPED_SUBRESOURCE mapped;
     UINT handle_count = 0;
 
     memset(&device, 0, sizeof(device));
@@ -1574,6 +1613,7 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     memset(&rt_element_layout, 0, sizeof(rt_element_layout));
     memset(&vertex_buffer, 0, sizeof(vertex_buffer));
     memset(bound_rtvs, 0, sizeof(bound_rtvs));
+    memset(&mapped, 0, sizeof(mapped));
     create.hDeferredContext = device;
 
     funcs->pfnAbandonCommandList = stub_abandon_command_list;
@@ -1645,6 +1685,19 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     funcs->pfnSetBlendState = stub_set_blend_state;
     funcs->pfnSetDepthStencilState = stub_set_depth_stencil_state;
     funcs->pfnSetRasterizerState = stub_set_rasterizer_state;
+    funcs->pfnResourceMap = stub_resource_map;
+    funcs->pfnStagingResourceMap = stub_resource_map;
+    funcs->pfnDynamicIABufferMapNoOverwrite = stub_resource_map;
+    funcs->pfnDynamicIABufferMapDiscard = stub_resource_map;
+    funcs->pfnDynamicConstantBufferMapDiscard = stub_resource_map;
+    funcs->pfnDynamicConstantBufferMapNoOverwrite = stub_resource_map;
+    funcs->pfnDynamicResourceMapDiscard = stub_resource_map;
+    funcs->pfnResourceUnmap = stub_resource_unmap;
+    funcs->pfnStagingResourceUnmap = stub_resource_unmap;
+    funcs->pfnDynamicIABufferUnmap = stub_resource_unmap;
+    funcs->pfnDynamicConstantBufferUnmap = stub_resource_unmap;
+    funcs->pfnDynamicResourceUnmap = stub_resource_unmap;
+    funcs->pfnResourceCopy = stub_resource_copy;
 
     command_list_calls = 0;
     CHECK_STACK("PFND3D11DDI_ABANDONCOMMANDLIST",
@@ -1790,15 +1843,46 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
             funcs->pfnDraw(device, 3, 0));
     CHECK_STACK("PFND3D10DDI_DESTROYELEMENTLAYOUT",
             funcs->pfnDestroyElementLayout(device, element_layout));
+    CHECK_STACK("PFND3D10DDI_RESOURCEMAP (resource)",
+            funcs->pfnResourceMap(device, vertex_buffer, 0, 0, 0, &mapped));
+    CHECK_STACK("PFND3D10DDI_RESOURCEMAP (staging)",
+            funcs->pfnStagingResourceMap(device, vertex_buffer, 0, 0, 0, &mapped));
+    CHECK_STACK("PFND3D10DDI_RESOURCEMAP (dynamic IA no-overwrite)",
+            funcs->pfnDynamicIABufferMapNoOverwrite(device, vertex_buffer, 0,
+                    0, 0, &mapped));
+    CHECK_STACK("PFND3D10DDI_RESOURCEMAP (dynamic IA discard)",
+            funcs->pfnDynamicIABufferMapDiscard(device, vertex_buffer, 0,
+                    0, 0, &mapped));
+    CHECK_STACK("PFND3D10DDI_RESOURCEMAP (dynamic constant discard)",
+            funcs->pfnDynamicConstantBufferMapDiscard(device, vertex_buffer,
+                    0, 0, 0, &mapped));
+    CHECK_STACK("PFND3D10DDI_RESOURCEMAP (dynamic constant no-overwrite)",
+            funcs->pfnDynamicConstantBufferMapNoOverwrite(device,
+                    vertex_buffer, 0, 0, 0, &mapped));
+    CHECK_STACK("PFND3D10DDI_RESOURCEMAP (dynamic resource discard)",
+            funcs->pfnDynamicResourceMapDiscard(device, vertex_buffer, 0,
+                    0, 0, &mapped));
+    CHECK_STACK("PFND3D10DDI_RESOURCEUNMAP (resource)",
+            funcs->pfnResourceUnmap(device, vertex_buffer, 0));
+    CHECK_STACK("PFND3D10DDI_RESOURCEUNMAP (staging)",
+            funcs->pfnStagingResourceUnmap(device, vertex_buffer, 0));
+    CHECK_STACK("PFND3D10DDI_RESOURCEUNMAP (dynamic IA)",
+            funcs->pfnDynamicIABufferUnmap(device, vertex_buffer, 0));
+    CHECK_STACK("PFND3D10DDI_RESOURCEUNMAP (dynamic constant)",
+            funcs->pfnDynamicConstantBufferUnmap(device, vertex_buffer, 0));
+    CHECK_STACK("PFND3D10DDI_RESOURCEUNMAP (dynamic resource)",
+            funcs->pfnDynamicResourceUnmap(device, vertex_buffer, 0));
+    CHECK_STACK("PFND3D10DDI_RESOURCECOPY",
+            funcs->pfnResourceCopy(device, vertex_buffer, vertex_buffer));
 
-    if (command_list_calls == 59 && handle_count == 1)
+    if (command_list_calls == 72 && handle_count == 1)
     {
         printf("[ ok ] the promoted command-list, deferred-context, resource, state, view, shader, "
                 "and binding/draw slots are callable as declared\n");
     }
     else
     {
-        printf("[fail] %d of 59 promoted command/deferred/resource/state/view/shader/draw slots "
+        printf("[fail] %d of 72 promoted command/deferred/resource/state/view/shader/draw slots "
                 "reached their implementation\n", command_list_calls);
         ++failures;
     }
