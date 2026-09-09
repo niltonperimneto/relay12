@@ -952,6 +952,207 @@ static HRESULT stub_recycle_create_deferred_context(D3D10DDI_HDEVICE hDevice,
     return S_OK;
 }
 
+static SIZE_T stub_calc_private_resource_size(D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CREATERESOURCE *create)
+{
+    (void)hDevice;
+    (void)create;
+    ++command_list_calls;
+    return 256;
+}
+
+static SIZE_T stub_calc_private_opened_resource_size(D3D10DDI_HDEVICE hDevice,
+        const D3D10DDIARG_OPENRESOURCE *open)
+{
+    (void)hDevice;
+    (void)open;
+    ++command_list_calls;
+    return 128;
+}
+
+static VOID stub_create_resource(D3D10DDI_HDEVICE hDevice,
+        const D3D11DDIARG_CREATERESOURCE *create,
+        D3D10DDI_HRESOURCE resource, D3D10DDI_HRTRESOURCE rt_resource)
+{
+    (void)hDevice;
+    (void)create;
+    (void)resource;
+    (void)rt_resource;
+    ++command_list_calls;
+}
+
+static VOID stub_open_resource(D3D10DDI_HDEVICE hDevice,
+        const D3D10DDIARG_OPENRESOURCE *open,
+        D3D10DDI_HRESOURCE resource, D3D10DDI_HRTRESOURCE rt_resource)
+{
+    (void)hDevice;
+    (void)open;
+    (void)resource;
+    (void)rt_resource;
+    ++command_list_calls;
+}
+
+static VOID stub_destroy_resource(D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRESOURCE resource)
+{
+    (void)hDevice;
+    (void)resource;
+    ++command_list_calls;
+}
+
+#define STATE_CALC_STUB(name, descriptor) \
+static SIZE_T stub_calc_private_##name##_size(D3D10DDI_HDEVICE hDevice, \
+        const descriptor *state) \
+{ \
+    (void)hDevice; \
+    (void)state; \
+    ++command_list_calls; \
+    return 96; \
+}
+
+#define STATE_CREATE_STUB(name, descriptor, handle, runtime_handle) \
+static VOID stub_create_##name(D3D10DDI_HDEVICE hDevice, \
+        const descriptor *state, handle object, runtime_handle rt_object) \
+{ \
+    (void)hDevice; \
+    (void)state; \
+    (void)object; \
+    (void)rt_object; \
+    ++command_list_calls; \
+}
+
+#define STATE_DESTROY_STUB(name, handle) \
+static VOID stub_destroy_##name(D3D10DDI_HDEVICE hDevice, handle object) \
+{ \
+    (void)hDevice; \
+    (void)object; \
+    ++command_list_calls; \
+}
+
+STATE_CALC_STUB(blend_state, D3D11_1_DDI_BLEND_DESC)
+STATE_CREATE_STUB(blend_state, D3D11_1_DDI_BLEND_DESC,
+        D3D10DDI_HBLENDSTATE, D3D10DDI_HRTBLENDSTATE)
+STATE_DESTROY_STUB(blend_state, D3D10DDI_HBLENDSTATE)
+STATE_CALC_STUB(depth_stencil_state, D3D10_DDI_DEPTH_STENCIL_DESC)
+STATE_CREATE_STUB(depth_stencil_state, D3D10_DDI_DEPTH_STENCIL_DESC,
+        D3D10DDI_HDEPTHSTENCILSTATE, D3D10DDI_HRTDEPTHSTENCILSTATE)
+STATE_DESTROY_STUB(depth_stencil_state, D3D10DDI_HDEPTHSTENCILSTATE)
+STATE_CALC_STUB(rasterizer_state, D3D11_1_DDI_RASTERIZER_DESC)
+STATE_CREATE_STUB(rasterizer_state, D3D11_1_DDI_RASTERIZER_DESC,
+        D3D10DDI_HRASTERIZERSTATE, D3D10DDI_HRTRASTERIZERSTATE)
+STATE_DESTROY_STUB(rasterizer_state, D3D10DDI_HRASTERIZERSTATE)
+STATE_CALC_STUB(sampler, D3D10_DDI_SAMPLER_DESC)
+STATE_CREATE_STUB(sampler, D3D10_DDI_SAMPLER_DESC,
+        D3D10DDI_HSAMPLER, D3D10DDI_HRTSAMPLER)
+STATE_DESTROY_STUB(sampler, D3D10DDI_HSAMPLER)
+
+#undef STATE_CALC_STUB
+#undef STATE_CREATE_STUB
+#undef STATE_DESTROY_STUB
+
+static SIZE_T stub_calc_private_shader_resource_view_size(
+        D3D10DDI_HDEVICE hDevice,
+        const D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW *create)
+{
+    (void)hDevice;
+    (void)create;
+    ++command_list_calls;
+    return 96;
+}
+
+static VOID stub_create_shader_resource_view(D3D10DDI_HDEVICE hDevice,
+        const D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW *create,
+        D3D10DDI_HSHADERRESOURCEVIEW view, D3D10DDI_HRTSHADERRESOURCEVIEW rt_view)
+{
+    (void)hDevice;
+    (void)create;
+    (void)view;
+    (void)rt_view;
+    ++command_list_calls;
+}
+
+static VOID stub_destroy_shader_resource_view(D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HSHADERRESOURCEVIEW view)
+{
+    (void)hDevice;
+    (void)view;
+    ++command_list_calls;
+}
+
+static SIZE_T stub_calc_private_render_target_view_size(
+        D3D10DDI_HDEVICE hDevice,
+        const D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW *create)
+{
+    (void)hDevice;
+    (void)create;
+    ++command_list_calls;
+    return 96;
+}
+
+static VOID stub_create_render_target_view(D3D10DDI_HDEVICE hDevice,
+        const D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW *create,
+        D3D10DDI_HRENDERTARGETVIEW view, D3D10DDI_HRTRENDERTARGETVIEW rt_view)
+{
+    (void)hDevice;
+    (void)create;
+    (void)view;
+    (void)rt_view;
+    ++command_list_calls;
+}
+
+static VOID stub_destroy_render_target_view(D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRENDERTARGETVIEW view)
+{
+    (void)hDevice;
+    (void)view;
+    ++command_list_calls;
+}
+
+static SIZE_T stub_calc_private_shader_size(D3D10DDI_HDEVICE hDevice,
+        const UINT *shader_code,
+        const D3D11_1DDIARG_STAGE_IO_SIGNATURES *signatures)
+{
+    (void)hDevice;
+    (void)shader_code;
+    (void)signatures;
+    ++command_list_calls;
+    return 64;
+}
+
+static VOID stub_create_vertex_shader(D3D10DDI_HDEVICE hDevice,
+        const UINT *shader_code, D3D10DDI_HSHADER shader,
+        D3D10DDI_HRTSHADER rt_shader,
+        const D3D11_1DDIARG_STAGE_IO_SIGNATURES *signatures)
+{
+    (void)hDevice;
+    (void)shader_code;
+    (void)shader;
+    (void)rt_shader;
+    (void)signatures;
+    ++command_list_calls;
+}
+
+static VOID stub_create_pixel_shader(D3D10DDI_HDEVICE hDevice,
+        const UINT *shader_code, D3D10DDI_HSHADER shader,
+        D3D10DDI_HRTSHADER rt_shader,
+        const D3D11_1DDIARG_STAGE_IO_SIGNATURES *signatures)
+{
+    (void)hDevice;
+    (void)shader_code;
+    (void)shader;
+    (void)rt_shader;
+    (void)signatures;
+    ++command_list_calls;
+}
+
+static VOID stub_destroy_shader(D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HSHADER shader)
+{
+    (void)hDevice;
+    (void)shader;
+    ++command_list_calls;
+}
+
 static void check_command_list_handle(void)
 {
     D3D11DDI_HCOMMANDLIST command_list;
@@ -1009,6 +1210,172 @@ static void check_deferred_context_arguments(void)
             (unsigned long)D3DWDDM2_2DDI_HT_CACHESESSION);
 }
 
+static void check_resource_arguments(void)
+{
+    D3D10DDIARG_CREATERESOURCE create10;
+    D3D11DDIARG_CREATERESOURCE create11;
+    D3D10DDIARG_OPENRESOURCE open;
+
+    memset(&create10, 0, sizeof(create10));
+    memset(&create11, 0, sizeof(create11));
+    memset(&open, 0, sizeof(open));
+
+    CHECK_FIELD(create10, D3D10DDIARG_CREATERESOURCE, pMipInfoList);
+    CHECK_FIELD(create10, D3D10DDIARG_CREATERESOURCE, pInitialDataUP);
+    CHECK_FIELD(create10, D3D10DDIARG_CREATERESOURCE, ResourceDimension);
+    CHECK_FIELD(create10, D3D10DDIARG_CREATERESOURCE, Usage);
+    CHECK_FIELD(create10, D3D10DDIARG_CREATERESOURCE, BindFlags);
+    CHECK_FIELD(create10, D3D10DDIARG_CREATERESOURCE, MapFlags);
+    CHECK_FIELD(create10, D3D10DDIARG_CREATERESOURCE, MiscFlags);
+    CHECK_FIELD(create10, D3D10DDIARG_CREATERESOURCE, Format);
+    CHECK_FIELD(create10, D3D10DDIARG_CREATERESOURCE, SampleDesc);
+    CHECK_FIELD(create10, D3D10DDIARG_CREATERESOURCE, MipLevels);
+    CHECK_FIELD(create10, D3D10DDIARG_CREATERESOURCE, ArraySize);
+    CHECK_FIELD(create10, D3D10DDIARG_CREATERESOURCE, pPrimaryDesc);
+    CHECK_FIELD(create11, D3D11DDIARG_CREATERESOURCE, ByteStride);
+    CHECK_FIELD(create11, D3D11DDIARG_CREATERESOURCE, DecoderBufferType);
+    CHECK_FIELD(create11, D3D11DDIARG_CREATERESOURCE, TextureLayout);
+    CHECK_FIELD(create11, D3D11DDIARG_CREATERESOURCE, WinePad0);
+    CHECK_FIELD(open, D3D10DDIARG_OPENRESOURCE, NumAllocations);
+    CHECK_FIELD(open, D3D10DDIARG_OPENRESOURCE, WinePad0);
+    CHECK_FIELD(open, D3D10DDIARG_OPENRESOURCE, pOpenAllocationInfo);
+    CHECK_FIELD(open, D3D10DDIARG_OPENRESOURCE, pOpenAllocationInfo2);
+    CHECK_FIELD(open, D3D10DDIARG_OPENRESOURCE, hKMResource);
+    CHECK_FIELD(open, D3D10DDIARG_OPENRESOURCE, pPrivateDriverData);
+    CHECK_FIELD(open, D3D10DDIARG_OPENRESOURCE, PrivateDriverDataSize);
+    CHECK_FIELD(open, D3D10DDIARG_OPENRESOURCE, WinePad1);
+
+    check_size("D3D10DDIARG_CREATERESOURCE", 64,
+            (unsigned long)sizeof(create10));
+    check_size("D3D11DDIARG_CREATERESOURCE", 80,
+            (unsigned long)sizeof(create11));
+    check_size("D3D10DDIARG_OPENRESOURCE", 40,
+            (unsigned long)sizeof(open));
+}
+
+static void check_view_arguments(void)
+{
+    D3D10DDI_HSHADERRESOURCEVIEW srv;
+    D3D10DDI_HRTSHADERRESOURCEVIEW rt_srv;
+    D3D10DDI_HRENDERTARGETVIEW rtv;
+    D3D10DDI_HRTRENDERTARGETVIEW rt_rtv;
+    D3D10DDIARG_BUFFER_SHADERRESOURCEVIEW buffer_srv;
+    D3D10DDIARG_TEX1D_SHADERRESOURCEVIEW tex1d_srv;
+    D3DWDDM2_0DDIARG_TEX2D_SHADERRESOURCEVIEW tex2d_srv;
+    D3D10DDIARG_TEX3D_SHADERRESOURCEVIEW tex3d_srv;
+    D3D10_1DDIARG_TEXCUBE_SHADERRESOURCEVIEW texcube_srv;
+    D3D11DDIARG_BUFFEREX_SHADERRESOURCEVIEW bufferex_srv;
+    D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW create_srv;
+    D3D10DDIARG_BUFFER_RENDERTARGETVIEW buffer_rtv;
+    D3D10DDIARG_TEX1D_RENDERTARGETVIEW tex1d_rtv;
+    D3D10DDIARG_TEX2D_RENDERTARGETVIEW tex2d_rtv;
+    D3D10DDIARG_TEX3D_RENDERTARGETVIEW tex3d_rtv;
+    D3D10DDIARG_TEXCUBE_RENDERTARGETVIEW texcube_rtv;
+    D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW create_rtv;
+
+    memset(&srv, 0, sizeof(srv));
+    memset(&rt_srv, 0, sizeof(rt_srv));
+    memset(&rtv, 0, sizeof(rtv));
+    memset(&rt_rtv, 0, sizeof(rt_rtv));
+    memset(&buffer_srv, 0, sizeof(buffer_srv));
+    memset(&tex1d_srv, 0, sizeof(tex1d_srv));
+    memset(&tex2d_srv, 0, sizeof(tex2d_srv));
+    memset(&tex3d_srv, 0, sizeof(tex3d_srv));
+    memset(&texcube_srv, 0, sizeof(texcube_srv));
+    memset(&bufferex_srv, 0, sizeof(bufferex_srv));
+    memset(&create_srv, 0, sizeof(create_srv));
+    memset(&buffer_rtv, 0, sizeof(buffer_rtv));
+    memset(&tex1d_rtv, 0, sizeof(tex1d_rtv));
+    memset(&tex2d_rtv, 0, sizeof(tex2d_rtv));
+    memset(&tex3d_rtv, 0, sizeof(tex3d_rtv));
+    memset(&texcube_rtv, 0, sizeof(texcube_rtv));
+    memset(&create_rtv, 0, sizeof(create_rtv));
+
+    CHECK_FIELD(srv, D3D10DDI_HSHADERRESOURCEVIEW, pDrvPrivate);
+    CHECK_FIELD(rt_srv, D3D10DDI_HRTSHADERRESOURCEVIEW, handle);
+    CHECK_FIELD(rtv, D3D10DDI_HRENDERTARGETVIEW, pDrvPrivate);
+    CHECK_FIELD(rt_rtv, D3D10DDI_HRTRENDERTARGETVIEW, handle);
+
+    CHECK_FIELD(buffer_srv, D3D10DDIARG_BUFFER_SHADERRESOURCEVIEW, FirstElement);
+    CHECK_FIELD(buffer_srv, D3D10DDIARG_BUFFER_SHADERRESOURCEVIEW, NumElements);
+    CHECK_FIELD(tex1d_srv, D3D10DDIARG_TEX1D_SHADERRESOURCEVIEW, MostDetailedMip);
+    CHECK_FIELD(tex1d_srv, D3D10DDIARG_TEX1D_SHADERRESOURCEVIEW, FirstArraySlice);
+    CHECK_FIELD(tex1d_srv, D3D10DDIARG_TEX1D_SHADERRESOURCEVIEW, MipLevels);
+    CHECK_FIELD(tex1d_srv, D3D10DDIARG_TEX1D_SHADERRESOURCEVIEW, ArraySize);
+    CHECK_FIELD(tex2d_srv, D3DWDDM2_0DDIARG_TEX2D_SHADERRESOURCEVIEW, MostDetailedMip);
+    CHECK_FIELD(tex2d_srv, D3DWDDM2_0DDIARG_TEX2D_SHADERRESOURCEVIEW, FirstArraySlice);
+    CHECK_FIELD(tex2d_srv, D3DWDDM2_0DDIARG_TEX2D_SHADERRESOURCEVIEW, MipLevels);
+    CHECK_FIELD(tex2d_srv, D3DWDDM2_0DDIARG_TEX2D_SHADERRESOURCEVIEW, ArraySize);
+    CHECK_FIELD(tex2d_srv, D3DWDDM2_0DDIARG_TEX2D_SHADERRESOURCEVIEW, PlaneSlice);
+    CHECK_FIELD(tex2d_srv, D3DWDDM2_0DDIARG_TEX2D_SHADERRESOURCEVIEW, PlaneIndex);
+    CHECK_FIELD(tex3d_srv, D3D10DDIARG_TEX3D_SHADERRESOURCEVIEW, MostDetailedMip);
+    CHECK_FIELD(tex3d_srv, D3D10DDIARG_TEX3D_SHADERRESOURCEVIEW, MipLevels);
+    CHECK_FIELD(texcube_srv, D3D10_1DDIARG_TEXCUBE_SHADERRESOURCEVIEW, MostDetailedMip);
+    CHECK_FIELD(texcube_srv, D3D10_1DDIARG_TEXCUBE_SHADERRESOURCEVIEW, MipLevels);
+    CHECK_FIELD(texcube_srv, D3D10_1DDIARG_TEXCUBE_SHADERRESOURCEVIEW, First2DArrayFace);
+    CHECK_FIELD(texcube_srv, D3D10_1DDIARG_TEXCUBE_SHADERRESOURCEVIEW, NumCubes);
+    CHECK_FIELD(bufferex_srv, D3D11DDIARG_BUFFEREX_SHADERRESOURCEVIEW, FirstElement);
+    CHECK_FIELD(bufferex_srv, D3D11DDIARG_BUFFEREX_SHADERRESOURCEVIEW, NumElements);
+    CHECK_FIELD(bufferex_srv, D3D11DDIARG_BUFFEREX_SHADERRESOURCEVIEW, Flags);
+    CHECK_FIELD(create_srv, D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW, hDrvResource);
+    CHECK_FIELD(create_srv, D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW, Format);
+    CHECK_FIELD(create_srv, D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW, ResourceDimension);
+    CHECK_FIELD(create_srv, D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW, Buffer);
+    CHECK_FIELD(create_srv, D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW, Tex1D);
+    CHECK_FIELD(create_srv, D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW, Tex2D);
+    CHECK_FIELD(create_srv, D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW, Tex3D);
+    CHECK_FIELD(create_srv, D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW, TexCube);
+    CHECK_FIELD(create_srv, D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW, BufferEx);
+
+    CHECK_FIELD(buffer_rtv, D3D10DDIARG_BUFFER_RENDERTARGETVIEW, FirstElement);
+    CHECK_FIELD(buffer_rtv, D3D10DDIARG_BUFFER_RENDERTARGETVIEW, NumElements);
+    CHECK_FIELD(tex1d_rtv, D3D10DDIARG_TEX1D_RENDERTARGETVIEW, MipSlice);
+    CHECK_FIELD(tex1d_rtv, D3D10DDIARG_TEX1D_RENDERTARGETVIEW, FirstArraySlice);
+    CHECK_FIELD(tex1d_rtv, D3D10DDIARG_TEX1D_RENDERTARGETVIEW, ArraySize);
+    CHECK_FIELD(tex2d_rtv, D3D10DDIARG_TEX2D_RENDERTARGETVIEW, MipSlice);
+    CHECK_FIELD(tex2d_rtv, D3D10DDIARG_TEX2D_RENDERTARGETVIEW, FirstArraySlice);
+    CHECK_FIELD(tex2d_rtv, D3D10DDIARG_TEX2D_RENDERTARGETVIEW, ArraySize);
+    CHECK_FIELD(tex3d_rtv, D3D10DDIARG_TEX3D_RENDERTARGETVIEW, MipSlice);
+    CHECK_FIELD(tex3d_rtv, D3D10DDIARG_TEX3D_RENDERTARGETVIEW, FirstW);
+    CHECK_FIELD(tex3d_rtv, D3D10DDIARG_TEX3D_RENDERTARGETVIEW, WSize);
+    CHECK_FIELD(texcube_rtv, D3D10DDIARG_TEXCUBE_RENDERTARGETVIEW, MipSlice);
+    CHECK_FIELD(texcube_rtv, D3D10DDIARG_TEXCUBE_RENDERTARGETVIEW, FirstArraySlice);
+    CHECK_FIELD(texcube_rtv, D3D10DDIARG_TEXCUBE_RENDERTARGETVIEW, ArraySize);
+    CHECK_FIELD(create_rtv, D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW, hDrvResource);
+    CHECK_FIELD(create_rtv, D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW, Format);
+    CHECK_FIELD(create_rtv, D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW, ResourceDimension);
+    CHECK_FIELD(create_rtv, D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW, Buffer);
+    CHECK_FIELD(create_rtv, D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW, Tex1D);
+    CHECK_FIELD(create_rtv, D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW, Tex2D);
+    CHECK_FIELD(create_rtv, D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW, Tex3D);
+    CHECK_FIELD(create_rtv, D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW, TexCube);
+    CHECK_FIELD(create_rtv, D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW, WinePad0);
+
+    check_size("D3D10DDI_HSHADERRESOURCEVIEW", 8, (unsigned long)sizeof(srv));
+    check_size("D3D10DDI_HRTSHADERRESOURCEVIEW", 8, (unsigned long)sizeof(rt_srv));
+    check_size("D3D10DDI_HRENDERTARGETVIEW", 8, (unsigned long)sizeof(rtv));
+    check_size("D3D10DDI_HRTRENDERTARGETVIEW", 8, (unsigned long)sizeof(rt_rtv));
+    check_size("D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW", 40,
+            (unsigned long)sizeof(create_srv));
+    check_size("D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW", 32,
+            (unsigned long)sizeof(create_rtv));
+}
+
+static void check_shader_handles(void)
+{
+    D3D10DDI_HSHADER shader;
+    D3D10DDI_HRTSHADER rt_shader;
+
+    memset(&shader, 0, sizeof(shader));
+    memset(&rt_shader, 0, sizeof(rt_shader));
+
+    CHECK_FIELD(shader, D3D10DDI_HSHADER, pDrvPrivate);
+    CHECK_FIELD(rt_shader, D3D10DDI_HRTSHADER, handle);
+
+    check_size("D3D10DDI_HSHADER", 8, (unsigned long)sizeof(shader));
+    check_size("D3D10DDI_HRTSHADER", 8, (unsigned long)sizeof(rt_shader));
+}
+
 /* The promoted command-list slots, filled and called through the table.
  * pfnDestroyCommandList and pfnRecycleDestroyCommandList share one type
  * outright, so what this checks beyond callability is that the documented
@@ -1022,6 +1389,16 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     D3D11DDI_HANDLESIZE handle_size;
     D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE calculate_deferred;
     D3D11DDIARG_CREATEDEFERREDCONTEXT create_deferred;
+    D3D11DDIARG_CREATERESOURCE create_resource;
+    D3D10DDIARG_OPENRESOURCE open_resource;
+    D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW create_srv;
+    D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW create_rtv;
+    D3D10DDI_HSHADERRESOURCEVIEW srv;
+    D3D10DDI_HRTSHADERRESOURCEVIEW rt_srv;
+    D3D10DDI_HRENDERTARGETVIEW rtv;
+    D3D10DDI_HRTRENDERTARGETVIEW rt_rtv;
+    D3D10DDI_HSHADER shader;
+    D3D10DDI_HRTSHADER rt_shader;
     UINT handle_count = 0;
 
     memset(&device, 0, sizeof(device));
@@ -1031,6 +1408,16 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     memset(&handle_size, 0, sizeof(handle_size));
     memset(&calculate_deferred, 0, sizeof(calculate_deferred));
     memset(&create_deferred, 0, sizeof(create_deferred));
+    memset(&create_resource, 0, sizeof(create_resource));
+    memset(&open_resource, 0, sizeof(open_resource));
+    memset(&create_srv, 0, sizeof(create_srv));
+    memset(&create_rtv, 0, sizeof(create_rtv));
+    memset(&srv, 0, sizeof(srv));
+    memset(&rt_srv, 0, sizeof(rt_srv));
+    memset(&rtv, 0, sizeof(rtv));
+    memset(&rt_rtv, 0, sizeof(rt_rtv));
+    memset(&shader, 0, sizeof(shader));
+    memset(&rt_shader, 0, sizeof(rt_shader));
     create.hDeferredContext = device;
 
     funcs->pfnAbandonCommandList = stub_abandon_command_list;
@@ -1050,6 +1437,38 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     funcs->pfnCreateDeferredContext = stub_create_deferred_context;
     funcs->pfnRecycleCreateDeferredContext =
             stub_recycle_create_deferred_context;
+    funcs->pfnCalcPrivateResourceSize = stub_calc_private_resource_size;
+    funcs->pfnCalcPrivateOpenedResourceSize =
+            stub_calc_private_opened_resource_size;
+    funcs->pfnCreateResource = stub_create_resource;
+    funcs->pfnOpenResource = stub_open_resource;
+    funcs->pfnDestroyResource = stub_destroy_resource;
+    funcs->pfnCalcPrivateBlendStateSize = stub_calc_private_blend_state_size;
+    funcs->pfnCreateBlendState = stub_create_blend_state;
+    funcs->pfnDestroyBlendState = stub_destroy_blend_state;
+    funcs->pfnCalcPrivateDepthStencilStateSize =
+            stub_calc_private_depth_stencil_state_size;
+    funcs->pfnCreateDepthStencilState = stub_create_depth_stencil_state;
+    funcs->pfnDestroyDepthStencilState = stub_destroy_depth_stencil_state;
+    funcs->pfnCalcPrivateRasterizerStateSize =
+            stub_calc_private_rasterizer_state_size;
+    funcs->pfnCreateRasterizerState = stub_create_rasterizer_state;
+    funcs->pfnDestroyRasterizerState = stub_destroy_rasterizer_state;
+    funcs->pfnCalcPrivateSamplerSize = stub_calc_private_sampler_size;
+    funcs->pfnCreateSampler = stub_create_sampler;
+    funcs->pfnDestroySampler = stub_destroy_sampler;
+    funcs->pfnCalcPrivateShaderResourceViewSize =
+            stub_calc_private_shader_resource_view_size;
+    funcs->pfnCreateShaderResourceView = stub_create_shader_resource_view;
+    funcs->pfnDestroyShaderResourceView = stub_destroy_shader_resource_view;
+    funcs->pfnCalcPrivateRenderTargetViewSize =
+            stub_calc_private_render_target_view_size;
+    funcs->pfnCreateRenderTargetView = stub_create_render_target_view;
+    funcs->pfnDestroyRenderTargetView = stub_destroy_render_target_view;
+    funcs->pfnCalcPrivateShaderSize = stub_calc_private_shader_size;
+    funcs->pfnCreateVertexShader = stub_create_vertex_shader;
+    funcs->pfnCreatePixelShader = stub_create_pixel_shader;
+    funcs->pfnDestroyShader = stub_destroy_shader;
 
     command_list_calls = 0;
     CHECK_STACK("PFND3D11DDI_ABANDONCOMMANDLIST",
@@ -1084,16 +1503,82 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     CHECK_STACK("PFND3D11DDI_RECYCLECREATEDEFERREDCONTEXT",
             (void)funcs->pfnRecycleCreateDeferredContext(device,
                     &create_deferred));
+    CHECK_STACK("PFND3D11DDI_CALCPRIVATERESOURCESIZE",
+            (void)funcs->pfnCalcPrivateResourceSize(device, &create_resource));
+    CHECK_STACK("PFND3D10DDI_CALCPRIVATEOPENEDRESOURCESIZE",
+            (void)funcs->pfnCalcPrivateOpenedResourceSize(device,
+                    &open_resource));
+    CHECK_STACK("PFND3D11DDI_CREATERESOURCE",
+            funcs->pfnCreateResource(device, &create_resource,
+                    (D3D10DDI_HRESOURCE){0}, (D3D10DDI_HRTRESOURCE){0}));
+    CHECK_STACK("PFND3D10DDI_OPENRESOURCE",
+            funcs->pfnOpenResource(device, &open_resource,
+                    (D3D10DDI_HRESOURCE){0}, (D3D10DDI_HRTRESOURCE){0}));
+    CHECK_STACK("PFND3D10DDI_DESTROYRESOURCE",
+            funcs->pfnDestroyResource(device, (D3D10DDI_HRESOURCE){0}));
+    CHECK_STACK("PFND3D11_1DDI_CALCPRIVATEBLENDSTATESIZE",
+            (void)funcs->pfnCalcPrivateBlendStateSize(device, NULL));
+    CHECK_STACK("PFND3D11_1DDI_CREATEBLENDSTATE",
+            funcs->pfnCreateBlendState(device, NULL,
+                    (D3D10DDI_HBLENDSTATE){0},
+                    (D3D10DDI_HRTBLENDSTATE){0}));
+    CHECK_STACK("PFND3D10DDI_DESTROYBLENDSTATE",
+            funcs->pfnDestroyBlendState(device, (D3D10DDI_HBLENDSTATE){0}));
+    CHECK_STACK("PFND3D10DDI_CALCPRIVATEDEPTHSTENCILSTATESIZE",
+            (void)funcs->pfnCalcPrivateDepthStencilStateSize(device, NULL));
+    CHECK_STACK("PFND3D10DDI_CREATEDEPTHSTENCILSTATE",
+            funcs->pfnCreateDepthStencilState(device, NULL,
+                    (D3D10DDI_HDEPTHSTENCILSTATE){0},
+                    (D3D10DDI_HRTDEPTHSTENCILSTATE){0}));
+    CHECK_STACK("PFND3D10DDI_DESTROYDEPTHSTENCILSTATE",
+            funcs->pfnDestroyDepthStencilState(device,
+                    (D3D10DDI_HDEPTHSTENCILSTATE){0}));
+    CHECK_STACK("PFND3DWDDM2_0DDI_CALCPRIVATERASTERIZERSTATESIZE",
+            (void)funcs->pfnCalcPrivateRasterizerStateSize(device, NULL));
+    CHECK_STACK("PFND3DWDDM2_0DDI_CREATERASTERIZERSTATE",
+            funcs->pfnCreateRasterizerState(device, NULL,
+                    (D3D10DDI_HRASTERIZERSTATE){0},
+                    (D3D10DDI_HRTRASTERIZERSTATE){0}));
+    CHECK_STACK("PFND3D10DDI_DESTROYRASTERIZERSTATE",
+            funcs->pfnDestroyRasterizerState(device,
+                    (D3D10DDI_HRASTERIZERSTATE){0}));
+    CHECK_STACK("PFND3D10DDI_CALCPRIVATESAMPLERSIZE",
+            (void)funcs->pfnCalcPrivateSamplerSize(device, NULL));
+    CHECK_STACK("PFND3D10DDI_CREATESAMPLER",
+            funcs->pfnCreateSampler(device, NULL, (D3D10DDI_HSAMPLER){0},
+                    (D3D10DDI_HRTSAMPLER){0}));
+    CHECK_STACK("PFND3D10DDI_DESTROYSAMPLER",
+            funcs->pfnDestroySampler(device, (D3D10DDI_HSAMPLER){0}));
+    CHECK_STACK("PFND3DWDDM2_0DDI_CALCPRIVATESHADERRESOURCEVIEWSIZE",
+            (void)funcs->pfnCalcPrivateShaderResourceViewSize(device, &create_srv));
+    CHECK_STACK("PFND3DWDDM2_0DDI_CREATESHADERRESOURCEVIEW",
+            funcs->pfnCreateShaderResourceView(device, &create_srv, srv, rt_srv));
+    CHECK_STACK("PFND3D10DDI_DESTROYSHADERRESOURCEVIEW",
+            funcs->pfnDestroyShaderResourceView(device, srv));
+    CHECK_STACK("PFND3DWDDM2_0DDI_CALCPRIVATERENDERTARGETVIEWSIZE",
+            (void)funcs->pfnCalcPrivateRenderTargetViewSize(device, &create_rtv));
+    CHECK_STACK("PFND3DWDDM2_0DDI_CREATERENDERTARGETVIEW",
+            funcs->pfnCreateRenderTargetView(device, &create_rtv, rtv, rt_rtv));
+    CHECK_STACK("PFND3D10DDI_DESTROYRENDERTARGETVIEW",
+            funcs->pfnDestroyRenderTargetView(device, rtv));
+    CHECK_STACK("PFND3D11_1DDI_CALCPRIVATESHADERSIZE",
+            (void)funcs->pfnCalcPrivateShaderSize(device, NULL, NULL));
+    CHECK_STACK("PFND3D11_1DDI_CREATEVERTEXSHADER",
+            funcs->pfnCreateVertexShader(device, NULL, shader, rt_shader, NULL));
+    CHECK_STACK("PFND3D11_1DDI_CREATEPIXELSHADER",
+            funcs->pfnCreatePixelShader(device, NULL, shader, rt_shader, NULL));
+    CHECK_STACK("PFND3D10DDI_DESTROYSHADER",
+            funcs->pfnDestroyShader(device, shader));
 
-    if (command_list_calls == 13 && handle_count == 1)
+    if (command_list_calls == 40 && handle_count == 1)
     {
-        printf("[ ok ] the promoted command-list and deferred-context slots are callable as "
-                "declared\n");
+        printf("[ ok ] the promoted command-list, deferred-context, resource, state, view, and shader "
+                "slots are callable as declared\n");
     }
     else
     {
-        printf("[fail] %d of 13 promoted command/deferred slots reached their "
-                "implementation\n", command_list_calls);
+        printf("[fail] %d of 40 promoted command/deferred/resource/state/view/shader slots reached "
+                "their implementation\n", command_list_calls);
         ++failures;
     }
 
@@ -1317,6 +1802,9 @@ int main(void)
     check_create_device();
     check_command_list_handle();
     check_deferred_context_arguments();
+    check_resource_arguments();
+    check_view_arguments();
+    check_shader_handles();
     check_device_funcs();
     check_corelayer_callbacks();
     check_kernel_callbacks();

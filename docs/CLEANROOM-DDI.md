@@ -238,7 +238,11 @@ misinterpretation; `--check` defends against structural *drift* across 178+ slot
 | Core-layer callbacks | `D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS`, 46 `PFN` typedefs, `D3DWDDM2_2DDI_HRTCACHESESSION` | 376 / 8 |
 | Kernel callbacks | `D3DDDI_DEVICECALLBACKS`, 65 `PFN` typedefs of which 2 promoted, `D3DDDICB_ESCAPE`, `D3DDDICB_SYNCTOKEN`, `WINE_D3D11DDI_ESCAPEFLAGS` | 528 / 40 / 24 / 4 |
 | Command-list creation | `D3D11DDI_HCOMMANDLIST`, `D3D11DDI_HRTCOMMANDLIST`, `D3D11DDIARG_CREATECOMMANDLIST` | 8 each |
-| Device function table | `D3DWDDM2_6DDI_DEVICEFUNCS`, 178 slots across 138 published `PFN` names, of which 7 promoted (8 slots) and 131 held behind placeholders | 1424 |
+| Deferred-context creation | `D3D11DDI_HANDLETYPE`, `D3D11DDI_HANDLESIZE`, `D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE`, `D3D11DDIARG_CREATEDEFERREDCONTEXT` | 4 / 16 / 4 / 40 |
+| Resource creation | `D3D10DDIARG_CREATERESOURCE`, `D3D11DDIARG_CREATERESOURCE`, `D3D10DDIARG_OPENRESOURCE` | 64 / 80 / 40 |
+| SRV/RTV creation | `D3D10DDI_H(RT)SHADERRESOURCEVIEW`, `D3D10DDI_H(RT)RENDERTARGETVIEW`, `D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW` (and its 6 union arms), `D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW` (and its 5 union arms) | 8 each / 40 / 32 |
+| Vertex/pixel shader creation | `D3D10DDI_H(RT)SHADER`, `D3D11_1DDIARG_STAGE_IO_SIGNATURES` (incomplete, pointer-only) | 8 each |
+| Device function table | `D3DWDDM2_6DDI_DEVICEFUNCS`, 178 slots across 138 published `PFN` names, of which 27 promoted (28 slots) and 111 held behind placeholders | 1424 |
 
 #### Key constraints in `D3D10DDIARG_CREATEDEVICE` (88 bytes)
 
@@ -401,12 +405,61 @@ so it would be an invented type behind a provenance block.
 `D3D11DDIARG_CREATECOMMANDLIST`, the first declared signature that consumes
 it, preserving the prohibition on speculative handles.
 
+**Promoted next: the shader resource view and render target view creation
+pair.** Six slots, `pfnCalcPrivateShaderResourceViewSize`,
+`pfnCreateShaderResourceView`, `pfnDestroyShaderResourceView`,
+`pfnCalcPrivateRenderTargetViewSize`, `pfnCreateRenderTargetView`, and
+`pfnDestroyRenderTargetView`, unblocked by the newly declared
+`D3D10DDI_H(RT)SHADERRESOURCEVIEW` and `D3D10DDI_H(RT)RENDERTARGETVIEW`
+handles and the two creation-argument structures. Depth-stencil and
+unordered-access views are a separate slot family and stay behind
+placeholders; `docs/D3D11ON12-SKIPPABLE-ELEMENTS.md`'s MVP path needs only
+this pair.
+
+**`D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW` has no published WDDM 2.0-named
+page**, unlike its SRV and UAV siblings. Both documentation surfaces 404 for
+that exact name, but the pinned driver's own `src/view.cpp` signature uses it
+verbatim, and every field the driver reads through it is already present on
+the published base `D3D10DDIARG_CREATERENDERTARGETVIEW` and its arms —
+including `TexCube.ArraySize`, `.FirstArraySlice`, and `.MipSlice`, the fields
+that would have forced a revision had the base structure lacked them. The
+declaration keeps the ABI call-site name and the cross-validated public
+fields.
+
+**The SRV `TexCube` arm is a genuine two-surface disagreement, not a
+transcription slip.** The rendered syntax block for
+`D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW` types the arm
+`D3D10_1DDIARG_TEXCUBE_SHADERRESOURCEVIEW` (4 fields, cube-array capable);
+the markdown mirror's member prose links the older, 2-field
+`D3D10DDIARG_TEXCUBE_SHADERRESOURCEVIEW` instead. Rule 3 says both surfaces
+must agree or authoring halts, so both arms' own pages were fetched directly:
+the pinned driver's `GetTranslationDesc` reads
+`pDDIDesc->TexCube.First2DArrayFace` and `.NumCubes` for the `TEXTURECUBE`
+case, fields only the 4-field arm has, which is what the rendered surface
+names and the mirror's stale prose link does not.
+
+**Promoted next: the vertex and pixel shader creation pair.** Four slots,
+`pfnCalcPrivateShaderSize`, `pfnCreateVertexShader`, `pfnCreatePixelShader`,
+and `pfnDestroyShader`, unblocked by the newly declared `D3D10DDI_H(RT)SHADER`
+handles. The size and destroy callbacks are shared by every shader stage —
+geometry, hull, domain, and compute included — so promoting them here
+unblocks their signature, not their argument type; those stages' own create
+callbacks stay behind placeholders until stream-output and tessellation
+structures are authored.
+
+**`D3D11_1DDIARG_STAGE_IO_SIGNATURES` stays an incomplete forward
+declaration.** Every promoted callback that takes it does so behind a
+pointer, and none dereferences it, so — per rule 6 and the resource group's
+precedent for `D3D10DDI_MIPINFO` and its neighbours — laying out
+`D3D11_1DDIARG_SIGNATURE_ENTRY` and its container now would be an unverified
+declaration nothing yet needs.
+
 ### Remaining groups roadmap
 
 | # | Group | Scope | Rationale and dependencies |
 | :--- | :--- | :--- | :--- |
 | 1 | Surface discovery | MIT tree test build against clean-room header | Turns remaining clean-room work into a measurable compiler worklist |
-| 2 | Signature promotion | Promote slots in `D3DWDDM2_6DDI_DEVICEFUNCS` | 131 of 138 distinct callback types remain; ordered by which structure group declares their parameter types, not by slot. See the gating table in `DDI-REMAINING-ROADMAP.md` |
+| 2 | Signature promotion | Promote slots in `D3DWDDM2_6DDI_DEVICEFUNCS` | 111 of 138 distinct callback types remain; ordered by which structure group declares their parameter types, not by slot. See the gating table in `DDI-REMAINING-ROADMAP.md` |
 | 3 | DXGI DDI interop | `DXGI_DDI_BASE_CALLBACKS`, `DXGI1_6_1_DDI_BASE_FUNCTIONS` | Required by `DXGIBaseDDI` pointers in creation arguments |
 
 ## Open questions

@@ -374,6 +374,50 @@ jobs:
             echo "promoted C++ device slot unexpectedly accepted the wrong handle"
             exit 1
           fi
+          if x86_64-w64-mingw32-gcc -std=gnu11 -Wall -Wextra -Werror \
+            -Irelay12-d3d11/ddi -c tests/d3d11ddiresourcepromotednegative.c; then
+            echo "promoted resource slot accepted the wrong argument structure"
+            exit 1
+          fi
+          if x86_64-w64-mingw32-g++ -std=c++17 -Wall -Wextra -Werror \
+            -fno-exceptions -fno-rtti -Irelay12-d3d11/ddi -x c++ \
+            -c tests/d3d11ddiresourcepromotednegative.c; then
+            echo "promoted C++ resource slot accepted the wrong argument structure"
+            exit 1
+          fi
+          if x86_64-w64-mingw32-gcc -std=gnu11 -Wall -Wextra -Werror \
+            -Irelay12-d3d11/ddi -c tests/d3d11ddiviewpromotednegative.c; then
+            echo "promoted view slot accepted the wrong handle or argument structure"
+            exit 1
+          fi
+          if x86_64-w64-mingw32-g++ -std=c++17 -Wall -Wextra -Werror \
+            -fno-exceptions -fno-rtti -Irelay12-d3d11/ddi -x c++ \
+            -c tests/d3d11ddiviewpromotednegative.c; then
+            echo "promoted C++ view slot accepted the wrong handle or argument structure"
+            exit 1
+          fi
+          if x86_64-w64-mingw32-gcc -std=gnu11 -Wall -Wextra -Werror \
+            -Irelay12-d3d11/ddi -c tests/d3d11ddishaderpromotednegative.c; then
+            echo "promoted shader slot accepted the wrong handle type"
+            exit 1
+          fi
+          if x86_64-w64-mingw32-g++ -std=c++17 -Wall -Wextra -Werror \
+            -fno-exceptions -fno-rtti -Irelay12-d3d11/ddi -x c++ \
+            -c tests/d3d11ddishaderpromotednegative.c; then
+            echo "promoted C++ shader slot accepted the wrong handle type"
+            exit 1
+          fi
+          if x86_64-w64-mingw32-gcc -std=gnu11 -Wall -Wextra -Werror \
+            -Irelay12-d3d11/ddi -c tests/d3d11ddistatepromotednegative.c; then
+            echo "promoted state slot accepted the wrong handle type"
+            exit 1
+          fi
+          if x86_64-w64-mingw32-g++ -std=c++17 -Wall -Wextra -Werror \
+            -fno-exceptions -fno-rtti -Irelay12-d3d11/ddi -x c++ \
+            -c tests/d3d11ddistatepromotednegative.c; then
+            echo "promoted C++ state slot accepted the wrong handle type"
+            exit 1
+          fi
           # GetSupportedVersions writes its own count of words whenever the
           # buffer pointer is non-null, so the count it takes is not a
           # capacity.  These cases are what stands between that and a buffer
