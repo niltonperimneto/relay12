@@ -28,6 +28,8 @@ cp "$repository_root/compat/relay_ownership.hpp" \
     "$source_dir/include/relay_ownership.hpp"
 cp "$repository_root/compat/relay_atl_compat.hpp" \
     "$source_dir/include/relay_atl_compat.hpp"
+cp "$repository_root/compat/relay_hresult_error.hpp" \
+    "$source_dir/include/relay_hresult_error.hpp"
 
 python3 "$repository_root/scripts/inventory_dtl_portability.py" \
     "$source_dir" --check "$repository_root/docs/dtl-portability-baseline.json"

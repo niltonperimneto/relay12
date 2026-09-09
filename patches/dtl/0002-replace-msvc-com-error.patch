@@ -1,0 +1,344 @@
+From: relay12 contributors
+Subject: [PATCH] dtl: replace MSVC-only _com_error
+
+Carry HRESULT values in relay12's dependency-free exception type. The
+replacement preserves every existing throw value, including the two S_OK
+control-flow sentinels, and leaves all catch boundaries in place.
+---
+diff --git a/include/D3D12TranslationLayerDependencyIncludes.h b/include/D3D12TranslationLayerDependencyIncludes.h
+index 1869744..9d940af 100644
+--- a/include/D3D12TranslationLayerDependencyIncludes.h
++++ b/include/D3D12TranslationLayerDependencyIncludes.h
+@@ -14,6 +14,7 @@
+ #define WIN32_LEAN_AND_MEAN
+ #include <windows.h>
+ #include "relay_atl_compat.hpp"
++#include "relay_hresult_error.hpp"
+ #include <comdef.h>
+ #include <strsafe.h>
+ 
+diff --git a/include/ImmediateContext.hpp b/include/ImmediateContext.hpp
+index 83f629b..ec9a0d8 100644
+--- a/include/ImmediateContext.hpp
++++ b/include/ImmediateContext.hpp
+@@ -1298,7 +1298,7 @@ public:
+             {
+                 return allocateFunc();
+             }
+-            catch( _com_error& hrEx )
++            catch( RelayHResultError& hrEx )
+             {
+                 if (hrEx.Error() != E_OUTOFMEMORY ||
+                     !ResourceAllocationFallback(threadingContext))
+diff --git a/include/ImmediateContext.inl b/include/ImmediateContext.inl
+index c0b6c6c..284abe6 100644
+--- a/include/ImmediateContext.inl
++++ b/include/ImmediateContext.inl
+@@ -340,7 +340,7 @@ inline void TRANSLATION_API ImmediateContext::DrawInstanced(UINT countPerInstanc
+         GetGraphicsCommandList()->DrawInstanced(countPerInstance, instanceCount, vertexStart, instanceStart);
+         PostDraw();
+     }
+-    catch (_com_error) {} // already handled, but can't touch the command list
++    catch (RelayHResultError) {} // already handled, but can't touch the command list
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+@@ -364,7 +364,7 @@ inline void TRANSLATION_API ImmediateContext::DrawIndexedInstanced(UINT countPer
+         GetGraphicsCommandList()->DrawIndexedInstanced(countPerInstance, instanceCount, indexStart, vertexStart, instanceStart);
+         PostDraw();
+     }
+-    catch (_com_error) {} // already handled, but can't touch the command list
++    catch (RelayHResultError) {} // already handled, but can't touch the command list
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+@@ -422,7 +422,7 @@ inline void TRANSLATION_API ImmediateContext::DrawAuto()
+             );
+         PostDraw();
+     }
+-    catch (_com_error) {} // already handled, but can't touch the command list
++    catch (RelayHResultError) {} // already handled, but can't touch the command list
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+@@ -447,7 +447,7 @@ inline void TRANSLATION_API ImmediateContext::DrawIndexedInstancedIndirect(Resou
+             );
+         PostDraw();
+     }
+-    catch (_com_error) {} // already handled, but can't touch the command list
++    catch (RelayHResultError) {} // already handled, but can't touch the command list
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+@@ -472,7 +472,7 @@ inline void TRANSLATION_API ImmediateContext::DrawInstancedIndirect(Resource* pB
+             );
+         PostDraw();
+     }
+-    catch (_com_error) {} // already handled, but can't touch the command list
++    catch (RelayHResultError) {} // already handled, but can't touch the command list
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+@@ -710,7 +710,7 @@ inline void ImmediateContext::PreDraw() noexcept(false)
+             auto pPSO = m_CurrentState.m_pPSO->GetForUse(COMMAND_LIST_TYPE::GRAPHICS);
+             if (!pPSO)
+             {
+-                throw _com_error(S_OK);
++                throw RelayHResultError(S_OK);
+             }
+             GetGraphicsCommandList()->SetPipelineState(pPSO);
+         }
+@@ -1057,7 +1057,7 @@ inline void TRANSLATION_API ImmediateContext::Dispatch(UINT x, UINT y, UINT z)
+         GetGraphicsCommandList()->Dispatch(x, y, z);
+         PostDispatch();
+     }
+-    catch (_com_error) {} // already handled, but can't touch the command list
++    catch (RelayHResultError) {} // already handled, but can't touch the command list
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+@@ -1088,7 +1088,7 @@ inline void TRANSLATION_API ImmediateContext::DispatchIndirect(Resource* pBuffer
+             );
+         PostDispatch();
+     }
+-    catch (_com_error) {} // already handled, but can't touch the command list
++    catch (RelayHResultError) {} // already handled, but can't touch the command list
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+@@ -1214,7 +1214,7 @@ inline void ImmediateContext::PreDispatch() noexcept(false)
+             auto pPSO = m_CurrentState.m_pPSO->GetForUse(COMMAND_LIST_TYPE::GRAPHICS);
+             if (!pPSO)
+             {
+-                throw _com_error(S_OK);
++                throw RelayHResultError(S_OK);
+             }
+             GetGraphicsCommandList()->SetPipelineState(pPSO);
+         }
+@@ -1433,7 +1433,7 @@ inline HRESULT ImmediateContext::EnqueueSetEvent(UINT commandListTypeMask, HANDL
+             try {
+                 FenceValues[nLists] = m_CommandLists[i]->EnsureFlushedAndFenced(); // throws
+             }
+-            catch (_com_error& e)
++            catch (RelayHResultError& e)
+             {
+                 return e.Error();
+             }
+diff --git a/include/ThreadPool.hpp b/include/ThreadPool.hpp
+index 7b0ef69..3a3f0a0 100644
+--- a/include/ThreadPool.hpp
++++ b/include/ThreadPool.hpp
+@@ -57,14 +57,14 @@ public:
+         m_pPool = CreateThreadpool(nullptr);
+         if (!m_pPool)
+         {
+-            throw _com_error(HRESULT_FROM_WIN32(GetLastError()));
++            throw RelayHResultError(HRESULT_FROM_WIN32(GetLastError()));
+         }
+ 
+         m_pCleanup = CreateThreadpoolCleanupGroup();
+         if (!m_pCleanup)
+         {
+             CloseThreadpool(m_pPool);
+-            throw _com_error(HRESULT_FROM_WIN32(GetLastError()));
++            throw RelayHResultError(HRESULT_FROM_WIN32(GetLastError()));
+         }
+ 
+         // No more failures
+@@ -92,14 +92,14 @@ public:
+     {
+         if (Work.m_pWork != nullptr)
+         {
+-            throw _com_error(E_INVALIDARG);
++            throw RelayHResultError(E_INVALIDARG);
+         }
+ 
+         Work.m_WorkFunction = std::move(WorkFunction);
+         Work.m_pWork = CreateThreadpoolWork(&CThreadPoolWork::WorkCallback, &Work, &m_Environment);
+         if (!Work.m_pWork)
+         {
+-            throw _com_error(HRESULT_FROM_WIN32(GetLastError()));
++            throw RelayHResultError(HRESULT_FROM_WIN32(GetLastError()));
+         }
+ 
+         SubmitThreadpoolWork(Work.m_pWork);
+diff --git a/include/Util.hpp b/include/Util.hpp
+index 41571a4..1f6d377 100644
+--- a/include/Util.hpp
++++ b/include/Util.hpp
+@@ -72,7 +72,7 @@ namespace D3D12TranslationLayer
+     {
+         if (FAILED(hr))
+         {
+-            throw _com_error(hr);
++            throw RelayHResultError(hr);
+         }
+     }
+ 
+@@ -81,7 +81,7 @@ namespace D3D12TranslationLayer
+     {
+         if (h == nullptr)
+         {
+-            throw _com_error(HRESULT_FROM_WIN32(GetLastError()));
++            throw RelayHResultError(HRESULT_FROM_WIN32(GetLastError()));
+         }
+     }
+ 
+diff --git a/src/BatchedContext.cpp b/src/BatchedContext.cpp
+index 11e33e0..bfad1b0 100644
+--- a/src/BatchedContext.cpp
++++ b/src/BatchedContext.cpp
+@@ -1166,7 +1166,7 @@ bool TRANSLATION_API BatchedContext::RenameAndMapBuffer(BatchedResource* pResour
+     
+         return true;
+     }
+-    catch (_com_error& hrEx)
++    catch (RelayHResultError& hrEx)
+     {
+         if (hrEx.Error() == E_OUTOFMEMORY)
+         {
+@@ -1947,7 +1947,7 @@ void BatchedContext::ProcessBatchImpl(Batch* pBatchToProcess)
+     {
+         ProcessBatchWork(pBatchToProcess->m_BatchCommands); // throws
+     }
+-    catch (_com_error& hrEx) { m_Callbacks.ThreadErrorCallback(hrEx.Error()); }
++    catch (RelayHResultError& hrEx) { m_Callbacks.ThreadErrorCallback(hrEx.Error()); }
+     catch (std::bad_alloc&) { m_Callbacks.ThreadErrorCallback(E_OUTOFMEMORY); }
+ }
+ 
+diff --git a/src/BlitHelper.cpp b/src/BlitHelper.cpp
+index c996ded..9a3229e 100644
+--- a/src/BlitHelper.cpp
++++ b/src/BlitHelper.cpp
+@@ -31,18 +31,18 @@ namespace D3D12TranslationLayer
+         if (CD3D11FormatHelper::YUV(dstDesc.Format))
+         {
+             // YUV -> RGB conversion only for now, or RGB -> RGB stretching
+-            throw _com_error(E_INVALIDARG);
++            throw RelayHResultError(E_INVALIDARG);
+         }
+ 
+         if (srcPlanes > MAX_PLANES)
+         {
+-            throw _com_error(E_INVALIDARG);
++            throw RelayHResultError(E_INVALIDARG);
+         }
+ 
+         if (dstPlanes != 1)
+         {
+             // just RGB output for now
+-            throw _com_error(E_INVALIDARG);
++            throw RelayHResultError(E_INVALIDARG);
+         }
+ 
+         BlitHelperKeyUnion key;
+diff --git a/src/CommandListManager.cpp b/src/CommandListManager.cpp
+index c16bf51..431c731 100644
+--- a/src/CommandListManager.cpp
++++ b/src/CommandListManager.cpp
+@@ -435,7 +435,7 @@ namespace D3D12TranslationLayer
+         try {
+             FenceValue = EnsureFlushedAndFenced(); // throws
+         }
+-        catch (_com_error& e)
++        catch (RelayHResultError& e)
+         {
+             return e.Error();
+         }
+diff --git a/src/ImmediateContext.cpp b/src/ImmediateContext.cpp
+index 7188289..1d8ee3f 100644
+--- a/src/ImmediateContext.cpp
++++ b/src/ImmediateContext.cpp
+@@ -388,7 +388,7 @@ bool ImmediateContext::Shutdown() noexcept
+                     return false;
+                 }
+             }
+-            catch (_com_error&)
++            catch (RelayHResultError&)
+             {
+                 return false;
+             }
+@@ -4077,7 +4077,7 @@ D3D12ResourceSuballocation ImmediateContext::AcquireSuballocatedHeap(AllocatorHe
+         auto block = allocator.Allocate(Size, bCannotBeOffset);
+         if (block.GetSize() == 0)
+         {
+-            throw _com_error(E_OUTOFMEMORY);
++            throw RelayHResultError(E_OUTOFMEMORY);
+         }
+         return block;
+     }, threadingContext);
+@@ -5384,7 +5384,7 @@ HRESULT TRANSLATION_API ImmediateContext::ResolveSharedResource(Resource* pResou
+             try {
+                 GetCommandListManager(COMMAND_LIST_TYPE::GRAPHICS)->PrepForCommandQueueSync(); // throws
+             }
+-            catch (_com_error& e)
++            catch (RelayHResultError& e)
+             {
+                 return e.Error();
+             }
+diff --git a/src/PipelineState.cpp b/src/PipelineState.cpp
+index 6718b0a..df977f7 100644
+--- a/src/PipelineState.cpp
++++ b/src/PipelineState.cpp
+@@ -94,7 +94,7 @@ namespace D3D12TranslationLayer
+                 {
+                     CreateImpl<Type>();
+                 }
+-                catch (_com_error&) {}
++                catch (RelayHResultError&) {}
+             });
+         }
+         else
+diff --git a/src/Query.cpp b/src/Query.cpp
+index 2f7be40..434a3cc 100644
+--- a/src/Query.cpp
++++ b/src/Query.cpp
+@@ -138,7 +138,7 @@ namespace D3D12TranslationLayer
+                     {
+                         m_pParent->SubmitCommandList(commandListType); // throws
+                     }
+-                    catch (_com_error&)
++                    catch (RelayHResultError&)
+                     {
+                         ret = false;
+                     }
+diff --git a/src/Resource.cpp b/src/Resource.cpp
+index 0f48943..e54d163 100644
+--- a/src/Resource.cpp
++++ b/src/Resource.cpp
+@@ -1082,7 +1082,7 @@ namespace D3D12TranslationLayer
+             pQueue->Signal(m_UnwrapUnderlyingResidencyDeferredWait.fence->Get(), m_UnwrapUnderlyingResidencyDeferredWait.value);
+             m_ResourceDeferredWaits.push_back(m_UnwrapUnderlyingResidencyDeferredWait);
+         }
+-        catch( _com_error& hrEx )
++        catch( RelayHResultError& hrEx )
+         {
+             return hrEx.Error();
+         }
+diff --git a/src/VideoDecode.cpp b/src/VideoDecode.cpp
+index 73ee63a..cce0bd6 100644
+--- a/src/VideoDecode.cpp
++++ b/src/VideoDecode.cpp
+@@ -230,7 +230,7 @@ namespace D3D12TranslationLayer
+         try {
+             m_pParent->Flush(COMMAND_LIST_TYPE_VIDEO_DECODE_MASK); // throws
+         }
+-        catch (_com_error&)
++        catch (RelayHResultError&)
+         {
+             // success = false;
+         }
+diff --git a/src/VideoProcess.cpp b/src/VideoProcess.cpp
+index 71f18a3..9527433 100644
+--- a/src/VideoProcess.cpp
++++ b/src/VideoProcess.cpp
+@@ -43,7 +43,7 @@ namespace D3D12TranslationLayer
+         {
+             m_pParent->Flush(COMMAND_LIST_TYPE_VIDEO_PROCESS_MASK); //throws
+         }
+-        catch (_com_error&)
++        catch (RelayHResultError&)
+         {
+             // success = false;
+         }
+
