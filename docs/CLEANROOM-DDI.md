@@ -237,8 +237,12 @@ misinterpretation; `--check` defends against structural *drift* across 178+ slot
 | Device creation | `D3D10DDI_HDEVICE`, `HRTDEVICE`, `HRTCORELAYER`, `PFND3D10DDI_RETRIEVESUBOBJECT`, `DXGI_DDI_BASE_ARGS`, `D3D10DDIARG_CREATEDEVICE`, flag constants | 8 each / 16 / 88 |
 | Core-layer callbacks | `D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS`, 46 `PFN` typedefs, `D3DWDDM2_2DDI_HRTCACHESESSION` | 376 / 8 |
 | Kernel callbacks | `D3DDDI_DEVICECALLBACKS`, 65 `PFN` typedefs of which 2 promoted, `D3DDDICB_ESCAPE`, `D3DDDICB_SYNCTOKEN`, `WINE_D3D11DDI_ESCAPEFLAGS` | 528 / 40 / 24 / 4 |
-| Command list handle | `D3D11DDI_HCOMMANDLIST` | 8 |
-| Device function table | `D3DWDDM2_6DDI_DEVICEFUNCS`, 178 slots across 138 published `PFN` names, of which 4 promoted (5 slots) and 134 held behind placeholders | 1424 |
+| Command-list creation | `D3D11DDI_HCOMMANDLIST`, `D3D11DDI_HRTCOMMANDLIST`, `D3D11DDIARG_CREATECOMMANDLIST` | 8 each |
+| Deferred-context creation | `D3D11DDI_HANDLETYPE`, `D3D11DDI_HANDLESIZE`, `D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE`, `D3D11DDIARG_CREATEDEFERREDCONTEXT` | 4 / 16 / 4 / 40 |
+| Resource creation | `D3D10DDIARG_CREATERESOURCE`, `D3D11DDIARG_CREATERESOURCE`, `D3D10DDIARG_OPENRESOURCE` | 64 / 80 / 40 |
+| SRV/RTV creation | `D3D10DDI_H(RT)SHADERRESOURCEVIEW`, `D3D10DDI_H(RT)RENDERTARGETVIEW`, `D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW` (and its 6 union arms), `D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW` (and its 5 union arms) | 8 each / 40 / 32 |
+| Vertex/pixel shader creation | `D3D10DDI_H(RT)SHADER`, `D3D11_1DDIARG_STAGE_IO_SIGNATURES` (incomplete, pointer-only) | 8 each |
+| Device function table | `D3DWDDM2_6DDI_DEVICEFUNCS`, 178 slots across 138 published `PFN` names, of which 27 promoted (28 slots) and 111 held behind placeholders | 1424 |
 
 #### Key constraints in `D3D10DDIARG_CREATEDEVICE` (88 bytes)
 
@@ -349,13 +353,14 @@ have a real function type in the header and every other slot to remain a
 `PFNWINE_D3D11DDI_UNDECLARED_CB` alias. It fails in both directions: a
 promotion recorded but not landed, and a signature authored but not recorded.
 `tests/d3d11ddilayout.c` then assigns a stub with the declared signature into
-each promoted slot and calls it, and `tests/d3d11ddipromotednegative.c` must
-fail to compile — passing a `D3D10DDI_HDEVICE` where a
+each promoted slot and calls it. The command-list and deferred-context
+negative translation units must fail to compile — passing a
+`D3D10DDI_HDEVICE` where a
 `D3D11DDI_HCOMMANDLIST` belongs — which is the only check that catches a
 parameter list transcribed wrongly.
 
-**Promoted so far: the handle-only command-list family.** Four typedefs, five
-slots, each quoted from its own reference page:
+**Promoted so far: the command-list and deferred-context creation families.**
+Twelve typedefs, thirteen slots, each quoted from its own reference page:
 
 | Slot | Type | Parameters |
 | :--- | :--- | :--- |
@@ -364,9 +369,19 @@ slots, each quoted from its own reference page:
 | `pfnDestroyCommandList` | `PFND3D11DDI_DESTROYCOMMANDLIST` | `D3D10DDI_HDEVICE`, `D3D11DDI_HCOMMANDLIST` |
 | `pfnRecycleDestroyCommandList` | `PFND3D11DDI_DESTROYCOMMANDLIST` | shares the type above |
 | `pfnRecycleCommandList` | `PFND3D11DDI_RECYCLECOMMANDLIST` | `D3D10DDI_HDEVICE`, `D3D11DDI_HCOMMANDLIST` |
+| `pfnCalcPrivateCommandListSize` | `PFND3D11DDI_CALCPRIVATECOMMANDLISTSIZE` | device and creation arguments |
+| `pfnCreateCommandList` | `PFND3D11DDI_CREATECOMMANDLIST` | device, creation arguments, driver/runtime handles |
+| `pfnRecycleCreateCommandList` | `PFND3D11DDI_RECYCLECREATECOMMANDLIST` | device, creation arguments, driver/runtime handles |
+| `pfnCheckDeferredContextHandleSizes` | `PFND3D11DDI_CHECKDEFERREDCONTEXTHANDLESIZES` | device, count, handle-size array |
+| `pfnCalcDeferredContextHandleSize` | `PFND3D11DDI_CALCDEFERREDCONTEXTHANDLESIZE` | device, handle type, immediate-context object |
+| `pfnCalcPrivateDeferredContextSize` | `PFND3D11DDI_CALCPRIVATEDEFERREDCONTEXTSIZE` | device and calculation arguments |
+| `pfnCreateDeferredContext` | `PFND3D11DDI_CREATEDEFERREDCONTEXT` | device and creation arguments |
+| `pfnRecycleCreateDeferredContext` | `PFND3D11DDI_RECYCLECREATEDEFERREDCONTEXT` | device and creation arguments |
 
-All five return `VOID` and report failure through `pfnSetErrorCb`, which is why
-none is declared returning `HRESULT`.
+The original five handle-only operations return `VOID`.
+`CalcPrivateCommandListSize` returns `SIZE_T`, `CreateCommandList` reports
+failure through `pfnSetErrorCb`, and `RecycleCreateCommandList` returns
+`HRESULT`, exactly as their individual reference pages specify.
 
 **`pfnRecycleDestroyCommandList` has no reference page**, and is promoted
 anyway. The URL its siblings would predict returns 404. What justifies it is
@@ -385,17 +400,66 @@ subset function table that structure's `p11ContextFuncs` member points at.
 No `D3D11DDI_HDEFERREDCONTEXT` may be added later: no specification names one,
 so it would be an invented type behind a provenance block.
 
-**`D3D11DDI_HCOMMANDLIST`'s runtime counterpart is deliberately absent.**
-`hRTCommandList` is a parameter of `CreateCommandList`, which cannot be
-promoted until `D3D11DDIARG_CREATECOMMANDLIST` is authored, and a handle no
-declared slot takes is the speculative version rule 4 rejects.
+**`D3D11DDI_HCOMMANDLIST` and its runtime counterpart are now complete.**
+`D3D11DDI_HRTCOMMANDLIST` enters with
+`D3D11DDIARG_CREATECOMMANDLIST`, the first declared signature that consumes
+it, preserving the prohibition on speculative handles.
+
+**Promoted next: the shader resource view and render target view creation
+pair.** Six slots, `pfnCalcPrivateShaderResourceViewSize`,
+`pfnCreateShaderResourceView`, `pfnDestroyShaderResourceView`,
+`pfnCalcPrivateRenderTargetViewSize`, `pfnCreateRenderTargetView`, and
+`pfnDestroyRenderTargetView`, unblocked by the newly declared
+`D3D10DDI_H(RT)SHADERRESOURCEVIEW` and `D3D10DDI_H(RT)RENDERTARGETVIEW`
+handles and the two creation-argument structures. Depth-stencil and
+unordered-access views are a separate slot family and stay behind
+placeholders; `docs/D3D11ON12-SKIPPABLE-ELEMENTS.md`'s MVP path needs only
+this pair.
+
+**`D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW` has no published WDDM 2.0-named
+page**, unlike its SRV and UAV siblings. Both documentation surfaces 404 for
+that exact name, but the pinned driver's own `src/view.cpp` signature uses it
+verbatim, and every field the driver reads through it is already present on
+the published base `D3D10DDIARG_CREATERENDERTARGETVIEW` and its arms —
+including `TexCube.ArraySize`, `.FirstArraySlice`, and `.MipSlice`, the fields
+that would have forced a revision had the base structure lacked them. The
+declaration keeps the ABI call-site name and the cross-validated public
+fields.
+
+**The SRV `TexCube` arm is a genuine two-surface disagreement, not a
+transcription slip.** The rendered syntax block for
+`D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW` types the arm
+`D3D10_1DDIARG_TEXCUBE_SHADERRESOURCEVIEW` (4 fields, cube-array capable);
+the markdown mirror's member prose links the older, 2-field
+`D3D10DDIARG_TEXCUBE_SHADERRESOURCEVIEW` instead. Rule 3 says both surfaces
+must agree or authoring halts, so both arms' own pages were fetched directly:
+the pinned driver's `GetTranslationDesc` reads
+`pDDIDesc->TexCube.First2DArrayFace` and `.NumCubes` for the `TEXTURECUBE`
+case, fields only the 4-field arm has, which is what the rendered surface
+names and the mirror's stale prose link does not.
+
+**Promoted next: the vertex and pixel shader creation pair.** Four slots,
+`pfnCalcPrivateShaderSize`, `pfnCreateVertexShader`, `pfnCreatePixelShader`,
+and `pfnDestroyShader`, unblocked by the newly declared `D3D10DDI_H(RT)SHADER`
+handles. The size and destroy callbacks are shared by every shader stage —
+geometry, hull, domain, and compute included — so promoting them here
+unblocks their signature, not their argument type; those stages' own create
+callbacks stay behind placeholders until stream-output and tessellation
+structures are authored.
+
+**`D3D11_1DDIARG_STAGE_IO_SIGNATURES` stays an incomplete forward
+declaration.** Every promoted callback that takes it does so behind a
+pointer, and none dereferences it, so — per rule 6 and the resource group's
+precedent for `D3D10DDI_MIPINFO` and its neighbours — laying out
+`D3D11_1DDIARG_SIGNATURE_ENTRY` and its container now would be an unverified
+declaration nothing yet needs.
 
 ### Remaining groups roadmap
 
 | # | Group | Scope | Rationale and dependencies |
 | :--- | :--- | :--- | :--- |
 | 1 | Surface discovery | MIT tree test build against clean-room header | Turns remaining clean-room work into a measurable compiler worklist |
-| 2 | Signature promotion | Promote slots in `D3DWDDM2_6DDI_DEVICEFUNCS` | 134 of 138 distinct callback types remain; ordered by which structure group declares their parameter types, not by slot. See the gating table in `DDI-REMAINING-ROADMAP.md` |
+| 2 | Signature promotion | Promote slots in `D3DWDDM2_6DDI_DEVICEFUNCS` | 111 of 138 distinct callback types remain; ordered by which structure group declares their parameter types, not by slot. See the gating table in `DDI-REMAINING-ROADMAP.md` |
 | 3 | DXGI DDI interop | `DXGI_DDI_BASE_CALLBACKS`, `DXGI1_6_1_DDI_BASE_FUNCTIONS` | Required by `DXGIBaseDDI` pointers in creation arguments |
 
 ## Open questions
