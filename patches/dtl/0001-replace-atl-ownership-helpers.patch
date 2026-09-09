@@ -1,0 +1,235 @@
+From: relay12 contributors
+Subject: [PATCH] dtl: replace ATL ownership helpers
+
+Replace CComPtr and CComHeapPtr with relay12's shared, contract-tested
+ownership layer. The thin DTL adapter preserves CComHeapPtr's CoTaskMemFree
+contract without putting Windows APIs into the shared implementation.
+---
+diff --git a/include/D3D12TranslationLayerDependencyIncludes.h b/include/D3D12TranslationLayerDependencyIncludes.h
+index 4c6e9a7..c01256c 100644
+--- a/include/D3D12TranslationLayerDependencyIncludes.h
++++ b/include/D3D12TranslationLayerDependencyIncludes.h
+@@ -12,9 +12,8 @@
+ //SDK Headers
+ #define NOMINMAX
+ #define WIN32_LEAN_AND_MEAN
+-#define _ATL_NO_WIN_SUPPORT
+ #include <windows.h>
+-#include <atlbase.h>
++#include "relay_atl_compat.hpp"
+ #include <comdef.h>
+ #include <strsafe.h>
+ 
+diff --git a/include/ImmediateContext.hpp b/include/ImmediateContext.hpp
+index e9ad707..ff10c33 100644
+--- a/include/ImmediateContext.hpp
++++ b/include/ImmediateContext.hpp
+@@ -697,7 +697,7 @@ struct RetiredD3D12Object : public RetiredObject
+         , m_pResidencyHandle(std::move(retiredObject.m_pResidencyHandle)) {}
+     
+ 
+-    CComPtr<ID3D12Object> m_pUnderlying;
++    RelayComPtr<ID3D12Object> m_pUnderlying;
+     
+ 
+     std::unique_ptr<ResidencyManagedObjectWrapper> m_pResidencyHandle;
+diff --git a/include/Residency.h b/include/Residency.h
+index 6daf6d8..f0487ce 100644
+--- a/include/Residency.h
++++ b/include/Residency.h
+@@ -19,7 +19,7 @@ namespace D3D12TranslationLayer
+             PinWait(const PinWait& pinWait) = default;
+             ~PinWait() = default;
+ 
+-            CComPtr<ID3D12Fence> m_spFence;
++            RelayComPtr<ID3D12Fence> m_spFence;
+             UINT64 m_value;
+         };
+ 
+@@ -212,7 +212,7 @@ namespace D3D12TranslationLayer
+                 FenceValue++;
+             }
+ 
+-            CComPtr<ID3D12Fence> pFence;
++            RelayComPtr<ID3D12Fence> pFence;
+             UINT64 FenceValue = 0;
+             UINT64 LastWaitedValues[(UINT)COMMAND_LIST_TYPE::MAX_VALID] = {};
+         };
+@@ -449,8 +449,8 @@ namespace D3D12TranslationLayer
+         ImmediateContext& ImmCtx;
+         Internal::Fence AsyncThreadFence;
+ 
+-        CComPtr<ID3D12Device3> Device;
+-        CComPtr<ID3D12Device15> Device15;
++        RelayComPtr<ID3D12Device3> Device;
++        RelayComPtr<ID3D12Device15> Device15;
+         // NOTE: This is an index not a mask. The majority of D3D12 uses bit masks to identify a GPU node whereas DXGI uses 0 based indices.
+         UINT NodeIndex = 0;
+         IDXCoreAdapter* AdapterDXCore = nullptr;
+diff --git a/include/Shader.hpp b/include/Shader.hpp
+index 36b53a7..29a0fc6 100644
+--- a/include/Shader.hpp
++++ b/include/Shader.hpp
+@@ -46,7 +46,7 @@ namespace D3D12TranslationLayer
+         Shader(ImmediateContext* pParent, const void* byteCode, SIZE_T bytecodeSize);
+ #endif
+         // Construct with ownership of DXBC and DXIL, with pre-parsed decls
+-        Shader(ImmediateContext* pParent, std::unique_ptr<BYTE[]> DXBC, CComHeapPtr<void>& DXIL, SIZE_T dxilSize, SShaderDecls PrecomputedDecls);
++        Shader(ImmediateContext* pParent, std::unique_ptr<BYTE[]> DXBC, RelayComHeapPtr<void>& DXIL, SIZE_T dxilSize, SShaderDecls PrecomputedDecls);
+         // Construct without ownership, shader model does not matter, with pre-parsed decls
+         Shader(ImmediateContext* pParent, const void* byteCode, SIZE_T bytecodeSize, SShaderDecls PrecomputedDecls);
+ 
+@@ -59,7 +59,7 @@ namespace D3D12TranslationLayer
+ #endif
+ 
+         std::unique_ptr<BYTE[]> const m_ByteCode;
+-        CComHeapPtr<void> const m_Dxil;
++        RelayComHeapPtr<void> const m_Dxil;
+         D3D12_SHADER_BYTECODE const m_Desc;
+     };
+ };
+\ No newline at end of file
+diff --git a/include/relay_atl_compat.hpp b/include/relay_atl_compat.hpp
+new file mode 100644
+index 0000000..9620c86
+--- /dev/null
++++ b/include/relay_atl_compat.hpp
+@@ -0,0 +1,17 @@
++// Copyright (c) relay12 contributors.
++// SPDX-License-Identifier: GPL-3.0-only
++#pragma once
++
++#include <objbase.h>
++#include "relay_ownership.hpp"
++
++struct RelayCoTaskMemDeleter
++{
++    void operator()(void* pointer) const noexcept
++    {
++        CoTaskMemFree(pointer);
++    }
++};
++
++template <typename T>
++using RelayComHeapPtr = RelayHeapPtr<T, RelayCoTaskMemDeleter>;
+diff --git a/src/CommandListManager.cpp b/src/CommandListManager.cpp
+index 607936b..7094806 100644
+--- a/src/CommandListManager.cpp
++++ b/src/CommandListManager.cpp
+@@ -42,7 +42,7 @@ namespace D3D12TranslationLayer
+             queue.NodeMask = m_pParent->GetNodeMask();
+             queue.Flags = m_pParent->m_CreationArgs.DisableGPUTimeout ?
+                 D3D12_COMMAND_QUEUE_FLAG_DISABLE_GPU_TIMEOUT : D3D12_COMMAND_QUEUE_FLAG_NONE;
+-            CComPtr<ID3D12Device9> spDevice9;
++            RelayComPtr<ID3D12Device9> spDevice9;
+             if (SUCCEEDED(m_pParent->m_pDevice12->QueryInterface(&spDevice9)))
+             {
+                 ThrowFailure(spDevice9->CreateCommandQueue1(&queue, m_pParent->m_CreationArgs.CreatorID, IID_PPV_ARGS(&m_pCommandQueue)));
+diff --git a/src/ImmediateContext.cpp b/src/ImmediateContext.cpp
+index 1952212..ba661b8 100644
+--- a/src/ImmediateContext.cpp
++++ b/src/ImmediateContext.cpp
+@@ -145,7 +145,7 @@ ImmediateContext::ImmediateContext(UINT nodeIndex, D3D12_FEATURE_DATA_D3D12_OPTI
+ 
+     LUID adapterLUID = pDevice->GetAdapterLuid();
+     {
+-        CComPtr<IDXCoreAdapterFactory> pFactory;
++        RelayComPtr<IDXCoreAdapterFactory> pFactory;
+ #if DYNAMIC_LOAD_DXCORE
+         m_DXCore.load("dxcore");
+         auto pfnDXCoreCreateAdapterFactory = m_DXCore.proc_address<HRESULT(APIENTRY*)(REFIID, void**)>("DXCoreCreateAdapterFactory");
+@@ -159,7 +159,7 @@ ImmediateContext::ImmediateContext(UINT nodeIndex, D3D12_FEATURE_DATA_D3D12_OPTI
+     }
+     if (!m_pDXCoreAdapter)
+     {
+-        CComPtr<IDXGIFactory4> pFactory;
++        RelayComPtr<IDXGIFactory4> pFactory;
+         ThrowFailure(CreateDXGIFactory2(0, IID_PPV_ARGS(&pFactory)));
+         ThrowFailure(pFactory->EnumAdapterByLuid(adapterLUID, IID_PPV_ARGS(&m_pDXGIAdapter)));
+     }
+diff --git a/src/PipelineState.cpp b/src/PipelineState.cpp
+index e226799..475342f 100644
+--- a/src/PipelineState.cpp
++++ b/src/PipelineState.cpp
+@@ -127,7 +127,7 @@ namespace D3D12TranslationLayer
+ 
+         if (m_pParent->UseRoundTripPSOs())
+         {
+-            CComPtr<ID3DBlob> spBlob;
++            RelayComPtr<ID3DBlob> spBlob;
+             ThrowFailure(GetForImmediateUse()->GetCachedBlob(&spBlob)); // throw( _com_error )
+ 
+             if constexpr (Type == e_Draw)
+diff --git a/src/RootSignature.cpp b/src/RootSignature.cpp
+index ba1e60e..7b0d92d 100644
+--- a/src/RootSignature.cpp
++++ b/src/RootSignature.cpp
+@@ -8,7 +8,7 @@ namespace D3D12TranslationLayer
+ {
+     void RootSignatureBase::Create(D3D12_VERSIONED_ROOT_SIGNATURE_DESC const& rootDesc) noexcept(false)
+     {
+-        CComPtr<ID3DBlob> spBlob;
++        RelayComPtr<ID3DBlob> spBlob;
+ 
+         ThrowFailure(D3D12SerializeVersionedRootSignature(&rootDesc, &spBlob, NULL));
+ 
+diff --git a/src/Shader.cpp b/src/Shader.cpp
+index f56b01d..3203dd3 100644
+--- a/src/Shader.cpp
++++ b/src/Shader.cpp
+@@ -5,7 +5,7 @@
+ 
+ namespace D3D12TranslationLayer
+ {
+-    Shader::Shader(ImmediateContext* pParent, std::unique_ptr<BYTE[]> DXBC, CComHeapPtr<void>& DXIL, SIZE_T dxilSize, SShaderDecls PrecomputedDecls)
++    Shader::Shader(ImmediateContext* pParent, std::unique_ptr<BYTE[]> DXBC, RelayComHeapPtr<void>& DXIL, SIZE_T dxilSize, SShaderDecls PrecomputedDecls)
+         : DeviceChild(pParent)
+         , SShaderDecls(std::move(PrecomputedDecls))
+         , m_ByteCode(std::move(DXBC))
+diff --git a/src/SharedResourceHelpers.cpp b/src/SharedResourceHelpers.cpp
+index d371fe3..3c8639c 100644
+--- a/src/SharedResourceHelpers.cpp
++++ b/src/SharedResourceHelpers.cpp
+@@ -12,7 +12,7 @@ namespace D3D12TranslationLayer
+ {
+     SharedResourceLocalHandle TRANSLATION_API SharedResourceHelpers::CreateKMTHandle(_In_ HANDLE resourceHandle)
+     {
+-        CComPtr<IUnknown> spResource;
++        RelayComPtr<IUnknown> spResource;
+         ThrowFailure(m_ImmCtx.m_pDevice12->OpenSharedHandle(resourceHandle, IID_PPV_ARGS(&spResource)));
+         UINT handle = GetHandleForResource(spResource);
+ 
+@@ -170,12 +170,12 @@ namespace D3D12TranslationLayer
+         }
+ 
+         ZeroMemory(pResourceInfo, sizeof(*pResourceInfo));
+-        CComPtr<IUnknown> spUnknown = QueryResourceFromKMTHandle(handle);
++        RelayComPtr<IUnknown> spUnknown = QueryResourceFromKMTHandle(handle);
+         bool bShared = false;
+         ID3D12Object* pObject = nullptr;
+ 
+         // First, check for tile pools
+-        CComPtr<ID3D12Heap> spHeap;
++        RelayComPtr<ID3D12Heap> spHeap;
+         if (SUCCEEDED(spUnknown->QueryInterface(&spHeap)))
+         {
+             // Shared tile pools not supported on tier 1
+@@ -193,7 +193,7 @@ namespace D3D12TranslationLayer
+         }
+ 
+         // Not a tile pool, must be a resource
+-        CComPtr<ID3D12Resource1> spResource;
++        RelayComPtr<ID3D12Resource1> spResource;
+         if (SUCCEEDED(spUnknown->QueryInterface(&spResource)))
+         {
+             D3D12_HEAP_FLAGS MiscFlags;
+@@ -298,7 +298,7 @@ namespace D3D12TranslationLayer
+                 Flags.BindFlags = ConvertPossibleBindFlags(Desc, HeapFlags, formatSupport, m_CreationFlags.SupportDisplayableTextures);
+ 
+                 {
+-                    CComPtr<ID3D12ProtectedResourceSession> spProtectedResourceSession;
++                    RelayComPtr<ID3D12ProtectedResourceSession> spProtectedResourceSession;
+                     if (SUCCEEDED(spResource->GetProtectedResourceSession(IID_PPV_ARGS(&spProtectedResourceSession))))
+                     {
+                         Flags.MiscFlags |= D3D11_RESOURCE_MISC_HW_PROTECTED;
+

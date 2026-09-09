@@ -1,30 +1,18 @@
 {
   "categories": {
     "atl_com_ptr": {
-      "files": {
-        "include/ImmediateContext.hpp": 1,
-        "include/Residency.h": 4,
-        "src/CommandListManager.cpp": 1,
-        "src/ImmediateContext.cpp": 2,
-        "src/PipelineState.cpp": 1,
-        "src/RootSignature.cpp": 1,
-        "src/SharedResourceHelpers.cpp": 5
-      },
-      "occurrences": 15
+      "files": {},
+      "occurrences": 0
     },
     "atl_headers": {
       "files": {
-        "external/d3dx12.h": 1,
-        "include/D3D12TranslationLayerDependencyIncludes.h": 1
+        "external/d3dx12.h": 1
       },
-      "occurrences": 2
+      "occurrences": 1
     },
     "atl_heap_ptr": {
-      "files": {
-        "include/Shader.hpp": 2,
-        "src/Shader.cpp": 1
-      },
-      "occurrences": 3
+      "files": {},
+      "occurrences": 0
     },
     "cmake_msvc_linkage": {
       "files": {

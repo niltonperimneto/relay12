@@ -22,6 +22,13 @@ for patch in "$repository_root"/patches/dtl/*.patch; do
             "$patch"
 done
 
+# These are canonical across the DTL and D3D11On12 ports. Copying after the
+# upstream patch series prevents either prepared tree from carrying a fork.
+cp "$repository_root/compat/relay_ownership.hpp" \
+    "$source_dir/include/relay_ownership.hpp"
+cp "$repository_root/compat/relay_atl_compat.hpp" \
+    "$source_dir/include/relay_atl_compat.hpp"
+
 python3 "$repository_root/scripts/inventory_dtl_portability.py" \
     "$source_dir" --check "$repository_root/docs/dtl-portability-baseline.json"
 echo "prepared D3D12TranslationLayer source at $actual_revision"
