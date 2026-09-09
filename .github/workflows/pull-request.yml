@@ -130,9 +130,9 @@ jobs:
             echo 'DTL dependency probe unexpectedly compiled; advance the milestone' >&2
             exit 1
           fi
-          if ! grep -Eq 'atlbase[.]h.*(No such file|file not found)' "$diagnostics"; then
+          if ! grep -Eq 'd3dkmthk[.]h.*(No such file|file not found)' "$diagnostics"; then
             cat "$diagnostics" >&2
-            echo 'DTL failed before or after the recorded ATL boundary' >&2
+            echo 'DTL failed before or after the recorded D3DKMT boundary' >&2
             exit 1
           fi
 
