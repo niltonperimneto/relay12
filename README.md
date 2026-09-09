@@ -97,7 +97,7 @@ Microsoft's D3D11On12 driver communicates with the host through the user-mode dr
 | `relay12-d3d11/` | Implementation of the router (`d3d11shim.cpp`), core boundary (`d3d11on12core.cpp`), ABI header (`wine_d3d11on12.h`), diagnostic logging (`wine_d3d11_diag.h`), and clean-room DDI headers (`ddi/wine_d3d11ddi.h`). |
 | `scripts/` | Static verification tools and compliance gates: `check_ddi_header.py`, `gen_ddi_layout.py`, `check_pe_audit.py`, `check_interface_acquisition.py`. |
 | `tests/` | Test suite: Python CI gate tests (`test_ci_gates.py`), mock core unit tests (`d3d11on12coretest.c`), DDI layout validation (`d3d11ddilayout.c`), and router status checks (`d3d11shimstatus.c`). |
-| `docs/` | Technical specifications: `D3D11ON12.md` (system architecture), `CLEANROOM-DDI.md` (DDI authoring), `DDI-CONCURRENCY-TESTING.md` (thread-safety plans), and `DDI-REMAINING-ROADMAP.md` (roadmap). |
+| `docs/` | Technical specifications: `D3D11ON12.md` (system architecture), `CLEANROOM-DDI.md` (DDI authoring), `DDI-CONCURRENCY-TESTING.md` (thread-safety plans), and `DDI-REMAINING-ROADMAP.md` (roadmap), and `D3D11ON12-SKIPPABLE-ELEMENTS.md` (MVP scoping). |
 | `third_party/` | Pinned submodules: `D3D11On12`, `D3D12TranslationLayer`, and `DirectX-Headers`. |
 
 ---
