@@ -267,6 +267,18 @@ CREATEDEFERREDCONTEXT = Struct(
     ],
 )
 
+# Group: resource readback types
+# Specification: D3D10DDI_MAPPED_SUBRESOURCE
+# Retrieved: 2026-09-08
+MAPPED_SUBRESOURCE = Struct(
+    "D3D10DDI_MAPPED_SUBRESOURCE",
+    [
+        Field("pData", "void *"),
+        Field("RowPitch", "UINT", *UINT),
+        Field("DepthPitch", "UINT", *UINT),
+    ],
+)
+
 # Group: resource creation and shared-resource opening arguments
 # Specification:
 #   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_createresource
@@ -1096,6 +1108,9 @@ DEVICEFUNCS = Struct(
 # command-list handle group and no argument structure.  See the group note in
 # the header for why the rest of the family cannot follow yet.
 PROMOTED_SLOTS = {
+    "PFND3D10DDI_RESOURCEMAP",
+    "PFND3D10DDI_RESOURCEUNMAP",
+    "PFND3D10DDI_RESOURCECOPY",
     "PFND3D11DDI_ABANDONCOMMANDLIST",
     "PFND3D11DDI_CALCPRIVATECOMMANDLISTSIZE",
     "PFND3D11DDI_COMMANDLISTEXECUTE",
@@ -1181,6 +1196,7 @@ GROUPS = HANDLES + [
     CALCPRIVATEDEFERREDCONTEXTSIZE,
     HANDLESIZE,
     CREATEDEFERREDCONTEXT,
+    MAPPED_SUBRESOURCE,
     CREATERESOURCE,
     CREATE11RESOURCE,
     OPENRESOURCE,
