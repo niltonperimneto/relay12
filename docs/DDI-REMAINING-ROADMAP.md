@@ -99,13 +99,53 @@ Below is the structured roadmap of what is yet to be done.
 ## 3. Core DDI Function Implementations
 
 **3.1. Removing Placeholders**
-* **Status:** Ongoing — 4 of 138 PFN typedefs promoted, covering 5 of 178 slots
-* **Done:** the command-list family whose parameters are handles and nothing
-  else — `pfnAbandonCommandList`, `pfnCommandListExecute`,
+* **Status:** Ongoing — 39 of 138 PFN typedefs promoted, covering 40 of 178 slots
+* **Done:** the command-list family — `pfnAbandonCommandList`,
+  `pfnCommandListExecute`,
   `pfnDestroyCommandList`, `pfnRecycleCommandList`, and
-  `pfnRecycleDestroyCommandList`, which shares `PFND3D11DDI_DESTROYCOMMANDLIST`
-  as the DestroyCommandList page sanctions. Each is quoted from its own
-  reference page, cited in the header beside it.
+  `pfnRecycleDestroyCommandList`, plus `pfnCalcPrivateCommandListSize`,
+  `pfnCreateCommandList`, and `pfnRecycleCreateCommandList`.
+  The latter three are unblocked by the authored
+  `D3D11DDIARG_CREATECOMMANDLIST` and `D3D11DDI_HRTCOMMANDLIST`.
+* **Done:** the deferred-context creation family —
+  `pfnCheckDeferredContextHandleSizes`, `pfnCalcDeferredContextHandleSize`,
+  `pfnCalcPrivateDeferredContextSize`, `pfnCreateDeferredContext`, and
+  `pfnRecycleCreateDeferredContext`. These are unblocked by the authored
+  `D3D11DDI_HANDLETYPE`, `D3D11DDI_HANDLESIZE`,
+  `D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE`, and
+  `D3D11DDIARG_CREATEDEFERREDCONTEXT` declarations.
+* **Done:** the resource creation and shared-resource opening family —
+  `pfnCalcPrivateResourceSize`, `pfnCalcPrivateOpenedResourceSize`,
+  `pfnCreateResource`, `pfnOpenResource`, and `pfnDestroyResource`. The
+  `D3D10DDIARG_CREATERESOURCE`, `D3D11DDIARG_CREATERESOURCE`, and
+  `D3D10DDIARG_OPENRESOURCE` layouts are independently modelled and the
+  promoted signatures are exercised by the layout harness and a negative
+  compile test.
+* **Done:** the shader resource view and render target view creation family —
+  `pfnCalcPrivateShaderResourceViewSize`, `pfnCreateShaderResourceView`,
+  `pfnDestroyShaderResourceView`, `pfnCalcPrivateRenderTargetViewSize`,
+  `pfnCreateRenderTargetView`, and `pfnDestroyRenderTargetView`. Depth-stencil
+  and unordered-access views are not part of this family and remain
+  unpromoted; per `docs/D3D11ON12-SKIPPABLE-ELEMENTS.md` the MVP path needs
+  only the SRV/RTV pair. `D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW` has no
+  published WDDM 2.0-named page of its own (see the header's provenance note);
+  its fields are the cross-validated base `D3D10DDIARG_CREATERENDERTARGETVIEW`
+  ones, and its type name follows the pinned driver's own call-site signature.
+* **Done:** the vertex and pixel shader creation pair —
+  `pfnCalcPrivateShaderSize`, `pfnCreateVertexShader`, `pfnCreatePixelShader`,
+  and `pfnDestroyShader`. The latter two are shared by every shader stage, not
+  only the two promoted here; geometry, hull, domain, and compute shader
+  creation stay behind placeholders until their own argument types (stream
+  output, tessellation) are authored. `D3D11_1DDIARG_STAGE_IO_SIGNATURES` is
+  the other type these callbacks take, but only ever behind a pointer no
+  promoted slot dereferences, so — per the resource group's precedent for
+  helper types like `D3D10DDI_MIPINFO` — it stays an incomplete forward
+  declaration rather than an unverified layout.
+* **Done:** the base pipeline state creation family — blend state,
+  depth-stencil state, rasterizer state, and sampler state each have their
+  private-size, create, and destroy callbacks promoted. `pfnCreateSampler`
+  is included explicitly, and the layout harness exercises all twelve slots
+  with distinct state handles.
 * **The mechanism the pilot established, and which every later promotion
   reuses:**
   * `PROMOTED_SLOTS` in `gen_ddi_layout.py` holds the promoted typedefs, and
@@ -123,7 +163,7 @@ Below is the structured roadmap of what is yet to be done.
   * The table's size assertion stays at 1424 bytes, unchanged. That is the
     pilot's headline result.
 
-**3.2. What gates the remaining 134 typedefs**
+**3.2. What gates the remaining 99 typedefs**
 
 A slot can be promoted when every type in its parameter list is declared. That
 makes the worklist a dependency order on structure groups, not a list of slots:
@@ -131,12 +171,15 @@ makes the worklist a dependency order on structure groups, not a list of slots:
 | Unblocked by | Slot families waiting on it |
 | :--- | :--- |
 | Command list handle — **done** | `pfnAbandonCommandList`, `pfnCommandListExecute`, `pfnDestroyCommandList`, `pfnRecycleCommandList`, `pfnRecycleDestroyCommandList` |
-| `D3D11DDIARG_CREATECOMMANDLIST` | `pfnCalcPrivateCommandListSize`, `pfnCreateCommandList`, `pfnRecycleCreateCommandList` |
-| `D3D11DDIARG_CREATEDEFERREDCONTEXT`, `D3D11DDI_HANDLESIZE` | `pfnCalcPrivateDeferredContextSize`, `pfnCreateDeferredContext`, `pfnRecycleCreateDeferredContext`, `pfnCheckDeferredContextHandleSizes`, `pfnCalcDeferredContextHandleSize` |
+| `D3D11DDIARG_CREATECOMMANDLIST` — **done** | `pfnCalcPrivateCommandListSize`, `pfnCreateCommandList`, `pfnRecycleCreateCommandList` |
+| `D3D11DDIARG_CREATEDEFERREDCONTEXT`, `D3D11DDI_HANDLESIZE` — **done** | `pfnCalcPrivateDeferredContextSize`, `pfnCreateDeferredContext`, `pfnRecycleCreateDeferredContext`, `pfnCheckDeferredContextHandleSizes`, `pfnCalcDeferredContextHandleSize` |
+| Resource structures (`D3D10DDIARG_CREATERESOURCE`, `D3D11DDIARG_CREATERESOURCE`, `D3D10DDIARG_OPENRESOURCE`) — **done** | `pfnCalcPrivateResourceSize`, `pfnCalcPrivateOpenedResourceSize`, `pfnCreateResource`, `pfnOpenResource`, `pfnDestroyResource` |
 | Resource structures (`D3D11DDIARG_CREATERESOURCE`, `D3D10DDIARG_OPENRESOURCE`, map/lock arguments) | the `pfnCalcPrivateResourceSize`/`pfnCreateResource`/`pfnOpenResource`/`pfnDestroyResource` family, all the `pfn*ResourceMap`/`Unmap` slots, `pfnResourceCopy*`, `pfnResourceUpdateSubresourceUP`, `pfnDiscard`, `pfnResourceConvert*` |
-| View structures (SRV, RTV, DSV, UAV creation arguments) | every `pfnCalcPrivate*ViewSize`/`pfnCreate*View`/`pfnDestroy*View`, `pfnClearRenderTargetView`, `pfnClearDepthStencilView`, `pfnClearView`, `pfnClearUnorderedAccessView*` |
-| Shader and element-layout structures | `pfnCalcPrivateShaderSize`, every `pfnCreate*Shader`, `pfnCreateElementLayout`, the `pfn*SetShaderWithIfaces` family, `pfnRetrieveShaderComment`, `pfnAssignDebugBinary` |
-| State structures (blend, depth-stencil, rasterizer, sampler) | every `pfnCalcPrivate*StateSize`/`pfnCreate*State`/`pfnDestroy*State`, `pfnCreateSampler`, and the `pfnSet*State` slots |
+| SRV/RTV creation arguments (`D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW`, `D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW`) — **done** | `pfnCalcPrivateShaderResourceViewSize`, `pfnCreateShaderResourceView`, `pfnDestroyShaderResourceView`, `pfnCalcPrivateRenderTargetViewSize`, `pfnCreateRenderTargetView`, `pfnDestroyRenderTargetView` |
+| DSV/UAV creation arguments | every remaining `pfnCalcPrivate*ViewSize`/`pfnCreate*View`/`pfnDestroy*View`, `pfnClearRenderTargetView`, `pfnClearDepthStencilView`, `pfnClearView`, `pfnClearUnorderedAccessView*` |
+| Vertex/pixel shader creation (`D3D10DDI_H(RT)SHADER`) — **done** | `pfnCalcPrivateShaderSize`, `pfnCreateVertexShader`, `pfnCreatePixelShader`, `pfnDestroyShader` |
+| Stream-output and tessellation shader structures | `pfnCreateGeometryShader`, `pfnCalcPrivateGeometryShaderWithStreamOutput`, `pfnCreateGeometryShaderWithStreamOutput`, `pfnCreateHullShader`, `pfnCreateDomainShader`, `pfnCreateComputeShader`, `pfnCalcPrivateTessellationShaderSize`, `pfnCreateElementLayout`, the `pfn*SetShaderWithIfaces` family, `pfnRetrieveShaderComment`, `pfnAssignDebugBinary` |
+| State structures (blend, depth-stencil, rasterizer, sampler) — **done** | the remaining `pfnSet*State` slots and state-binding callbacks |
 | Query structures and `D3D10DDI_QUERY` | `pfnCalcPrivateQuerySize`, `pfnCreateQuery`, `pfnDestroyQuery`, `pfnQueryBegin`, `pfnQueryEnd`, `pfnQueryGetData`, `pfnSetPredication` |
 | Tiled-resource structures | `pfnUpdateTileMappings`, `pfnCopyTileMappings`, `pfnCopyTiles`, `pfnUpdateTiles`, `pfnTiledResourceBarrier`, `pfnGetMipPacking`, `pfnResizeTilePool` |
 | GetCaps group (`D3D11DDI_THREADING_CAPS`, `D3D11DDI_3DPIPELINELEVEL`) | nothing in this table directly, but it is what tells the runtime the command-list slots above may be called at all |
