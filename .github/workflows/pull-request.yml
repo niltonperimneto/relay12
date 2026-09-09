@@ -328,6 +328,20 @@ jobs:
             -o d3d11ddilayoutxx.exe tests/d3d11ddilayout.c
           wine d3d11ddilayout.exe
           wine d3d11ddilayoutxx.exe
+          # The layout harness proves each promoted slot is callable, one at a
+          # time and in slot order.  This one drives the slots in the order a
+          # frame issues them and checks the handles flow from each creation
+          # to the binding that consumes it -- the failure where every call is
+          # individually well typed and the frame still binds the wrong
+          # object.  Both languages, and -static, for the reasons above.
+          x86_64-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wextra -Werror -static \
+            -Irelay12-d3d11/ddi -o d3d11ddi_triangle.exe \
+            tests/d3d11ddi_triangle.c
+          x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Werror -static \
+            -fno-exceptions -fno-rtti -Irelay12-d3d11/ddi -x c++ \
+            -o d3d11ddi_trianglexx.exe tests/d3d11ddi_triangle.c
+          wine d3d11ddi_triangle.exe
+          wine d3d11ddi_trianglexx.exe
           # Anonymous padding in a structure the host allocates is bytes the
           # driver reads and the host never wrote, and every offset assertion
           # holds either way.  -Wpadded is the only thing that sees it, so the
@@ -418,6 +432,17 @@ jobs:
             echo "promoted C++ state slot accepted the wrong handle type"
             exit 1
           fi
+          if x86_64-w64-mingw32-gcc -std=gnu11 -Wall -Wextra -Werror \
+            -Irelay12-d3d11/ddi -c tests/d3d11ddidrawpromotednegative.c; then
+            echo "promoted binding slot accepted the wrong handle type"
+            exit 1
+          fi
+          if x86_64-w64-mingw32-g++ -std=c++17 -Wall -Wextra -Werror \
+            -fno-exceptions -fno-rtti -Irelay12-d3d11/ddi -x c++ \
+            -c tests/d3d11ddidrawpromotednegative.c; then
+            echo "promoted C++ binding slot accepted the wrong handle type"
+            exit 1
+          fi
           # GetSupportedVersions writes its own count of words whenever the
           # buffer pointer is non-null, so the count it takes is not a
           # capacity.  These cases are what stands between that and a buffer
@@ -480,6 +505,7 @@ jobs:
             d3d11on12coretest.exe
             d3d11shimstatus.exe
             d3d11ddilayout.exe
+            d3d11ddi_triangle.exe
             d3d11ddinegotiate.exe
             ddi_thread_stress.exe
             d3d11shim.dll

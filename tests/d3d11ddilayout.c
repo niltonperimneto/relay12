@@ -1153,6 +1153,150 @@ static VOID stub_destroy_shader(D3D10DDI_HDEVICE hDevice,
     ++command_list_calls;
 }
 
+static SIZE_T stub_calc_private_element_layout_size(D3D10DDI_HDEVICE hDevice,
+        const D3D10DDIARG_CREATEELEMENTLAYOUT *create)
+{
+    (void)hDevice;
+    (void)create;
+    ++command_list_calls;
+    return 48;
+}
+
+static VOID stub_create_element_layout(D3D10DDI_HDEVICE hDevice,
+        const D3D10DDIARG_CREATEELEMENTLAYOUT *create,
+        D3D10DDI_HELEMENTLAYOUT layout, D3D10DDI_HRTELEMENTLAYOUT rt_layout)
+{
+    (void)hDevice;
+    (void)create;
+    (void)layout;
+    (void)rt_layout;
+    ++command_list_calls;
+}
+
+static VOID stub_destroy_element_layout(D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HELEMENTLAYOUT layout)
+{
+    (void)hDevice;
+    (void)layout;
+    ++command_list_calls;
+}
+
+static VOID stub_ia_set_input_layout(D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HELEMENTLAYOUT layout)
+{
+    (void)hDevice;
+    (void)layout;
+    ++command_list_calls;
+}
+
+static VOID stub_ia_set_vertex_buffers(D3D10DDI_HDEVICE hDevice,
+        UINT start_slot, UINT num_buffers, const D3D10DDI_HRESOURCE *buffers,
+        const UINT *strides, const UINT *offsets)
+{
+    (void)hDevice;
+    (void)start_slot;
+    (void)num_buffers;
+    (void)buffers;
+    (void)strides;
+    (void)offsets;
+    ++command_list_calls;
+}
+
+static VOID stub_ia_set_topology(D3D10DDI_HDEVICE hDevice,
+        D3D10_DDI_PRIMITIVE_TOPOLOGY topology)
+{
+    (void)hDevice;
+    (void)topology;
+    ++command_list_calls;
+}
+
+/* One implementation for all six stages, which is the claim the shared
+ * typedef makes.  Assigning it into six slots below is where that claim would
+ * fail if a stage ever took a different list. */
+static VOID stub_set_shader(D3D10DDI_HDEVICE hDevice, D3D10DDI_HSHADER shader)
+{
+    (void)hDevice;
+    (void)shader;
+    ++command_list_calls;
+}
+
+static VOID stub_set_render_targets(D3D10DDI_HDEVICE hDevice,
+        const D3D10DDI_HRENDERTARGETVIEW *rtvs, UINT num_rtvs,
+        UINT clear_slots, D3D10DDI_HDEPTHSTENCILVIEW dsv,
+        const D3D11DDI_HUNORDEREDACCESSVIEW *uavs,
+        const UINT *uav_initial_counts, UINT uav_start_slot, UINT num_uavs,
+        UINT uav_range_start, UINT uav_range_size)
+{
+    (void)hDevice;
+    (void)rtvs;
+    (void)num_rtvs;
+    (void)clear_slots;
+    (void)dsv;
+    (void)uavs;
+    (void)uav_initial_counts;
+    (void)uav_start_slot;
+    (void)num_uavs;
+    (void)uav_range_start;
+    (void)uav_range_size;
+    ++command_list_calls;
+}
+
+static VOID stub_set_viewports(D3D10DDI_HDEVICE hDevice, UINT num_viewports,
+        UINT clear_viewports, const D3D10_DDI_VIEWPORT *viewports)
+{
+    (void)hDevice;
+    (void)num_viewports;
+    (void)clear_viewports;
+    (void)viewports;
+    ++command_list_calls;
+}
+
+static VOID stub_clear_render_target_view(D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRENDERTARGETVIEW view, FLOAT colour[4])
+{
+    (void)hDevice;
+    (void)view;
+    (void)colour;
+    ++command_list_calls;
+}
+
+static VOID stub_draw(D3D10DDI_HDEVICE hDevice, UINT vertex_count,
+        UINT start_vertex_location)
+{
+    (void)hDevice;
+    (void)vertex_count;
+    (void)start_vertex_location;
+    ++command_list_calls;
+}
+
+static VOID stub_set_blend_state(D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HBLENDSTATE state, const FLOAT blend_factor[4],
+        UINT sample_mask)
+{
+    (void)hDevice;
+    (void)state;
+    (void)blend_factor;
+    (void)sample_mask;
+    ++command_list_calls;
+}
+
+static VOID stub_set_depth_stencil_state(D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HDEPTHSTENCILSTATE state, UINT stencil_ref)
+{
+    (void)hDevice;
+    (void)state;
+    (void)stencil_ref;
+    ++command_list_calls;
+}
+
+static VOID stub_set_rasterizer_state(D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRASTERIZERSTATE state)
+{
+    (void)hDevice;
+    (void)state;
+    ++command_list_calls;
+}
+
 static void check_command_list_handle(void)
 {
     D3D11DDI_HCOMMANDLIST command_list;
@@ -1399,6 +1543,14 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     D3D10DDI_HRTRENDERTARGETVIEW rt_rtv;
     D3D10DDI_HSHADER shader;
     D3D10DDI_HRTSHADER rt_shader;
+    D3D10DDI_HELEMENTLAYOUT element_layout;
+    D3D10DDI_HRTELEMENTLAYOUT rt_element_layout;
+    D3D10DDI_HRESOURCE vertex_buffer;
+    D3D10DDI_HRENDERTARGETVIEW bound_rtvs[1];
+    UINT strides[1] = {16};
+    UINT offsets[1] = {0};
+    FLOAT clear_colour[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    FLOAT blend_factor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     UINT handle_count = 0;
 
     memset(&device, 0, sizeof(device));
@@ -1418,6 +1570,10 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     memset(&rt_rtv, 0, sizeof(rt_rtv));
     memset(&shader, 0, sizeof(shader));
     memset(&rt_shader, 0, sizeof(rt_shader));
+    memset(&element_layout, 0, sizeof(element_layout));
+    memset(&rt_element_layout, 0, sizeof(rt_element_layout));
+    memset(&vertex_buffer, 0, sizeof(vertex_buffer));
+    memset(bound_rtvs, 0, sizeof(bound_rtvs));
     create.hDeferredContext = device;
 
     funcs->pfnAbandonCommandList = stub_abandon_command_list;
@@ -1469,6 +1625,26 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     funcs->pfnCreateVertexShader = stub_create_vertex_shader;
     funcs->pfnCreatePixelShader = stub_create_pixel_shader;
     funcs->pfnDestroyShader = stub_destroy_shader;
+    funcs->pfnCalcPrivateElementLayoutSize =
+            stub_calc_private_element_layout_size;
+    funcs->pfnCreateElementLayout = stub_create_element_layout;
+    funcs->pfnDestroyElementLayout = stub_destroy_element_layout;
+    funcs->pfnIaSetInputLayout = stub_ia_set_input_layout;
+    funcs->pfnIaSetVertexBuffers = stub_ia_set_vertex_buffers;
+    funcs->pfnIaSetTopology = stub_ia_set_topology;
+    funcs->pfnVsSetShader = stub_set_shader;
+    funcs->pfnPsSetShader = stub_set_shader;
+    funcs->pfnGsSetShader = stub_set_shader;
+    funcs->pfnHsSetShader = stub_set_shader;
+    funcs->pfnDsSetShader = stub_set_shader;
+    funcs->pfnCsSetShader = stub_set_shader;
+    funcs->pfnSetRenderTargets = stub_set_render_targets;
+    funcs->pfnSetViewports = stub_set_viewports;
+    funcs->pfnClearRenderTargetView = stub_clear_render_target_view;
+    funcs->pfnDraw = stub_draw;
+    funcs->pfnSetBlendState = stub_set_blend_state;
+    funcs->pfnSetDepthStencilState = stub_set_depth_stencil_state;
+    funcs->pfnSetRasterizerState = stub_set_rasterizer_state;
 
     command_list_calls = 0;
     CHECK_STACK("PFND3D11DDI_ABANDONCOMMANDLIST",
@@ -1569,16 +1745,61 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
             funcs->pfnCreatePixelShader(device, NULL, shader, rt_shader, NULL));
     CHECK_STACK("PFND3D10DDI_DESTROYSHADER",
             funcs->pfnDestroyShader(device, shader));
+    CHECK_STACK("PFND3D10DDI_CALCPRIVATEELEMENTLAYOUTSIZE",
+            (void)funcs->pfnCalcPrivateElementLayoutSize(device, NULL));
+    CHECK_STACK("PFND3D10DDI_CREATEELEMENTLAYOUT",
+            funcs->pfnCreateElementLayout(device, NULL, element_layout,
+                    rt_element_layout));
+    CHECK_STACK("PFND3D10DDI_SETINPUTLAYOUT",
+            funcs->pfnIaSetInputLayout(device, element_layout));
+    CHECK_STACK("PFND3D10DDI_IA_SETVERTEXBUFFERS",
+            funcs->pfnIaSetVertexBuffers(device, 0, 1, &vertex_buffer,
+                    strides, offsets));
+    CHECK_STACK("PFND3D10DDI_IA_SETTOPOLOGY",
+            funcs->pfnIaSetTopology(device, 0));
+    /* Six slots, one implementation: the shared typedef's whole claim. */
+    CHECK_STACK("PFND3D10DDI_SETSHADER (vertex)",
+            funcs->pfnVsSetShader(device, shader));
+    CHECK_STACK("PFND3D10DDI_SETSHADER (pixel)",
+            funcs->pfnPsSetShader(device, shader));
+    CHECK_STACK("PFND3D10DDI_SETSHADER (geometry)",
+            funcs->pfnGsSetShader(device, shader));
+    CHECK_STACK("PFND3D10DDI_SETSHADER (hull)",
+            funcs->pfnHsSetShader(device, shader));
+    CHECK_STACK("PFND3D10DDI_SETSHADER (domain)",
+            funcs->pfnDsSetShader(device, shader));
+    CHECK_STACK("PFND3D10DDI_SETSHADER (compute)",
+            funcs->pfnCsSetShader(device, shader));
+    CHECK_STACK("PFND3D11DDI_SETRENDERTARGETS",
+            funcs->pfnSetRenderTargets(device, bound_rtvs, 1, 0,
+                    (D3D10DDI_HDEPTHSTENCILVIEW){0}, NULL, NULL, 1, 0, 1, 0));
+    CHECK_STACK("PFND3D10DDI_SETVIEWPORTS",
+            funcs->pfnSetViewports(device, 1, 0, NULL));
+    CHECK_STACK("PFND3D10DDI_SETBLENDSTATE",
+            funcs->pfnSetBlendState(device, (D3D10DDI_HBLENDSTATE){0},
+                    blend_factor, 0xffffffffu));
+    CHECK_STACK("PFND3D10DDI_SETDEPTHSTENCILSTATE",
+            funcs->pfnSetDepthStencilState(device,
+                    (D3D10DDI_HDEPTHSTENCILSTATE){0}, 0));
+    CHECK_STACK("PFND3D10DDI_SETRASTERIZERSTATE",
+            funcs->pfnSetRasterizerState(device,
+                    (D3D10DDI_HRASTERIZERSTATE){0}));
+    CHECK_STACK("PFND3D10DDI_CLEARRENDERTARGETVIEW",
+            funcs->pfnClearRenderTargetView(device, rtv, clear_colour));
+    CHECK_STACK("PFND3D10DDI_DRAW",
+            funcs->pfnDraw(device, 3, 0));
+    CHECK_STACK("PFND3D10DDI_DESTROYELEMENTLAYOUT",
+            funcs->pfnDestroyElementLayout(device, element_layout));
 
-    if (command_list_calls == 40 && handle_count == 1)
+    if (command_list_calls == 59 && handle_count == 1)
     {
-        printf("[ ok ] the promoted command-list, deferred-context, resource, state, view, and shader "
-                "slots are callable as declared\n");
+        printf("[ ok ] the promoted command-list, deferred-context, resource, state, view, shader, "
+                "and binding/draw slots are callable as declared\n");
     }
     else
     {
-        printf("[fail] %d of 40 promoted command/deferred/resource/state/view/shader slots reached "
-                "their implementation\n", command_list_calls);
+        printf("[fail] %d of 59 promoted command/deferred/resource/state/view/shader/draw slots "
+                "reached their implementation\n", command_list_calls);
         ++failures;
     }
 
