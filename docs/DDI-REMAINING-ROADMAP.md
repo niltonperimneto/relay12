@@ -99,7 +99,7 @@ Below is the structured roadmap of what is yet to be done.
 ## 3. Core DDI Function Implementations
 
 **3.1. Removing Placeholders**
-* **Status:** Ongoing — 53 of 138 PFN typedefs promoted, covering 59 of 178 slots
+* **Status:** Ongoing — 56 of 138 PFN typedefs promoted, covering 72 of 178 slots
 * **Done:** the command-list family — `pfnAbandonCommandList`,
   `pfnCommandListExecute`,
   `pfnDestroyCommandList`, `pfnRecycleCommandList`, and
@@ -163,6 +163,14 @@ Below is the structured roadmap of what is yet to be done.
   Syntax block, SetBlendState publishes an unnamed `const FLOAT[4]`, and
   `D3D10_DDI_PRIMITIVE_TOPOLOGY` publishes enumerator names with no values, so
   it is declared as a transport typedef and names no constant.
+* **Done:** readback — `PFND3D10DDI_RESOURCEMAP`,
+  `PFND3D10DDI_RESOURCEUNMAP`, and `PFND3D10DDI_RESOURCECOPY`. These three
+  typedefs cover thirteen slots. In particular, the Dynamic*Map/Unmap family
+  comes along with the shared map and unmap typedefs; that is a consequence of
+  typedef-keyed promotion, not a scope choice. `D3D10_DDI_MAP` is a transport
+  typedef with no named constants because its page publishes names without
+  numeric values, while `D3D10DDI_MAPPED_SUBRESOURCE` is fully modelled because
+  the frame harness reads `pData`, `RowPitch`, and `DepthPitch`.
 * **Not promoted with that group, deliberately:** `PFNWDDM2_0DDI_FLUSH`'s
   WDDM 2.0-named page is a 404 and the base `PFND3D10DDI_FLUSH` page's
   one-parameter list cannot be attributed to the WDDM 2.0-named typedef the
@@ -185,7 +193,7 @@ Below is the structured roadmap of what is yet to be done.
   * The table's size assertion stays at 1424 bytes, unchanged. That is the
     pilot's headline result.
 
-**3.2. What gates the remaining 99 typedefs**
+**3.2. What gates the remaining 82 typedefs**
 
 A slot can be promoted when every type in its parameter list is declared. That
 makes the worklist a dependency order on structure groups, not a list of slots:
@@ -196,7 +204,7 @@ makes the worklist a dependency order on structure groups, not a list of slots:
 | `D3D11DDIARG_CREATECOMMANDLIST` — **done** | `pfnCalcPrivateCommandListSize`, `pfnCreateCommandList`, `pfnRecycleCreateCommandList` |
 | `D3D11DDIARG_CREATEDEFERREDCONTEXT`, `D3D11DDI_HANDLESIZE` — **done** | `pfnCalcPrivateDeferredContextSize`, `pfnCreateDeferredContext`, `pfnRecycleCreateDeferredContext`, `pfnCheckDeferredContextHandleSizes`, `pfnCalcDeferredContextHandleSize` |
 | Resource structures (`D3D10DDIARG_CREATERESOURCE`, `D3D11DDIARG_CREATERESOURCE`, `D3D10DDIARG_OPENRESOURCE`) — **done** | `pfnCalcPrivateResourceSize`, `pfnCalcPrivateOpenedResourceSize`, `pfnCreateResource`, `pfnOpenResource`, `pfnDestroyResource` |
-| Resource structures (`D3D11DDIARG_CREATERESOURCE`, `D3D10DDIARG_OPENRESOURCE`, map/lock arguments) | the `pfnCalcPrivateResourceSize`/`pfnCreateResource`/`pfnOpenResource`/`pfnDestroyResource` family, all the `pfn*ResourceMap`/`Unmap` slots, `pfnResourceCopy*`, `pfnResourceUpdateSubresourceUP`, `pfnDiscard`, `pfnResourceConvert*` |
+| `D3D10_DDI_MAP`, `D3D10DDI_MAPPED_SUBRESOURCE` — **done** | all thirteen `pfn*ResourceMap`/`Unmap` slots and `pfnResourceCopy` — **done**; `pfnResourceCopyRegion`, `pfnResourceUpdateSubresourceUP`, `pfnDiscard`, and `pfnResourceConvert*` still require their own argument types |
 | SRV/RTV creation arguments (`D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW`, `D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW`) — **done** | `pfnCalcPrivateShaderResourceViewSize`, `pfnCreateShaderResourceView`, `pfnDestroyShaderResourceView`, `pfnCalcPrivateRenderTargetViewSize`, `pfnCreateRenderTargetView`, `pfnDestroyRenderTargetView` |
 | DSV/UAV creation arguments | every remaining `pfnCalcPrivate*ViewSize`/`pfnCreate*View`/`pfnDestroy*View`, `pfnClearRenderTargetView`, `pfnClearDepthStencilView`, `pfnClearView`, `pfnClearUnorderedAccessView*` |
 | Vertex/pixel shader creation (`D3D10DDI_H(RT)SHADER`) — **done** | `pfnCalcPrivateShaderSize`, `pfnCreateVertexShader`, `pfnCreatePixelShader`, `pfnDestroyShader` |

@@ -1349,9 +1349,9 @@ WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CREATEDEFERREDCONTEXT, WinePad0, 4);
 /*
  * Group: resource creation and shared-resource opening arguments
  * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_createresource
+ * Retrieved: 2026-09-08
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d11ddiarg_createresource
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_openresource
- * Retrieved: 2026-09-08
  *
  * The resource structures contain pointers to specification-defined helper
  * structures.  Those helpers are not yet needed by the promoted callbacks, so
@@ -1473,6 +1473,7 @@ WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENRESOURCE, WinePad1, 36);
 /*
  * Group: shader resource view and render target view creation arguments
  * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3dwddm2_0ddiarg_createshaderresourceview
+ * Retrieved: 2026-09-08
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_buffer_shaderresourceview
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_tex1d_shaderresourceview
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3dwddm2_0ddiarg_tex2d_shaderresourceview
@@ -1485,7 +1486,6 @@ WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENRESOURCE, WinePad1, 36);
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_tex2d_rendertargetview
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_tex3d_rendertargetview
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_texcube_rendertargetview
- * Retrieved: 2026-09-08
  *
  * The handles follow the documented convention (see the handle group above):
  * a driver handle is pDrvPrivate, a runtime handle is handle.  Declared here,
@@ -1945,6 +1945,74 @@ typedef struct D3D10_DDI_VIEWPORT D3D10_DDI_VIEWPORT;
 typedef INT D3D10_DDI_PRIMITIVE_TOPOLOGY;
 
 /*
+ * Group: resource readback types and callbacks
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ne-d3d10umddi-d3d10_ddi_map
+ * Retrieved: 2026-09-08
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddi_mapped_subresource
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_resourcemap
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_resourceunmap
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_resourcecopy
+ * Source mirror: https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs-ddi/staging/wdk-ddi-src/content/d3d10umddi/ne-d3d10umddi-d3d10_ddi_map.md
+ *   https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs-ddi/staging/wdk-ddi-src/content/d3d10umddi/ns-d3d10umddi-d3d10ddi_mapped_subresource.md
+ *
+ * D3D10_DDI_MAP is passed by value, so its transport type must be complete.
+ * Its page publishes the enumerator names but gives none an initializer or a
+ * numeric value.  As with D3D10_DDI_PRIMITIVE_TOPOLOGY above, this header
+ * therefore records only the ABI transport and deliberately names no
+ * constants: assigning values would violate the clean-room attribution rule.
+ * An unscoped enumeration whose values fit in int uses int under the Win64
+ * MSVC and MinGW ABI, so INT is the attributable part of the declaration.
+ *
+ * D3D10DDI_MAPPED_SUBRESOURCE is complete because ResourceMap writes it and
+ * the readback harness reads pData.  The rendered structure page and its raw
+ * MicrosoftDocs source agree on the three members and their order.  Natural
+ * Win64 alignment yields no implicit gaps: pointer, UINT, UINT is 16 bytes.
+ *
+ * PFND3D10DDI_RESOURCEMAP is shared by seven table members and
+ * PFND3D10DDI_RESOURCEUNMAP by five.  Consequently all Dynamic*Map/Unmap,
+ * staging, and general resource members using those typedefs are promoted
+ * together; that breadth follows from typedef-keyed promotion, not a broader
+ * scope choice.  The callback pages publish unnamed Syntax parameters, so
+ * the descriptive parameter names below come from their Parameters sections.
+ */
+typedef INT D3D10_DDI_MAP;
+
+typedef struct D3D10DDI_MAPPED_SUBRESOURCE
+{
+    void *pData;
+    UINT RowPitch;
+    UINT DepthPitch;
+} D3D10DDI_MAPPED_SUBRESOURCE;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_MAPPED_SUBRESOURCE);
+WINE_DDI_ASSERT_SIZE(D3D10DDI_MAPPED_SUBRESOURCE, 16);
+WINE_DDI_ASSERT_ALIGN(D3D10DDI_MAPPED_SUBRESOURCE, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_MAPPED_SUBRESOURCE, pData, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_MAPPED_SUBRESOURCE, pData, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_MAPPED_SUBRESOURCE, RowPitch, 8);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_MAPPED_SUBRESOURCE, RowPitch, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_MAPPED_SUBRESOURCE, DepthPitch, 12);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_MAPPED_SUBRESOURCE, DepthPitch, 4);
+
+typedef VOID (*PFND3D10DDI_RESOURCEMAP)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRESOURCE hResource,
+        UINT Subresource,
+        D3D10_DDI_MAP DDIMap,
+        UINT Flags,
+        D3D10DDI_MAPPED_SUBRESOURCE *pMappedSubResource);
+
+typedef VOID (*PFND3D10DDI_RESOURCEUNMAP)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRESOURCE hResource,
+        UINT Subresource);
+
+typedef VOID (*PFND3D10DDI_RESOURCECOPY)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRESOURCE hDstResource,
+        D3D10DDI_HRESOURCE hSrcResource);
+
+/*
  * Group: WDDM 2.6 device function table
  * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3dwddm2_6ddi_devicefuncs
  * Source mirror: https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs-ddi/staging/wdk-ddi-src/content/d3d10umddi/ns-d3d10umddi-d3dwddm2_6ddi_devicefuncs.md
@@ -2359,8 +2427,6 @@ typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_SETCONSTANTBUFFERS;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETSHADERRESOURCES;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETSAMPLERS;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DRAWINDEXED;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCEMAP;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCEUNMAP;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_IA_SETINDEXBUFFER;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DRAWINDEXEDINSTANCED;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DRAWINSTANCED;
@@ -2377,7 +2443,6 @@ typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETPREDICATION;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_QUERYGETDATA;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_FLUSH;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_GENMIPS;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCECOPY;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCERESOLVESUBRESOURCE;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCEISSTAGINGBUSY;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_6DDI_RELOCATEDEVICEFUNCS;
