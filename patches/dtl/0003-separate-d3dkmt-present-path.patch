@@ -1,0 +1,112 @@
+From: relay12 contributors
+Subject: [PATCH] dtl: separate the optional display-kernel present path
+
+d3dkmthk.h is a WDK header that no public SDK ships and MinGW-w64 does not
+have, and including it unconditionally from the dependency edge stopped the
+preprocessor before anything else could be reached. It was the recorded
+compiler boundary.
+
+Nothing about the boundary needed the complete type. Every declaration in the
+tree -- the pKMTPresent member of PresentCBArgs, the two ImmediateContext
+present signatures, and SwapChainHelper::StandardPresent -- names
+D3DKMT_PRESENT only through a pointer, and a pointer to an incomplete type is
+ABI-complete. So the dependency edge forward declares the struct instead of
+including the header, and every one of those declarations still compiles
+unchanged, at the same layout.
+
+Two translation units genuinely need the definition, because they dereference
+it: SwapChainHelper.cpp reads FlipInterval, and ImmediateContext.cpp reads
+Flags.RedirectedFlip and hWindow. Both are the display-kernel present path,
+which this port disables -- Wine's DXGI emulates presentation above the DDI,
+as docs/D3D11ON12-SKIPPABLE-ELEMENTS.md section 1 describes -- so they are
+compiled only when TRANSLATION_LAYER_SUPPORTS_D3DKMT_PRESENT is defined,
+which is never in this build.
+
+Their declarations are deliberately left visible. Gating those too would
+change the shape of PresentCBArgs, and a caller that reaches for the KMT
+present path should fail to link against a path this port does not build
+rather than silently compile against a different struct.
+
+The two include lines stay in the inventory on purpose. They are still
+present, now behind a gate, so the count is unchanged and the evidence for
+this step is the advanced compiler boundary rather than a smaller number.
+---
+diff --git a/include/D3D12TranslationLayerDependencyIncludes.h b/include/D3D12TranslationLayerDependencyIncludes.h
+index 1ab7819..377d66e 100644
+--- a/include/D3D12TranslationLayerDependencyIncludes.h
++++ b/include/D3D12TranslationLayerDependencyIncludes.h
+@@ -30,7 +30,17 @@
+ #include <directx/d3dx12.h>
+ #include <d3d11_3.h>
+ #include <dxgi1_5.h>
++// The display-kernel present path is optional, and d3dkmthk.h is a WDK
++// header no public SDK ships. Every declaration in this tree names
++// D3DKMT_PRESENT only through a pointer, and a pointer to an incomplete
++// type is ABI-complete, so the forward declaration below keeps all of them
++// compiling. Only the two translation units that dereference it need the
++// real header, and they are gated on the same macro.
++#ifdef TRANSLATION_LAYER_SUPPORTS_D3DKMT_PRESENT
+ #include <d3dkmthk.h>
++#else
++struct D3DKMT_PRESENT;
++#endif
+ 
+ //STL
+ #include <utility>
+diff --git a/include/SwapChainHelper.hpp b/include/SwapChainHelper.hpp
+index 822aefa..90502f0 100644
+--- a/include/SwapChainHelper.hpp
++++ b/include/SwapChainHelper.hpp
+@@ -1,5 +1,9 @@
+ #pragma once
++// Only the pointer is named here, so this header needs nothing more than
++// the forward declaration the dependency edge provides.
++#ifdef TRANSLATION_LAYER_SUPPORTS_D3DKMT_PRESENT
+ #include "d3dkmthk.h"
++#endif
+ 
+ namespace D3D12TranslationLayer
+ {
+diff --git a/src/ImmediateContext.cpp b/src/ImmediateContext.cpp
+index fe7b157..1dc3e6f 100644
+--- a/src/ImmediateContext.cpp
++++ b/src/ImmediateContext.cpp
+@@ -5693,6 +5693,11 @@ void TRANSLATION_API ImmediateContext::SharingContractPresent(_In_ Resource* pRe
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
++// Both definitions below dereference pKMTPresent, so unlike every declaration
++// of them they need the complete D3DKMT_PRESENT. The display-kernel present
++// path is disabled in this port -- Wine's DXGI emulates presentation above
++// the DDI -- so they compile only when the WDK header is available.
++#ifdef TRANSLATION_LAYER_SUPPORTS_D3DKMT_PRESENT
+ void TRANSLATION_API ImmediateContext::Present(
+     _In_reads_(uSrcSurfaces) PresentSurface const* pSrcSurfaces,
+     UINT numSrcSurfaces,
+@@ -5822,6 +5827,7 @@ HRESULT TRANSLATION_API ImmediateContext::CloseAndSubmitGraphicsCommandListForPr
+ 
+     return S_OK;
+ }
++#endif // TRANSLATION_LAYER_SUPPORTS_D3DKMT_PRESENT
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+ ImmediateContext::BltResolveManager::BltResolveManager(D3D12TranslationLayer::ImmediateContext& ImmCtx)
+diff --git a/src/SwapChainHelper.cpp b/src/SwapChainHelper.cpp
+index f764777..32319b1 100644
+--- a/src/SwapChainHelper.cpp
++++ b/src/SwapChainHelper.cpp
+@@ -1,3 +1,6 @@
++// This translation unit dereferences pKMTPresent, so it needs the complete
++// D3DKMT_PRESENT rather than the forward declaration the headers use.
++#ifdef TRANSLATION_LAYER_SUPPORTS_D3DKMT_PRESENT
+ #include "pch.h"
+ #include "SwapChainHelper.hpp"
+ 
+@@ -43,4 +46,5 @@ namespace D3D12TranslationLayer
+ 
+         return hr;
+     }
+-}
+\ No newline at end of file
++}
++#endif // TRANSLATION_LAYER_SUPPORTS_D3DKMT_PRESENT

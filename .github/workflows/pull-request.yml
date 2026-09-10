@@ -44,7 +44,7 @@ jobs:
           worktree="$RUNNER_TEMP/d3d11on12-port-source"
           git clone --quiet --no-hardlinks third_party/D3D11On12 "$worktree"
           scripts/prepare-d3d11on12-source.sh "$worktree"
-          git -C "$worktree" diff --check
+          git -C "$worktree" -c core.whitespace=cr-at-eol diff --check
           test -n "$(git -C "$worktree" diff --stat)"
           c++ -std=c++17 -Wall -Wextra -Werror \
             -Icompat tests/relay_com_ptr_test.cpp \
@@ -64,7 +64,7 @@ jobs:
           worktree="$RUNNER_TEMP/dtl-port-source"
           git clone --quiet --no-hardlinks third_party/D3D12TranslationLayer "$worktree"
           scripts/prepare-dtl-source.sh "$worktree"
-          git -C "$worktree" diff --check
+          git -C "$worktree" -c core.whitespace=cr-at-eol diff --check
           c++ -std=c++17 -Wall -Wextra -Werror \
             -Icompat tests/relay_hresult_error_test.cpp \
             -o "$RUNNER_TEMP/relay_hresult_error_test"
@@ -141,9 +141,9 @@ jobs:
             echo 'DTL dependency probe unexpectedly compiled; advance the milestone' >&2
             exit 1
           fi
-          if ! grep -Eq 'd3dkmthk[.]h.*(No such file|file not found)' "$diagnostics"; then
+          if ! grep -Eq 'traceloggingprovider[.]h.*(No such file|file not found)' "$diagnostics"; then
             cat "$diagnostics" >&2
-            echo 'DTL failed before or after the recorded D3DKMT boundary' >&2
+            echo 'DTL failed before or after the recorded TraceLogging boundary' >&2
             exit 1
           fi
 
