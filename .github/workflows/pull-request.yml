@@ -76,6 +76,18 @@ jobs:
             echo 'non-HRESULT exception was swallowed at HRESULT boundary' >&2
             exit 1
           fi
+          c++ -std=c++17 -Wall -Wextra -Werror \
+            -Icompat tests/relay_tracelogging_test.cpp \
+            -o "$RUNNER_TEMP/relay_tracelogging_test"
+          "$RUNNER_TEMP/relay_tracelogging_test"
+          # The provider handle is a distinct type on purpose: the no-op macros
+          # never inspect their arguments, so nothing else would catch a
+          # refactor that passed the wrong pointer.
+          if c++ -std=c++17 -Wall -Wextra -Werror -Icompat \
+              -c tests/relay_tracelogging_negative.cpp -o /dev/null; then
+            echo 'a provider handle accepted an unrelated pointer' >&2
+            exit 1
+          fi
 
       - name: Test the gates
         run: |
@@ -123,7 +135,7 @@ jobs:
             exit 1
           fi
 
-      - name: Pin the current D3D12TranslationLayer compiler boundary
+      - name: Compile the D3D12TranslationLayer dependency edge
         run: |
           set -euo pipefail
           x86_64-w64-mingw32-g++ -std=c++17 -Wall -Wextra -Werror \
@@ -131,19 +143,27 @@ jobs:
             -Icompat tests/relay_com_ptr_test.cpp \
             -o "$RUNNER_TEMP/relay_ownership_test.exe"
           wine "$RUNNER_TEMP/relay_ownership_test.exe"
+          # The ETW shim has to mean the same thing to MinGW as it does to the
+          # native compiler, so the contract test runs in both lanes.
+          x86_64-w64-mingw32-g++ -std=c++17 -Wall -Wextra -Werror \
+            -static-libgcc -static-libstdc++ \
+            -Icompat tests/relay_tracelogging_test.cpp \
+            -o "$RUNNER_TEMP/relay_tracelogging_test.exe"
+          wine "$RUNNER_TEMP/relay_tracelogging_test.exe"
           worktree="$RUNNER_TEMP/dtl-port-source"
-          diagnostics="$RUNNER_TEMP/dtl-dependency-probe.log"
-          if x86_64-w64-mingw32-g++ -std=c++17 -Wall -Wextra -Werror \
-              -I"$worktree/include" -I"$worktree/external" \
-              -Ithird_party/DirectX-Headers/include \
-              -fsyntax-only tests/dtl_dependency_probe.cpp \
-              >"$diagnostics" 2>&1; then
-            echo 'DTL dependency probe unexpectedly compiled; advance the milestone' >&2
-            exit 1
-          fi
-          if ! grep -Eq 'traceloggingprovider[.]h.*(No such file|file not found)' "$diagnostics"; then
-            cat "$diagnostics" >&2
-            echo 'DTL failed before or after the recorded TraceLogging boundary' >&2
+          # A positive milestone now, not an expected failure. ATL, _com_error,
+          # the D3DKMT present path and the SDK ETW header are all behind us,
+          # and nothing else in the dependency edge is unavailable to MinGW, so
+          # preprocessing the whole edge has to succeed. A regression here is a
+          # newly introduced dependency, and the diagnostic names it.
+          x86_64-w64-mingw32-g++ -std=c++17 -Wall -Wextra -Werror \
+            -I"$worktree/include" -I"$worktree/external" \
+            -Ithird_party/DirectX-Headers/include \
+            -fsyntax-only tests/dtl_dependency_probe.cpp
+          # And the SDK ETW header must not have come back by another route.
+          if grep -rn 'include *[<"]traceloggingprovider' "$worktree/include" \
+              "$worktree/src"; then
+            echo 'the SDK TraceLogging header reappeared in the prepared tree' >&2
             exit 1
           fi
 

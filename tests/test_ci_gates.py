@@ -107,6 +107,94 @@ class DtlPortabilityInventory(unittest.TestCase):
         self.assertNotEqual(before, after)
         self.assertEqual(after["categories"]["com_error"]["occurrences"], 1)
 
+    def test_the_sdk_etw_header_and_the_event_sites_are_counted_apart(self):
+        """The split is the point: one number could not tell "does not
+        compile" from "compiles and does nothing"."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "src").mkdir()
+            (root / "src" / "probe.cpp").write_text(
+                '#include <traceloggingprovider.h>\n'
+                "if (g_hTracelogging) TraceLoggingWrite(g_hTracelogging, \"E\");")
+            result = inventory_dtl_portability.inventory(root)
+        categories = result["categories"]
+        self.assertEqual(
+            categories["tracelogging_sdk_headers"]["occurrences"], 1)
+        # g_hTracelogging twice and TraceLoggingWrite once.
+        self.assertEqual(categories["tracelogging_events"]["occurrences"], 3)
+
+    def test_removing_the_sdk_etw_header_leaves_the_events_counted(self):
+        """Replacing the header must not silently zero the retained sites."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "src").mkdir()
+            path = root / "src" / "probe.cpp"
+            path.write_text('#include <traceloggingprovider.h>\n'
+                            "TraceLoggingWrite(g_hTracelogging, \"E\");")
+            before = inventory_dtl_portability.inventory(root)
+            path.write_text('#include "relay_tracelogging.hpp"\n'
+                            "TraceLoggingWrite(g_hTracelogging, \"E\");")
+            after = inventory_dtl_portability.inventory(root)
+        self.assertEqual(
+            before["categories"]["tracelogging_sdk_headers"]["occurrences"], 1)
+        self.assertEqual(
+            after["categories"]["tracelogging_sdk_headers"]["occurrences"], 0)
+        self.assertEqual(
+            after["categories"]["tracelogging_events"]["occurrences"],
+            before["categories"]["tracelogging_events"]["occurrences"])
+
+    def test_relay_compat_headers_do_not_count_as_upstream_debt(self):
+        """A shim must not inflate the category it exists to empty."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "include").mkdir()
+            (root / "include" / "relay_tracelogging.hpp").write_text(
+                "using TraceLoggingHProvider = void*;\n"
+                "#define TraceLoggingWrite(...) ((void)0)")
+            (root / "include" / "relay_atl_compat.hpp").write_text(
+                "template <typename T> class CComPtr;")
+            result = inventory_dtl_portability.inventory(root)
+        self.assertEqual(
+            result["categories"]["tracelogging_events"], {"files": {}, "occurrences": 0})
+        self.assertEqual(
+            result["categories"]["atl_com_ptr"], {"files": {}, "occurrences": 0})
+
+    def test_the_exclusion_is_scoped_to_relay_headers_in_include(self):
+        """Upstream files must still count even next to the shims, and a
+        relay-prefixed file elsewhere is not an exemption."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "include").mkdir()
+            (root / "src").mkdir()
+            (root / "include" / "Upstream.hpp").write_text(
+                "TraceLoggingWrite(g_hTracelogging, \"E\");")
+            (root / "src" / "relay_not_a_shim.cpp").write_text(
+                "TraceLoggingWrite(g_hTracelogging, \"E\");")
+            result = inventory_dtl_portability.inventory(root)
+        files = result["categories"]["tracelogging_events"]["files"]
+        self.assertEqual(files,
+                         {"include/Upstream.hpp": 2,
+                          "src/relay_not_a_shim.cpp": 2})
+
+    def test_dtl_baseline_has_no_sdk_etw_header(self):
+        baseline = (REPOSITORY / "docs" /
+                    "dtl-portability-baseline.json").read_text()
+        self.assertEqual(
+            json.loads(baseline)["categories"]["tracelogging_sdk_headers"],
+            {"files": {}, "occurrences": 0})
+
+    def test_the_etw_shim_never_consumes_its_arguments(self):
+        """The no-op macros must not name their parameters. If they did, the
+        undefined field macros in the pinned call sites would start expanding
+        and arguments with side effects would fire."""
+        shim = (REPOSITORY / "compat" / "relay_tracelogging.hpp").read_text()
+        for macro in ("TraceLoggingWrite", "TraceLoggingProviderEnabled"):
+            definition = [line for line in shim.splitlines()
+                          if line.startswith(f"#define {macro}(")]
+            self.assertEqual(len(definition), 1, macro)
+            self.assertIn("(...)", definition[0])
+            self.assertNotIn("__VA_ARGS__", definition[0])
+
     def test_dtl_baseline_has_no_executable_com_error(self):
         baseline = (REPOSITORY / "docs" /
                     "dtl-portability-baseline.json").read_text()
