@@ -24,7 +24,7 @@ successful local build is not evidence by itself.
 | --- | --- | --- |
 | Clean-room DDI | Independent layout model, C/C++ padding builds, promoted-signature negatives, 72-slot frame/readback harness | Every host-reachable callback promoted and invoked; all unsupported callbacks fail intentionally |
 | D3D12TranslationLayer source | Shared ownership removes all 15 `CComPtr`, all 3 `CComHeapPtr`, and the controlled ATL include | Prepared inventory reaches zero except explicitly retained public-SDK paths |
-| D3D12TranslationLayer compiler | Ownership contracts pass under native C++ and MinGW/Wine; the optional D3DKMT present path is separated and preprocessing reaches the `traceloggingprovider.h` ETW boundary | Every translation unit compiles with C++17 and warnings as errors |
+| D3D12TranslationLayer compiler | Ownership and ETW contracts pass under native C++ and MinGW/Wine; the dependency edge preprocesses to completion with warnings as errors | Every translation unit compiles with C++17 and warnings as errors |
 | D3D12TranslationLayer linker | Not reached | Static library links reproducibly without ATL, telemetry, PIX, or MSVC runtime imports |
 | D3D11On12 source | Pinned patch series; `_com_error` and `CComPtr` removed; COM lifetime test | Prepared tree passes its portability inventory and clean-room header scan |
 | D3D11On12 compiler/linker | Dependency-blocked | Driver DLL compiles, links reproducibly, and passes export/import audit |

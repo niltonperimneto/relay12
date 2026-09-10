@@ -49,7 +49,7 @@
       },
       "occurrences": 1
     },
-    "tracelogging": {
+    "tracelogging_events": {
       "files": {
         "external/MicrosoftTelemetry.h": 3,
         "include/D3D12TranslationLayerIncludes.h": 3,
@@ -61,6 +61,10 @@
         "src/VideoReferenceDataManager.cpp": 8
       },
       "occurrences": 74
+    },
+    "tracelogging_sdk_headers": {
+      "files": {},
+      "occurrences": 0
     },
     "wdk_headers": {
       "files": {
