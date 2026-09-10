@@ -1,0 +1,51 @@
+From: relay12 contributors
+Subject: [PATCH] dtl: compile the ETW event sites out
+
+traceloggingprovider.h is a Windows SDK header MinGW-w64 does not ship, and
+it was the recorded compiler boundary. Route the tree at
+compat/relay_tracelogging.hpp instead, which supplies TraceLoggingHProvider
+as a distinct incomplete-type pointer and turns TraceLoggingWrite and
+TraceLoggingProviderEnabled into a void expression and a false constant.
+
+This changes no behaviour. Every TraceLoggingWrite in the pinned tree is
+already guarded by `if (g_hTracelogging)`, the tree never calls
+TRACELOGGING_DEFINE_PROVIDER or TraceLoggingRegister, and upstream's README
+states that in the default configuration no provider is created and no data
+is sent. This port never calls SetTraceloggingProvider, so the events were
+inert at run time before this patch and are inert at compile time after it.
+
+Error paths are untouched, which is what the port-quality roadmap requires of
+this step. The events are measurement counters, and where one sits beside a
+failure it is beside the error path rather than on it: PipelineState.cpp logs
+inside `if (FAILED(hr))` and then calls ThrowFailure(hr) either way.
+
+The ~71 guarded call sites are deliberately left in place. They cost nothing
+once the macros are inert, and deleting them would be a large diff across
+eight files that makes a later rebase onto a newer upstream materially harder.
+external/MicrosoftTelemetry.h needs no change either: it is already a
+vendored no-telemetry stub of macro constants, portable as it stands.
+
+The compatibility macros do not name their parameters, so arguments are never
+expanded and never evaluated. That is what lets the field macros in the call
+sites stay undefined, and it is pinned by tests/relay_tracelogging_test.cpp
+along with the void-expression and always-false properties.
+---
+diff --git a/include/D3D12TranslationLayerDependencyIncludes.h b/include/D3D12TranslationLayerDependencyIncludes.h
+index 377d66e..aaacedb 100644
+--- a/include/D3D12TranslationLayerDependencyIncludes.h
++++ b/include/D3D12TranslationLayerDependencyIncludes.h
+@@ -70,7 +70,13 @@ using std::max;
+ #endif
+ 
+ #include <evntrace.h>
+-#include <traceloggingprovider.h>
++// traceloggingprovider.h is a Windows SDK header MinGW-w64 does not ship,
++// and it was the recorded compiler boundary. The events behind it are
++// already inert in this port: every TraceLoggingWrite below is guarded by
++// `if (g_hTracelogging)`, this tree never registers a provider, and nothing
++// calls SetTraceloggingProvider. The replacement compiles the event sites
++// to nothing while leaving every HRESULT path untouched.
++#include "relay_tracelogging.hpp"
+ #include <MicrosoftTelemetry.h>
+ 
+ #define INITGUID

@@ -14,7 +14,15 @@ PATTERNS = {
     "atl_com_ptr": re.compile(r"\bCComPtr\s*<"),
     "atl_heap_ptr": re.compile(r"\bCComHeapPtr\s*<"),
     "com_error": re.compile(r"\b_com_error\b"),
-    "tracelogging": re.compile(r"\b(?:TraceLogging\w*|g_hTracelogging)\b"),
+    # Split deliberately. Only the SDK header actually blocked compilation;
+    # the event sites are guarded by a provider handle this port never sets,
+    # so once the header is replaced they are inert and cost nothing to keep.
+    # Conflating the two in one number made a 74 that could not distinguish
+    # "does not compile" from "compiles and does nothing".
+    "tracelogging_sdk_headers": re.compile(
+        r"#\s*include\s*[<\"]traceloggingprovider[.]h[>\"]"),
+    "tracelogging_events": re.compile(
+        r"\b(?:TraceLogging\w*|g_hTracelogging)\b"),
     "msvc_declspec": re.compile(r"\b__declspec\s*\("),
     "msvc_uuidof": re.compile(r"\b__uuidof\s*\("),
     "wdk_headers": re.compile(
@@ -23,6 +31,20 @@ PATTERNS = {
     "cmake_msvc_linkage": re.compile(
         r"\b(?:atls|WinPixEventRuntime|DELAYLOAD:dxcore[.]dll)\b"),
 }
+
+
+def is_relay_compat(relative):
+    """Whether a path is one of relay12's own compatibility headers.
+
+    scripts/prepare-dtl-source.sh copies these into the prepared tree after
+    the patch series, so they sit inside the scanned directory without being
+    part of the pinned upstream revision. Counting them would mean every shim
+    added occurrences to the category it was written to empty -- the
+    TraceLogging shim alone defines three of the identifiers the event pattern
+    matches.
+    """
+    return (relative.parent.as_posix() == "include"
+            and relative.name.startswith("relay_"))
 
 
 def without_comments(text):
@@ -38,6 +60,7 @@ def inventory(source_dir, revision=EXPECTED_REVISION):
     paths = sorted(
         path for path in source_dir.rglob("*")
         if path.is_file() and path.suffix in SOURCE_SUFFIXES
+        and not is_relay_compat(path.relative_to(source_dir))
     )
     for name, pattern in PATTERNS.items():
         matches = {}
