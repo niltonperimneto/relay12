@@ -1,0 +1,24 @@
+diff --git a/DxbcParser/CMakeLists.txt b/DxbcParser/CMakeLists.txt
+--- a/DxbcParser/CMakeLists.txt
++++ b/DxbcParser/CMakeLists.txt
+@@ -13,4 +13,4 @@
+-target_include_directories(dxbcparser
++target_include_directories(dxbcparser SYSTEM
+     PRIVATE ${DTL_WINDOWS_SDK_OVERLAY_DIR}
+     PUBLIC include
+     PUBLIC ../external)
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -88,5 +88,5 @@
+ target_include_directories(d3d12translationlayer
+-    BEFORE PRIVATE ${DTL_WINDOWS_SDK_OVERLAY_DIR}
++    SYSTEM BEFORE PRIVATE ${DTL_WINDOWS_SDK_OVERLAY_DIR}
+     PUBLIC ../external
+     PUBLIC ../include
+     PRIVATE ./)
+@@ -172,3 +172,3 @@
+-    target_include_directories(d3d12translationlayer_wdk PRIVATE
++    target_include_directories(d3d12translationlayer_wdk SYSTEM PRIVATE
+         ${DTL_WINDOWS_SDK_OVERLAY_DIR}
+         ../DxbcParser/include)
