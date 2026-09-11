@@ -1,54 +1,81 @@
-# Testing Strategy: Hardening the Clean-Room DDI
+# Testing strategy
 
-## The Core Challenge
-Writing a user-mode graphics driver (WDDM/DDI) requires absolute determinism. ABI boundaries, memory alignment, and lock-free concurrency models are unforgiving. Driver code must perfectly bridge the gap between Windows applications and the Apple Silicon translation layer.
+This document separates contracts enforced today from validation that depends
+on future host integration. Project milestone status belongs in
+`PORT-QUALITY-ROADMAP.md`.
 
-Whether authored by human engineers or automated AI agents, C/C++ driver implementations are prone to subtle layout mismatches, un-barriered memory reads, or edge-case null dereferences. The test suite for `relay12` must act as an **absolute deterministic net**, assuming all new code is flawed until proven mathematically and structurally correct.
+## Implemented gates
 
-This document outlines the testing architecture and hardening strategies required to secure the DDI codebase.
+### Clean-room declarations
 
----
+- `check_ddi_header.py` enforces declaration-group provenance and rejects
+  forbidden packing.
+- `gen_ddi_layout.py --check` independently derives member layout and detects
+  missing, stale, or hand-edited assertions.
+- The C and C++ layout builds check size, alignment, offsets, and callable
+  promoted slots under MinGW.
+- `-Wpadded -Werror` requires every ABI gap to be explicit.
+- Negative translation units prove placeholders and promoted signatures reject
+  invalid arguments.
+- Compiler dependency files prove clean-room tests resolve no SDK/WDK overlay
+  header.
 
-## 1. Structural Determinism: Multi-Source Golden Layouts
-Developers can easily misread documentation, miscount padding bytes, or mix up legacy fields when recalling Windows internals.
-* **Dual-Source Validation:** Continue enforcing the rule that every struct must be independently verified against both MSDN and the WDK documentation mirrors.
-* **AST-Driven CI Gates:** We use `scripts/gen_ddi_layout.py` combined with Python-based static analysis to parse the generated C/C++ AST. Ensure that every struct defined strictly maps to the JSON golden template. If a developer introduces an extra `Reserved` field, the AST diff will immediately block the PR.
-* **Calling Convention Guards:** It is simple to mix up `__stdcall`, `__cdecl`, and `__fastcall`. The test suite wraps invoked function pointers in a macro (`CHECK_STACK`) that asserts the `%rsp` (stack pointer) is identical before and after the call, ensuring stack integrity is not compromised by mismatched conventions.
+### Behavioural contracts
 
-## 1a. Behavioural Determinism: The Frame Harness
-Layout and per-slot callability are necessary and not sufficient. Every driver handle in this DDI is one wrapped pointer, so a frame that bound the vertex buffer where it meant to bind the render target would call the right slots, in the right order, with arguments of the right types — and only the identity of a pointer would be wrong. No layout assertion and no per-slot call can see that.
-* **`tests/d3d11ddi_triangle.c`:** drives the promoted device function table through the MVP frame — create, bind, clear, draw, copy to staging, map, verify, unmap, tear down — with recording stubs, then asserts the recorded call sequence against a written-out expected order and checks that each binding received the handle the matching creation produced. The clear stub fills a backing image, draw replaces its centre texel, and readback requires the centre to carry the drawn red and a corner the cleared blue, matching the application-level test. Objects get distinct driver private blocks, allocated by the test the way the runtime allocates them, which is what makes the identity checks discriminating rather than vacuous. Compiled in C and C++ and run under Wine, like the layout harness.
-* **What it does not claim:** nothing renders. There is no host behind the table. The application-level counterpart that would prove pixels is `tests/e2e_d3d11_triangle.cpp`, built but not run by the manual `integration-test.yml` job; when a host exists the two must agree.
+- `d3d11ddi_triangle.c` drives the promoted mock table through create, bind,
+  clear, draw, copy, map, verify, unmap, and teardown. It checks call order,
+  handle identity, and expected centre/corner bytes.
+- `d3d11ddinegotiate.c` checks version-buffer sizing and selection behavior.
+- Router and core tests cover missing components, status reporting, interface
+  identity, output slots, and fail-closed behavior.
+- Shared-state and oversubscribed core stress tests cover concurrency that
+  exists in the current implementation.
 
-## 1b. Portability Debt as a Tested Input
+The mock frame harness proves table behavior; it does not render or execute a
+Metal pipeline.
 
-`scripts/inventory_dtl_portability.py` inventories the pinned
-D3D12TranslationLayer tree by category, occurrence count, and file. Its golden
-record is `docs/dtl-portability-baseline.json`. Unit tests verify comment
-filtering, locations, counts, and mutation detection. CI also performs a
-MinGW expected-failure compile that must reach exactly the currently recorded
-`atlbase.h` boundary. See `docs/PORT-QUALITY-ROADMAP.md` for the rule that each
-negative milestone becomes a positive compile gate when its blocker is removed.
+### Upstream portability
 
-## 2. Memory & Boundary Security: Sanitizers & Padding Traps
-Manual C/C++ memory management frequently introduces vulnerabilities, and failing to account for implicit compiler padding leads to "dirty memory" leaking over the ABI boundary.
-* **Dirty Memory Initialization:** All test models must allocate memory using a `malloc_dirty()` helper that primes heap space with `0xCC` or `0xAA` values. If a struct initialization drops fields, the padding trap will catch the uninitialized bytes.
-* **UBSAN & ASAN Porting:** While `mingw-w64` PE binaries resist standard sanitizers, the internal algorithms (e.g., handle tables, state trackers) must be decoupled from Windows APIs. These internal components can be compiled as a standard ELF binary on Linux/macOS strictly for offline CI testing with AddressSanitizer (`-fsanitize=address`) and UndefinedBehaviorSanitizer (`-fsanitize=undefined`).
+- `inventory_dtl_portability.py` records category counts, locations, and
+  acknowledged high-water increases.
+- Prepared-tree gates cover struct-return wrappers and exact filename case for
+  project-local includes.
+- Native and MinGW/Wine contract tests cover COM ownership, HRESULT identity,
+  telemetry no-ops, and structure-return ABI selection.
+- The Linux CMake lane compiles DTL translation units and verifies archive
+  member counts. Only a green run is evidence that this contract is satisfied.
+- Reproducible source packaging and PE import/export audits protect the
+  deliverable boundary.
 
-## 3. Edge-Case Coverage: Fuzzing the DDI Boundary
-It is common during development to focus on the "happy path" and forget to validate null pointers, zero-sized resources, or maliciously malformed command lists.
-* **Structured Fuzzing (libFuzzer/AFL++):** A fuzzer target in `tests/fuzz_ddi.cpp` constructs malformed `D3D10DDIARG_CREATEDEVICE`, invalid shaders, and corrupted command lists, feeding them into the DDI entry points to catch unhandled crashes.
-* **State Machine Fuzzing:** We fuzz the lifecycle of driver handles (e.g., calling `pfnDestroyCommandList` twice, or calling `pfnCommandListExecute` on an abandoned list) to ensure robust state-tracking defenses are in place.
+## Planned validation
 
-## 4. Concurrency Guardrails: Strict Synchronization
-Complex driver implementations might use an unprotected increment but forget the memory barrier, or use a heavyweight mutex where a spinlock is mandated by the DDI IRQL rules.
-* **Isolated Thread Stress (The "Storm"):** The `ddi_thread_stress.c` module must be expanded whenever new shared device state is introduced. It oversubscribes CPU threads to force context switches in the middle of standard functions.
-* **AST Concurrency Lints:** `scripts/check_shared_state.py` and `scripts/check_secure_code.py` outright ban standard unprotected `++` or `--` operators on any struct member labeled `refcount` or `volatile`. Every state mutation must be enforced through compiler intrinsics (`Interlocked*`).
+### Integrated host and graphics output
 
-## 5. Security & Precision Lints
-* **Integer Overflow Preventions:** Manual sizing requires strict bounds checking on `SIZE_T` inputs (e.g., `pfnCalcPrivateCommandListSize`). Enforce a CI static analysis rule that any parameter used in a memory allocation (e.g., `malloc(size * count)`) must pass through a SafeInt/checked arithmetic boundary to prevent integer overflow exploits.
-* **Return Code Strictness:** A static analysis rule ensures that every `HRESULT` or `SIZE_T` returned by an internal API is checked for failure, and that appropriate cleanup (e.g., `goto cleanup`) is executed. No swallowed errors.
+- Run `e2e_d3d11_triangle.cpp` against the real Wine host and D3D11On12 driver.
+- Compare centre and corner pixels byte-for-byte with the mock harness.
+- Exercise adapter/device creation, callback reachability, wrapped resources,
+  barriers, queue synchronization, and teardown.
 
----
-**Summary for Contributors (Human & Automated):**
-When authoring code for this repository, your output will be subjected to deliberate heap corruption, stack-pointer monitoring, multi-threaded hammering, and AST layout extraction. Code defensively, zero-initialize all structs, explicitly type all calling conventions, and check all `HRESULT` return paths.
+### Fault injection and memory safety
+
+- Inject allocation, interface, and state-transition failures at each new
+  boundary and assert exact cleanup and HRESULT behavior.
+- Add native ASan/UBSan targets for platform-independent lifetime and state
+  algorithms when those components exist.
+- Add dirty-memory fixtures for structures whose producer must initialize every
+  byte consumed across the ABI.
+
+### Fuzzing and concurrency
+
+- Add structured fuzz targets only after real parsing or state-machine entry
+  points exist; seed them with valid captured contract fixtures.
+- Extend shutdown, reference-lifetime, and oversubscription stress whenever a
+  new object becomes shared.
+- Treat GPU completion and CPU visibility as separate assertions once real
+  command submission is available.
+
+## Contribution rule
+
+Every new gate needs a passing fixture and a mutation it rejects. Every planned
+test becomes an implemented claim only when its command runs in required CI and
+the failure signal has been demonstrated.
