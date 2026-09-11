@@ -33,6 +33,8 @@ import check_pe_audit  # noqa: E402
 import check_shared_state  # noqa: E402
 import gen_ddi_layout  # noqa: E402
 import check_dtl_struct_return  # noqa: E402
+import check_dtl_include_case  # noqa: E402
+import check_cleanroom_isolation  # noqa: E402
 import inventory_dtl_portability  # noqa: E402
 
 DDI_HEADER = REPOSITORY / "relay12-d3d11" / "ddi" / "wine_d3d11ddi.h"
@@ -298,6 +300,88 @@ class DtlStructReturnGate(unittest.TestCase):
                  if line.startswith("+") and "RelayHResultError" in line]
         self.assertEqual(len(removed), 31)
         self.assertEqual(added, removed)
+
+
+class DtlIncludeCaseGate(unittest.TestCase):
+    def test_matching_local_include_passes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "include").mkdir()
+            (root / "include" / "DXBCUtils.h").write_text("#pragma once\n")
+            (root / "probe.cpp").write_text('#include "DXBCUtils.h"\n')
+            self.assertEqual(check_dtl_include_case.check_tree(root), [])
+
+    def test_mismatch_reports_requested_and_actual_spelling(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "ShaderBinary.h").write_text("#pragma once\n")
+            (root / "probe.cpp").write_text('#include <shaderbinary.h>\n')
+            errors = check_dtl_include_case.check_tree(root)
+            self.assertTrue(any(
+                "'shaderbinary.h'" in error and "ShaderBinary.h" in error
+                for error in errors), errors)
+
+    def test_missing_external_header_is_out_of_scope(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "probe.cpp").write_text("#include <windows.h>\n")
+            self.assertEqual(check_dtl_include_case.check_tree(root), [])
+
+    def test_duplicate_case_variants_are_all_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "one").mkdir()
+            (root / "two").mkdir()
+            (root / "one" / "Thing.h").write_text("#pragma once\n")
+            (root / "two" / "THING.H").write_text("#pragma once\n")
+            (root / "probe.cpp").write_text('#include "thing.h"\n')
+            errors = check_dtl_include_case.check_tree(root)
+            self.assertTrue(any(
+                "THING.H, Thing.h" in error for error in errors), errors)
+
+    def test_comments_are_not_includes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "Actual.h").write_text("#pragma once\n")
+            (root / "probe.cpp").write_text(
+                '// #include "actual.h"\n/*\n#include <ACTUAL.H>\n*/\n')
+            self.assertEqual(check_dtl_include_case.check_tree(root), [])
+
+
+class CleanroomIsolationGate(unittest.TestCase):
+    def test_dependencies_outside_overlay_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            overlay = root / "overlay"
+            overlay.mkdir()
+            depfile = root / "clean.d"
+            depfile.write_text("clean.o: tests/probe.c relay12-d3d11/ddi/probe.h\n")
+            self.assertEqual(
+                check_cleanroom_isolation.check(overlay, [depfile]), [])
+
+    def test_overlay_dependency_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            overlay = root / "overlay"
+            overlay.mkdir()
+            proprietary = overlay / "d3d10umddi.h"
+            proprietary.write_text("/* package input */\n")
+            depfile = root / "leaked.d"
+            depfile.write_text(f"leaked.o: tests/probe.c {proprietary}\n")
+            errors = check_cleanroom_isolation.check(overlay, [depfile])
+            self.assertTrue(any("d3d10umddi.h" in error for error in errors),
+                            errors)
+
+    def test_malformed_dependency_file_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            overlay = root / "overlay"
+            overlay.mkdir()
+            depfile = root / "broken.d"
+            depfile.write_text("not a dependency record\n")
+            errors = check_cleanroom_isolation.check(overlay, [depfile])
+            self.assertTrue(any("malformed" in error for error in errors),
+                            errors)
 
 
 class DdiHeaderGate(unittest.TestCase):
