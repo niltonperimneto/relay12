@@ -134,10 +134,12 @@ DTL archive check remains required.
 
 ## Further Reading
 
+- **[docs/PORT-QUALITY-ROADMAP.md](docs/PORT-QUALITY-ROADMAP.md):** Canonical phase, milestone, blocker, and exit-gate status.
 - **[docs/D3D11ON12.md](docs/D3D11ON12.md):** Complete architectural design, component boundaries, failure modes, and rollout checklist.
 - **[docs/CLEANROOM-DDI.md](docs/CLEANROOM-DDI.md):** Clean-room WDDM DDI authoring guidelines, version negotiation proof, and implementation worklist.
 - **[docs/DDI-CONCURRENCY-TESTING.md](docs/DDI-CONCURRENCY-TESTING.md):** Strategy for testing race conditions, thread safety violations, and missing CPU/GPU memory barriers.
-- **[docs/DDI-REMAINING-ROADMAP.md](docs/DDI-REMAINING-ROADMAP.md):** Structured roadmap governing upcoming ABI hardening, placeholder eradication, and concurrency deployments.
+- **[docs/DDI-REMAINING-ROADMAP.md](docs/DDI-REMAINING-ROADMAP.md):** Detailed DDI declaration and callback worklist.
+- **[docs/TESTS.md](docs/TESTS.md):** Implemented validation contracts and planned test work.
 - **[AGENTS.md](AGENTS.md):** Architecture invariants, safety rules, and guidelines for automated coding agents.
 - **[SKILLS.md](SKILLS.md):** Step-by-step procedures for layout generation, compilation checks, and test execution.
 

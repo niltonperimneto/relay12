@@ -1,8 +1,9 @@
-# Relay12 DDI: Remaining Work & Roadmap
+# Relay12 DDI technical worklist
 
 While the ABI layout checks, placeholder alias protections, and foundational memory padding scripts have been extensively integrated into the repository and CI, there are still several vital phases required to fully harden and implement the clean-room DDI proxy.
 
-Below is the structured roadmap of what is yet to be done.
+This is the detailed declaration and callback worklist. Project-level phase,
+milestone, and completion status lives only in `PORT-QUALITY-ROADMAP.md`.
 
 ## 1. Struct Layout & ABI Hardening
 
@@ -233,7 +234,10 @@ implementation.
 
 **3.4. CI & End-to-End Test Harness**
 * **Status:** Framework Drafted
-* **Action:** The fundamental E2E integration boundaries are now tested using `tests/e2e_d3d11_harness.cpp`. The CI triggers a full compute pipeline dispatch (`D3D11 -> relay12 -> D3D12 -> GPTK4 -> Metal`) locally inside MinGW, proving strict deterministic output. As DDI translation implementations for `hs`, `ds`, `ps`, and `vs` are solidified, add rigorous asserting functions in the harness to lock down regressions.
+* **Action:** Keep `tests/e2e_d3d11_harness.cpp` as an integration boundary
+  until a real host exists. MinGW compilation alone does not execute a Metal
+  pipeline or prove output. Once the host is integrated, run deterministic
+  output assertions through the supported deployment lane.
 
 **3.5. Context handle types: closed, and not as expected**
 * A deferred context has no handle type of its own. The runtime reuses
