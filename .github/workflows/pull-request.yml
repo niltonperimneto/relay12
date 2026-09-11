@@ -202,7 +202,8 @@ jobs:
           mkdir -p "$cleanroom_deps"
           for source in tests/d3d11ddi*.c; do
             name=$(basename "$source" .c)
-            x86_64-w64-mingw32-gcc -std=gnu11 -Irelay12-d3d11/ddi \
+            x86_64-w64-mingw32-gcc -std=gnu11 \
+              -Irelay12-d3d11 -Irelay12-d3d11/ddi \
               -MM -MF "$cleanroom_deps/$name.d" "$source"
           done
           python3 scripts/check_cleanroom_isolation.py --overlay "$overlay" \
