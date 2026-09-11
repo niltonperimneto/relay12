@@ -83,6 +83,38 @@ def inventory(source_dir, revision=EXPECTED_REVISION):
     }
 
 
+def check_high_water(baseline):
+    """Reject a category that rose without someone saying why.
+
+    The rule in docs/PORT-QUALITY-ROADMAP.md is that unexplained count
+    increases fail CI, but comparing the baseline to a freshly generated
+    inventory cannot enforce it: the patch that raises a count regenerates the
+    baseline in the same commit and the comparison passes. wdk_headers went
+    from 3 to 4 that way.
+
+    So each category also carries the highest count it has ever been allowed
+    to reach. Exceeding it needs an entry in acknowledged_increases saying
+    what the new occurrences are and why they stay, which is a line a reviewer
+    sees in the diff rather than a number that moved.
+    """
+    errors = []
+    high_water = baseline.get("high_water", {})
+    acknowledged = baseline.get("acknowledged_increases", {})
+    for name, category in sorted(baseline["categories"].items()):
+        occurrences = category["occurrences"]
+        limit = high_water.get(name)
+        if limit is None:
+            errors.append(
+                f"{name}: no high_water recorded; add one so a later increase "
+                "cannot pass by regenerating the baseline")
+        elif occurrences > limit and name not in acknowledged:
+            errors.append(
+                f"{name}: {occurrences} occurrences exceeds the recorded "
+                f"high_water of {limit}; raise it and add an "
+                "acknowledged_increases entry saying why")
+    return errors
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("source_dir", type=pathlib.Path)
@@ -91,9 +123,17 @@ def main():
     actual = inventory(args.source_dir)
     rendered = json.dumps(actual, indent=2, sort_keys=True) + "\n"
     if args.check:
-        expected = args.check.read_text()
-        if rendered != expected:
+        baseline = json.loads(args.check.read_text())
+        # The generated inventory is the measurement; the baseline file is the
+        # measurement plus policy (high_water, acknowledged_increases). Compare
+        # the measured keys and let the policy keys live only in the file.
+        measured = {key: baseline.get(key) for key in actual}
+        if measured != actual:
             print("D3D12TranslationLayer portability baseline drifted")
+            return 1
+        errors = check_high_water(baseline)
+        if errors:
+            print("\n".join(errors))
             return 1
         print("D3D12TranslationLayer portability baseline: ok")
         return 0
