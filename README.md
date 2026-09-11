@@ -113,11 +113,14 @@ To maintain stability and prevent regression across compiler toolchains, four st
 | `python3 scripts/check_ddi_header.py` | Validates documentation provenance blocks (URLs and retrieval dates) and verifies that `#pragma pack` is not used. |
 | `python3 scripts/check_interface_acquisition.py relay12-d3d11` | Confirms that every `QueryInterface` and `GetDevice` call routes through `strictResult()`. |
 
-The MinGW D3D12TranslationLayer build additionally needs `dxva.h` and the
-tokenized shader format header from Windows SDK/WDK 10.0.26100.1. They are not
-redistributed by this repository. `scripts/prepare-windows-sdk-overlay.sh`
-downloads the pinned NuGet packages, verifies their SHA-256 digests, and
-creates a temporary two-header overlay for CMake.
+The MinGW linked build additionally needs `dxva.h`, `d3dkmthk.h`, `dxgiddi.h`,
+`d3d10umddi.h` and their display-header dependencies, plus the tokenized shader
+format header from Windows SDK/WDK 10.0.26100.1. They are not redistributed by
+this repository.
+`scripts/prepare-windows-sdk-overlay.sh` downloads the pinned SDK and WDK NuGet
+packages, verifies their SHA-256 digests, and creates a temporary header
+overlay for CMake. `FormatDesc.hpp` and `DXGIColorSpaceHelper.h` come from DTL
+itself; patch 0008 corrects their spelling for case-sensitive hosts.
 
 The linked upstream `d3d11on12.dll` check is isolated in
 `.github/workflows/d3d11on12-ewdk.yml`. It requires a self-hosted Windows X64
