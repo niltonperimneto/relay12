@@ -1,0 +1,33 @@
+diff --git a/src/ImmediateContext.cpp b/src/ImmediateContext.cpp
+--- a/src/ImmediateContext.cpp
++++ b/src/ImmediateContext.cpp
+@@ -1243,6 +1243,6 @@ void TRANSLATION_API ImmediateContext::SoSetTargets(
+                 OffsetToBufferFilledSize,
+                 0,
+                 0,
+-                OffsetToBufferFilledSize + sizeof(UINT),
++                static_cast<UINT>(OffsetToBufferFilledSize + sizeof(UINT)),
+                 1,
+                 1
+@@ -1258,5 +1258,5 @@ void TRANSLATION_API ImmediateContext::SoSetTargets(
+     {
+         bDirty |= m_CurrentState.m_SO.UpdateBinding(i, nullptr, e_Graphics);
+     }
+-    m_DirtyStates |= bDirty ? e_StreamOutputDirty : 0;
++    m_DirtyStates |= bDirty ? static_cast<UINT>(e_StreamOutputDirty) : 0u;
+ }
+@@ -1278,5 +1278,5 @@ void TRANSLATION_API ImmediateContext::OMSetRenderTargets(
+     {
+         bDirtyRTVs = true; // RTVs and DSV are updated together
+     }
+-    m_DirtyStates |= bDirtyRTVs ? e_RenderTargetsDirty : 0;
++    m_DirtyStates |= bDirtyRTVs ? static_cast<UINT>(e_RenderTargetsDirty) : 0u;
+ }
+@@ -2389,4 +2389,6 @@ void ImmediateContext::GenMips(SRV* pSRV, D3D12_FILTER_TYPE FilterType)
+                     // z planes equally
+                     float wVal = (wSlice + .5f) / numIterations;
+-                    GetGraphicsCommandList()->SetGraphicsRoot32BitConstant(GenerateMipsRootSignatureSlots::eRootConstants, *(UINT*) (&wVal), 2);
++                    UINT wBits;
++                    memcpy(&wBits, &wVal, sizeof(wBits));
++                    GetGraphicsCommandList()->SetGraphicsRoot32BitConstant(GenerateMipsRootSignatureSlots::eRootConstants, wBits, 2);
+                 }
