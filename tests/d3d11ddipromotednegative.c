@@ -41,3 +41,14 @@ void create_with_the_wrong_runtime_handle(
 {
     funcs->pfnCreateCommandList(hDevice, create, hCommandList, hCommandList);
 }
+
+/* The final scanout argument is an output pointer.  Passing the enum value
+ * itself must remain a type error after promotion. */
+void query_scanout_with_a_value_instead_of_output(
+        D3DWDDM2_6DDI_DEVICEFUNCS *funcs,
+        D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRESOURCE hResource)
+{
+    funcs->pfnQueryScanoutCaps(hDevice, hResource, 0, 0, 0,
+            D3DWDDM2_6DDI_SCANOUT_FLAG_NONE);
+}

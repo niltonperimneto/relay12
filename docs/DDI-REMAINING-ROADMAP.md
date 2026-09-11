@@ -99,7 +99,7 @@ Below is the structured roadmap of what is yet to be done.
 ## 3. Core DDI Function Implementations
 
 **3.1. Removing Placeholders**
-* **Status:** Ongoing — 56 of 138 PFN typedefs promoted, covering 72 of 178 slots
+* **Status:** Ongoing — 57 of 138 PFN typedefs promoted, covering 73 of 178 slots
 * **Done:** the command-list family — `pfnAbandonCommandList`,
   `pfnCommandListExecute`,
   `pfnDestroyCommandList`, `pfnRecycleCommandList`, and
@@ -193,7 +193,7 @@ Below is the structured roadmap of what is yet to be done.
   * The table's size assertion stays at 1424 bytes, unchanged. That is the
     pilot's headline result.
 
-**3.2. What gates the remaining 82 typedefs**
+**3.2. What gates the remaining 81 typedefs**
 
 A slot can be promoted when every type in its parameter list is declared. That
 makes the worklist a dependency order on structure groups, not a list of slots:
@@ -216,12 +216,16 @@ makes the worklist a dependency order on structure groups, not a list of slots:
 | Query structures and `D3D10DDI_QUERY` | `pfnCalcPrivateQuerySize`, `pfnCreateQuery`, `pfnDestroyQuery`, `pfnQueryBegin`, `pfnQueryEnd`, `pfnQueryGetData`, `pfnSetPredication` |
 | Tiled-resource structures | `pfnUpdateTileMappings`, `pfnCopyTileMappings`, `pfnCopyTiles`, `pfnUpdateTiles`, `pfnTiledResourceBarrier`, `pfnGetMipPacking`, `pfnResizeTilePool` |
 | GetCaps group (`D3D11DDI_THREADING_CAPS`, `D3D11DDI_3DPIPELINELEVEL`) | nothing in this table directly, but it is what tells the runtime the command-list slots above may be called at all |
-| DXGI DDI interop (`DXGI_DDI_BASE_CALLBACKS`, `DXGI1_6_1_DDI_BASE_FUNCTIONS`) | `pfnCheckDirectFlipSupport`, `pfnQueryScanoutCaps`, `pfnPrepareScanoutTransformation` |
+| DXGI DDI interop (`DXGI_DDI_BASE_CALLBACKS`, `DXGI1_6_1_DDI_BASE_FUNCTIONS`) | `pfnQueryScanoutCaps` — **done**; `pfnCheckDirectFlipSupport` and `pfnPrepareScanoutTransformation` remain |
 
-Two slots can never be promoted from the current public set:
+Two core-layer callback slots cannot be promoted from the current public set:
 `PFND3DWDDM2_2DDI_SHADERCACHE_GET_VALUE_CB` and
 `PFND3DWDDM2_6DDI_QUERY_SCANOUT_CAPS_CB` are named by the core-layer callback
 structure's page but linked from nowhere, and both surfaces 404.
+The public `PFND3DWDDM2_6DDI_QUERY_SCANOUT_CAPS` page is for the distinct
+device-table function without the `_CB` suffix; that function is now promoted.
+The shader-cache hash page is likewise implemented, but it does not establish
+the missing GET callback's parameter list.
 `pfnRecycleDestroyCommandList` has no page of its own either; it is promoted
 only because the DestroyCommandList page states the two members may take one
 implementation.
