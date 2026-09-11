@@ -840,6 +840,7 @@ jobs:
             -fno-threadsafe-statics -fno-use-cxa-atexit \
             -o Libraries/Wine/lib/relay12-d3d11/d3d11on12core.dll \
             "$GITHUB_WORKSPACE/relay12-d3d11/d3d11on12core.cpp" \
+            "$GITHUB_WORKSPACE/relay12-d3d11/wine_d3d11_diag.cpp" \
             "$GITHUB_WORKSPACE/relay12-d3d11/d3d11on12core.def" \
             -I"$GITHUB_WORKSPACE/relay12-d3d11" -ld3d12 -ldxgi -luuid
           x86_64-w64-mingw32-g++ -shared -std=c++17 -O2 \
@@ -847,6 +848,7 @@ jobs:
             -fno-threadsafe-statics -fno-use-cxa-atexit \
             -o Libraries/Wine/lib/relay12-d3d11/d3d11shim.dll \
             "$GITHUB_WORKSPACE/relay12-d3d11/d3d11shim.cpp" \
+            "$GITHUB_WORKSPACE/relay12-d3d11/wine_d3d11_diag.cpp" \
             "$GITHUB_WORKSPACE/relay12-d3d11/d3d11shim.def" \
             -ld3d11 -ldxgi
 
