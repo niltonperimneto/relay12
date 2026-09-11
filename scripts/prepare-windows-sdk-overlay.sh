@@ -77,4 +77,8 @@ if source.count(old) != 1:
 path.write_text(source.replace(old, new), encoding="utf-8")
 PY
 
+# Listed, because "the overlay step succeeded" and "the compiler found the
+# header" turned out to be different claims: a build failed on a missing
+# include that this script reported having copied.
 echo "prepared Windows SDK $version overlay in $output_dir"
+ls -l "$output_dir"

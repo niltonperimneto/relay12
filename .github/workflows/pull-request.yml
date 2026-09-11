@@ -65,6 +65,10 @@ jobs:
           git clone --quiet --no-hardlinks third_party/D3D12TranslationLayer "$worktree"
           scripts/prepare-dtl-source.sh "$worktree"
           git -C "$worktree" -c core.whitespace=cr-at-eol diff --check
+          # A bypassed struct-returning call fails the MinGW build anyway;
+          # this names the call and its wrapper instead of surfacing as a
+          # cross-compile error, and it covers the MSVC branch too.
+          python3 scripts/check_dtl_struct_return.py "$worktree"
           c++ -std=c++17 -Wall -Wextra -Werror \
             -Icompat tests/relay_hresult_error_test.cpp \
             -o "$RUNNER_TEMP/relay_hresult_error_test"
@@ -88,6 +92,15 @@ jobs:
             echo 'a provider handle accepted an unrelated pointer' >&2
             exit 1
           fi
+          # Both ABI branches, on one compiler. A wrong expansion here does
+          # not fail to compile; it returns a zeroed descriptor.
+          for selector in 0 1; do
+            c++ -std=c++17 -Wall -Wextra -Werror -Icompat \
+              "-DRELAY_D3D12_STRUCT_RETURN_VIA_OUT_PARAM=$selector" \
+              tests/relay_d3d12_struct_return_test.cpp \
+              -o "$RUNNER_TEMP/relay_struct_return_$selector"
+            "$RUNNER_TEMP/relay_struct_return_$selector"
+          done
 
       - name: Test the gates
         run: |
@@ -150,6 +163,11 @@ jobs:
             -Icompat tests/relay_tracelogging_test.cpp \
             -o "$RUNNER_TEMP/relay_tracelogging_test.exe"
           wine "$RUNNER_TEMP/relay_tracelogging_test.exe"
+          x86_64-w64-mingw32-g++ -std=c++17 -Wall -Wextra -Werror \
+            -static-libgcc -static-libstdc++ \
+            -Icompat tests/relay_d3d12_struct_return_test.cpp \
+            -o "$RUNNER_TEMP/relay_struct_return.exe"
+          wine "$RUNNER_TEMP/relay_struct_return.exe"
           worktree="$RUNNER_TEMP/dtl-port-source"
           # A positive milestone now, not an expected failure. ATL, _com_error,
           # the D3DKMT present path and the SDK ETW header are all behind us,
