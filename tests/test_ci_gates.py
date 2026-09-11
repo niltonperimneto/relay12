@@ -32,6 +32,7 @@ import check_interface_acquisition  # noqa: E402
 import check_pe_audit  # noqa: E402
 import check_shared_state  # noqa: E402
 import gen_ddi_layout  # noqa: E402
+import check_dtl_struct_return  # noqa: E402
 import inventory_dtl_portability  # noqa: E402
 
 DDI_HEADER = REPOSITORY / "relay12-d3d11" / "ddi" / "wine_d3d11ddi.h"
@@ -205,6 +206,80 @@ class DtlPortabilityInventory(unittest.TestCase):
             self.assertEqual(len(definition), 1, macro)
             self.assertIn("(...)", definition[0])
             self.assertNotIn("__VA_ARGS__", definition[0])
+
+    def test_a_high_water_rise_without_acknowledgement_is_rejected(self):
+        """The rule the old gate could not enforce: regenerating the baseline
+        in the same commit made any increase pass."""
+        baseline = {
+            "schema": 1, "revision": "probe",
+            "categories": {"widgets": {"occurrences": 5, "files": {}}},
+            "high_water": {"widgets": 4},
+        }
+        errors = inventory_dtl_portability.check_high_water(baseline)
+        self.assertTrue(any("exceeds the recorded high_water" in e
+                            for e in errors), errors)
+
+    def test_an_acknowledged_rise_is_allowed(self):
+        baseline = {
+            "schema": 1, "revision": "probe",
+            "categories": {"widgets": {"occurrences": 5, "files": {}}},
+            "high_water": {"widgets": 4},
+            "acknowledged_increases": {"widgets": "retained by design"},
+        }
+        self.assertEqual(
+            inventory_dtl_portability.check_high_water(baseline), [])
+
+    def test_a_category_without_a_high_water_is_rejected(self):
+        """A new category must not arrive unbounded."""
+        baseline = {
+            "schema": 1, "revision": "probe",
+            "categories": {"widgets": {"occurrences": 1, "files": {}}},
+            "high_water": {},
+        }
+        errors = inventory_dtl_portability.check_high_water(baseline)
+        self.assertTrue(any("no high_water recorded" in e for e in errors),
+                        errors)
+
+    def test_the_committed_baseline_is_within_its_high_water(self):
+        baseline = json.loads(
+            (REPOSITORY / "docs" / "dtl-portability-baseline.json").read_text())
+        self.assertEqual(
+            inventory_dtl_portability.check_high_water(baseline), [])
+
+
+class DtlStructReturnGate(unittest.TestCase):
+    def test_a_direct_struct_returning_call_is_rejected(self):
+        errors = check_dtl_struct_return.check_source(
+            "src/bad.cpp", "auto luid = pDevice->GetAdapterLuid();")
+        self.assertTrue(any("RelayD3D12AdapterLuid" in e for e in errors),
+                        errors)
+
+    def test_a_wrapped_call_passes(self):
+        self.assertEqual(
+            check_dtl_struct_return.check_source(
+                "src/good.cpp", "auto luid = RelayD3D12AdapterLuid(pDevice);"),
+            [])
+
+    def test_comments_do_not_trip_the_gate(self):
+        self.assertEqual(
+            check_dtl_struct_return.check_source(
+                "src/notes.cpp", "// pDevice->GetAdapterLuid() was replaced"),
+            [])
+
+    def test_the_trees_own_GetDesc_wrappers_are_not_flagged(self):
+        """D3D12TranslationLayer declares its own GetDesc() on VideoDecode and
+        friends. A textual rule cannot see types, so bare GetDesc is out of
+        scope on purpose and this pins that choice."""
+        self.assertEqual(
+            check_dtl_struct_return.check_source(
+                "src/video.cpp", "auto d = pVideoDecoder->GetDesc();"),
+            [])
+
+    def test_every_wrapped_method_is_detected(self):
+        for method, wrapper in check_dtl_struct_return.WRAPPED_METHODS.items():
+            errors = check_dtl_struct_return.check_source(
+                "src/bad.cpp", f"x = p->{method}();")
+            self.assertTrue(any(wrapper in e for e in errors), method)
 
     def test_dtl_baseline_has_no_executable_com_error(self):
         baseline = (REPOSITORY / "docs" /
