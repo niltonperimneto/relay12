@@ -49,12 +49,13 @@ test, and clean-room builds are mechanically isolated from proprietary headers.
 
 | Milestone | Status | Evidence | Exit gate / next work |
 | --- | --- | --- | --- |
-| M6 DTL source preparation | IN PROGRESS | Ordered patches and high-water inventory | Prepared-tree case and portability gates pass on Linux |
-| M7 DTL archives | BLOCKED | CMake reaches the archive build | Green CI produces archives with 31, 4, and 2 unique members |
+| M6 DTL source preparation | COMPLETE | Linux prepared-tree case, portability, and mutation gates | Preserve gates across source-pin updates |
+| M7 DTL archives | COMPLETE | Green Linux CI produces archives with 31, 4, and 2 unique members | Preserve reproducibility and consume them from D3D11On12 |
 | M8 D3D11On12 driver DLL | BLOCKED | Source patch series and portability scan exist | Link reproducibly; pass export, import, and dependency audits |
 
-**Active blocker:** the archive lane fails on a case-sensitive local include.
-A case-insensitive local build does not satisfy M6 or M7.
+**Evidence:** GitHub Actions run `34618103343` passed the complete MinGW archive
+manifest and every required validation step. A case-insensitive local build
+remains insufficient evidence for regressions in M6 or M7.
 
 ## Phase 4 — Wine host and device integration
 
