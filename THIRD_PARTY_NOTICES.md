@@ -18,8 +18,19 @@ Apple D3DMetal is proprietary and is not a repository dependency or a
 redistributed artifact. Users import their own copy after installing the GPL
 runtime.
 
-No Windows SDK or WDK headers may be added to this repository. CI may consume
-them from a separately installed, license-accepted SDK or EWDK, but neither the
-headers nor that installation are packaged as build artifacts. Missing DDI ABI
-declarations intended for redistribution must be independently authored from
-public specifications with documented provenance.
+No Windows SDK or WDK headers may be added to this repository, and
+`scripts/package-d3d11on12-source.sh` together with the `git ls-files` gate in
+CI enforce that.
+
+The D3D12TranslationLayer build does consume a few of them.
+`scripts/prepare-windows-sdk-overlay.sh` fetches the
+`microsoft.windows.sdk.cpp` and `microsoft.windows.wdk.x64` NuGet packages,
+pinned by SHA-256 and rejected on mismatch, extracts only the headers that
+build needs, and writes them to a scratch directory outside the workspace.
+They are never committed, never packaged, and never redistributed. The
+packages carry Microsoft's own licence terms, which apply to whoever runs the
+build.
+
+Missing DDI ABI declarations intended for redistribution must still be
+independently authored from public specifications with documented
+provenance.

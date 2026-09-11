@@ -1,4 +1,8 @@
 {
+  "acknowledged_increases": {
+    "dxbc_parser": "Retained by design rather than debt. The parser is built into its own libdxbcparser.a against the pinned SDK overlay; it is an optional WDK path the roadmap's 'explicitly retained' clause covers, not something to drive to zero.",
+    "wdk_headers": "ShaderBinary.h includes d3d12TokenizedProgramFormat.hpp, which is reachable now that DTL_ENABLE_WDK_DXBC=ON builds the WDK archive. Retained by design: the WDK DXBC path ships in the default build and the header is supplied by the pinned SDK overlay, never committed."
+  },
   "categories": {
     "atl_com_ptr": {
       "files": {},
@@ -69,6 +73,19 @@
       },
       "occurrences": 4
     }
+  },
+  "high_water": {
+    "atl_com_ptr": 0,
+    "atl_headers": 1,
+    "atl_heap_ptr": 0,
+    "cmake_msvc_linkage": 0,
+    "com_error": 0,
+    "dxbc_parser": 25,
+    "msvc_declspec": 0,
+    "msvc_uuidof": 0,
+    "tracelogging_events": 74,
+    "tracelogging_sdk_headers": 0,
+    "wdk_headers": 4
   },
   "revision": "b68ebbc6dab4195f7d4819ea78f2a60c985b853a",
   "schema": 1
