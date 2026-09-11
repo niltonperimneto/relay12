@@ -13,3 +13,11 @@ index f41070f..6697bdb 100644
  
  #include "MaxFrameLatencyHelper.hpp"
  #include "Shader.hpp"
+@@ -57,6 +57,6 @@
+ #include "View.inl"
+ #include "Sampler.inl"
+ #include "Shader.inl"
+ #include "ImmediateContext.inl"
+-#include "CommandListManager.inl"
++#include "commandlistmanager.inl"
+ #include <BlockAllocators.inl>

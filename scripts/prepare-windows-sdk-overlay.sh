@@ -55,18 +55,23 @@ copy_header() {
     cp "$found" "$output_dir/$header"
 }
 
-# Every SDK or WDK display header consumed by the linked build and not supplied
-# by MinGW-w64 or third_party/DirectX-Headers. FormatDesc.hpp and
-# DXGIColorSpaceHelper.h deliberately are not here: they belong to DTL itself.
+# Direct DTL requirements not supplied by MinGW-w64 or DirectX-Headers.
+# FormatDesc.hpp and DXGIColorSpaceHelper.h deliberately are absent: they are
+# DTL-local headers, not Windows SDK files.
 copy_header dxva.h
 copy_header d3d12TokenizedProgramFormat.hpp
+
+# Direct D3D11On12 display/DDI requirements.
 copy_header d3dkmthk.h
+copy_header dxgiddi.h
+copy_header d3d10umddi.h
+
+# Transitive closure pulled in by the display/DDI headers above. Keeping this
+# group explicit makes package drift fail in the overlay preparation step.
 copy_header d3dkmddi.h
 copy_header d3dkmdt.h
 copy_header d3dukmdt.h
-copy_header dxgiddi.h
 copy_header dxmini.h
-copy_header d3d10umddi.h
 copy_header d3dumddi.h
 
 # Clang and GCC correctly reject the SDK's signed `~0 << bit` enum constant.
