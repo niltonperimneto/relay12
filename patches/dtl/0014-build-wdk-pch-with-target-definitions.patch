@@ -1,0 +1,9 @@
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -175,4 +175,3 @@ if (DTL_ENABLE_WDK_DXBC)
+     if(CMAKE_VERSION VERSION_GREATER 3.16)
+-        target_precompile_headers(d3d12translationlayer_wdk REUSE_FROM
+-            d3d12translationlayer)
++        target_precompile_headers(d3d12translationlayer_wdk PRIVATE ../include/pch.h)
+     endif()

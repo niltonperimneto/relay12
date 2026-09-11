@@ -1,0 +1,11 @@
+diff --git a/include/View.inl b/include/View.inl
+--- a/include/View.inl
++++ b/include/View.inl
+@@ -200,5 +200,6 @@ namespace D3D12TranslationLayer
+         APIFirstElement(0)
+     {
+-        __if_exists(TDesc12::Buffer)
++        if constexpr (std::is_same_v<TIface, ShaderResourceViewType> ||
++                      std::is_same_v<TIface, UnorderedAccessViewType>)
+         {
+             APIFirstElement = Desc.Buffer.FirstElement;

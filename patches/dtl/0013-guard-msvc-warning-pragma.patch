@@ -1,0 +1,10 @@
+diff --git a/src/VideoDevice.cpp b/src/VideoDevice.cpp
+--- a/src/VideoDevice.cpp
++++ b/src/VideoDevice.cpp
+@@ -224,4 +224,6 @@ namespace D3D12TranslationLayer
+ 
+ // Some of the 'enum values' below are actually #defines, which generates a warning when used in a case statement.
++#ifdef _MSC_VER
+ #pragma warning(disable: 4063)
++#endif
+     //----------------------------------------------------------------------------------------------------------------------------------

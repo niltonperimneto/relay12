@@ -1,0 +1,124 @@
+diff --git a/include/PipelineState.hpp b/include/PipelineState.hpp
+--- a/include/PipelineState.hpp
++++ b/include/PipelineState.hpp
+@@ -130,21 +130,22 @@ namespace D3D12TranslationLayer
+     protected:
+         const EPipelineType m_PipelineStateType;
+         RootSignature* const m_pRootSignature;
++        struct GraphicsData
++        {
++            D3D12_GRAPHICS_PIPELINE_STATE_DESC m_Desc;
++            Shader* pVertexShader;
++            Shader* pPixelShader;
++            Shader* pGeometryShader;
++            Shader* pDomainShader;
++            Shader* pHullShader;
++        };
++        struct ComputeData
++        {
++            D3D12_COMPUTE_PIPELINE_STATE_DESC m_Desc;
++            Shader* pComputeShader;
++        };
+         union
+         {
+-            struct Graphics 
+-            {
+-                D3D12_GRAPHICS_PIPELINE_STATE_DESC m_Desc;
+-                Shader* pVertexShader;
+-                Shader* pPixelShader;
+-                Shader* pGeometryShader;
+-                Shader* pDomainShader;
+-                Shader* pHullShader;
+-            } Graphics;
+-
+-            struct Compute
+-            {
+-                D3D12_COMPUTE_PIPELINE_STATE_DESC m_Desc;
+-                Shader* pComputeShader;
+-            } Compute;
++            GraphicsData Graphics;
++            ComputeData Compute;
+         };
+diff --git a/include/Resource.hpp b/include/Resource.hpp
+--- a/include/Resource.hpp
++++ b/include/Resource.hpp
+@@ -449,4 +449,8 @@ namespace D3D12TranslationLayer
+ 
+-        template<typename TViewIface> UINT GetUniqueness() const noexcept { return m_AllUniqueness; }
+-        template<> UINT GetUniqueness<ShaderResourceViewType>() const noexcept { return m_SRVUniqueness; }
++        template<typename TViewIface> UINT GetUniqueness() const noexcept
++        {
++            if constexpr (std::is_same_v<TViewIface, ShaderResourceViewType>)
++                return m_SRVUniqueness;
++            return m_AllUniqueness;
++        }
+ 
+diff --git a/include/ImmediateContext.hpp b/include/ImmediateContext.hpp
+--- a/include/ImmediateContext.hpp
++++ b/include/ImmediateContext.hpp
+@@ -1563,7 +1563,16 @@ namespace D3D12TranslationLayer
+ 
+-    template <typename TIface> CDescriptorHeapManager& GetViewAllocator();
+-    template<> CDescriptorHeapManager& GetViewAllocator<ShaderResourceViewType>() { return m_SRVAllocator; }
+-    template<> CDescriptorHeapManager& GetViewAllocator<UnorderedAccessViewType>() { return m_UAVAllocator; }
+-    template<> CDescriptorHeapManager& GetViewAllocator<RenderTargetViewType>() { return m_RTVAllocator; }
+-    template<> CDescriptorHeapManager& GetViewAllocator<DepthStencilViewType>() { return m_DSVAllocator; }
++    template <typename TIface> CDescriptorHeapManager& GetViewAllocator()
++    {
++        if constexpr (std::is_same_v<TIface, ShaderResourceViewType>)
++            return m_SRVAllocator;
++        else if constexpr (std::is_same_v<TIface, UnorderedAccessViewType>)
++            return m_UAVAllocator;
++        else if constexpr (std::is_same_v<TIface, RenderTargetViewType>)
++            return m_RTVAllocator;
++        else
++        {
++            static_assert(std::is_same_v<TIface, DepthStencilViewType>);
++            return m_DSVAllocator;
++        }
++    }
+ 
+diff --git a/include/View.inl b/include/View.inl
+--- a/include/View.inl
++++ b/include/View.inl
+@@ -87,5 +87,6 @@ namespace D3D12TranslationLayer
+     const typename View<TIface>::TDesc12& View<TIface>::GetDesc12() noexcept
+     {
+-        __if_exists(TDesc12::Buffer)
++        if constexpr (std::is_same_v<TIface, ShaderResourceViewType> ||
++                      std::is_same_v<TIface, UnorderedAccessViewType>)
+         {
+             typedef decltype(TDesc12::Buffer) TBufferDesc12;
+@@ -94,3 +95,4 @@ namespace D3D12TranslationLayer
+                 UINT Divisor = GetByteAlignment(m_Desc.Format);
+-                __if_exists(TBufferDesc12::StructureByteStride)
++                if constexpr (std::is_same_v<TIface, ShaderResourceViewType> ||
++                              std::is_same_v<TIface, UnorderedAccessViewType>)
+                 {
+diff --git a/include/ImmediateContext.inl b/include/ImmediateContext.inl
+--- a/include/ImmediateContext.inl
++++ b/include/ImmediateContext.inl
+@@ -196,4 +196,4 @@ inline bool CSimpleBoundState<TBindable, NumBindSlots, TBinder>::UpdateBinding(_
+ {
+     auto pCurrent = this->m_Bound[slot];
+-    if (__super::UpdateBinding(slot, pBindable))
++    if (CBoundState<TBindable, NumBindSlots>::UpdateBinding(slot, pBindable))
+     {
+diff --git a/include/D3D12TranslationLayerDependencyIncludes.h b/include/D3D12TranslationLayerDependencyIncludes.h
+--- a/include/D3D12TranslationLayerDependencyIncludes.h
++++ b/include/D3D12TranslationLayerDependencyIncludes.h
+@@ -15,4 +15,14 @@
+ #include "relay_atl_compat.hpp"
+ #include "relay_hresult_error.hpp"
+ #include <comdef.h>
++#ifndef _MSC_VER
++#ifndef __analysis_assume
++#define __analysis_assume(expression) ((void)0)
++#endif
++#ifndef __assume
++#define __assume(expression) do { \
++    if (!(expression)) __builtin_unreachable(); \
++} while (0)
++#endif
++#endif
+ #include <strsafe.h>
