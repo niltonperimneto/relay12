@@ -36,9 +36,30 @@ download_package microsoft.windows.wdk.x64 "$wdk_sha256" "$wdk_package"
 mkdir -p "$scratch_dir/sdk" "$scratch_dir/wdk" "$output_dir"
 unzip -q "$sdk_package" -d "$scratch_dir/sdk"
 unzip -q "$wdk_package" -d "$scratch_dir/wdk"
-cp "$scratch_dir/sdk/c/Include/10.0.26100.0/um/dxva.h" "$output_dir/dxva.h"
-cp "$scratch_dir/wdk/c/Include/10.0.26100.0/um/d3d12TokenizedProgramFormat.hpp" \
-    "$output_dir/d3d12TokenizedProgramFormat.hpp"
+
+# Located by name rather than by absolute path. Hardcoded paths made a missing
+# header surface hundreds of lines into a MinGW build as a bare "No such file
+# or directory" on an include the overlay was supposed to satisfy; by name, an
+# absent or moved header fails here and says which one. It also survives the
+# package layout skew, where a 10.0.26100.1 package carries a 10.0.26100.0
+# include directory.
+copy_header() {
+    header=$1
+    found=$(find "$scratch_dir/sdk" "$scratch_dir/wdk" -type f -name "$header" \
+        | sort | head -n 1)
+    if test -z "$found"; then
+        echo "$header is not in the pinned SDK/WDK packages" >&2
+        exit 1
+    fi
+    cp "$found" "$output_dir/$header"
+}
+
+# Every SDK or WDK header the D3D12TranslationLayer build includes and neither
+# MinGW-w64 nor third_party/DirectX-Headers provides.
+copy_header dxva.h
+copy_header d3d12TokenizedProgramFormat.hpp
+copy_header formatdesc.hpp
+copy_header dxgiColorSpaceHelper.h
 
 # Clang and GCC correctly reject the SDK's signed `~0 << bit` enum constant.
 # Preserve the mask while making the shift unsigned. Refuse an SDK drift that
