@@ -3,6 +3,9 @@ name: pull request validation
 on:
   pull_request:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -240,6 +243,40 @@ jobs:
                   )
           print("DTL archive translation-unit manifest: ok")
           PY
+
+      - name: Link D3D11On12 against the portable translation layer
+        run: |
+          set -euo pipefail
+          driver="$RUNNER_TEMP/d3d11on12-port-source"
+          dtl="$RUNNER_TEMP/dtl-port-source"
+          overlay="$RUNNER_TEMP/windows-sdk-overlay"
+          build="$RUNNER_TEMP/d3d11on12-build"
+          cmake -S "$driver" -B "$build" -G 'Unix Makefiles' \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
+            -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
+            -DCMAKE_RC_COMPILER=x86_64-w64-mingw32-windres \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DD3D11ON12_DTL_SOURCE_DIR="$dtl" \
+            -DD3D11ON12_WINDOWS_KITS_INCLUDE_DIRS="$overlay" \
+            -DDTL_DIRECTX_HEADERS_SOURCE_DIR="$GITHUB_WORKSPACE/third_party/DirectX-Headers" \
+            -DDTL_WINDOWS_SDK_OVERLAY_DIR="$overlay" \
+            -DDTL_ENABLE_WDK_DXBC=ON
+          cmake --build "$build" --parallel 2
+
+          dll="$build/src/d3d11on12.dll"
+          test -s "$dll"
+          dump=$(x86_64-w64-mingw32-objdump -p "$dll")
+          exports=$(printf '%s\n' "$dump" | sed -n \
+            '/\[Ordinal\/Name Pointer\] Table/,/^$/p' \
+            | grep -o 'OpenAdapter_D3D11On12' | wc -l)
+          test "$exports" -eq 1
+          if printf '%s\n' "$dump" | grep -Eiq 'libstdc\+\+|libgcc_s'; then
+            echo 'linked driver imports a dynamic MinGW C++ runtime' >&2
+            exit 1
+          fi
+          printf '%s\n' "$dump" | grep 'DLL Name:'
 
       - name: Compile D3D11-on-12 conformance probe
         run: |
