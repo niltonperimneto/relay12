@@ -467,14 +467,20 @@ declaration nothing yet needs.
 - **Extent of `d3dkmthk.h` types in host signatures**: `D3D11On12`'s `pch.hpp`
   includes `d3dkmthk.h`, but it is uncertain whether any types cross the host-driver
   boundary. Group 1 (Surface discovery) will provide the compiler-verified answer.
-- **`D3DDDI_EXECUTIONSTATEESCAPE` is unpublished**: `Device::ReportError`
-  builds one by value and passes its `sizeof` as `PrivateDriverDataSize`, but
-  both documentation surfaces return 404 for it and the pinned WineCX has no
-  definition. Rule 1 forbids reconstructing it and no placeholder substitutes
-  for a type used by value, so that function does not compile yet. This is a
-  port dependency rather than a gap in the kernel callback table, which only
-  needs the type behind a pointer. Group 1 (Surface discovery) is where it
-  surfaces as a concrete worklist item.
+- **`D3DDDI_EXECUTIONSTATEESCAPE` documented and unblocked**: Previously
+  returning 404 on Microsoft Learn, this structure and its companion enum
+  `D3DDDI_DEVICEEXECUTION_STATE` were recovered via the official Windows Driver
+  Kit DDI documentation repository (`MicrosoftDocs/windows-driver-docs-ddi`).
+  The structure is defined as:
+  ```c
+  typedef struct _D3DDDI_EXECUTIONSTATEESCAPE {
+    D3DDDI_DEVICEEXECUTION_STATE State;
+  } D3DDDI_EXECUTIONSTATEESCAPE;
+  ```
+  Where `D3DDDI_DEVICEEXECUTION_STATE` enumerates `ACTIVE (1)`, `RESET (2)`,
+  `HUNG (3)`, `STOPPED (4)`, `ERROR_OUTOFMEMORY (5)`, and `ERROR_DMAFAULT (6)`.
+  This satisfies the payload required by `Device::ReportError` and clears the
+  blocker on `pfnEscapeCb` status queries using `DeviceStatusQuery`.
 - **Whether the host should implement `pfnEscapeCb` at all**: `D3D11ON12.md`
   lists display-kernel paths as disabled for this port, so the host may answer
   the driver's device-removal probe directly rather than forwarding it to

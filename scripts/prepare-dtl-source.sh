@@ -32,6 +32,8 @@ cp "$repository_root/compat/relay_hresult_error.hpp" \
     "$source_dir/include/relay_hresult_error.hpp"
 cp "$repository_root/compat/relay_tracelogging.hpp" \
     "$source_dir/include/relay_tracelogging.hpp"
+cp "$repository_root/compat/relay_d3d12_struct_return.hpp" \
+    "$source_dir/include/relay_d3d12_struct_return.hpp"
 
 python3 "$repository_root/scripts/inventory_dtl_portability.py" \
     "$source_dir" --check "$repository_root/docs/dtl-portability-baseline.json"

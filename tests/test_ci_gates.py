@@ -183,6 +183,17 @@ class DtlPortabilityInventory(unittest.TestCase):
             json.loads(baseline)["categories"]["tracelogging_sdk_headers"],
             {"files": {}, "occurrences": 0})
 
+    def test_dtl_baseline_has_no_msvc_language_extensions(self):
+        baseline = (REPOSITORY / "docs" /
+                    "dtl-portability-baseline.json").read_text()
+        categories = json.loads(baseline)["categories"]
+        self.assertEqual(categories["msvc_declspec"],
+                         {"files": {}, "occurrences": 0})
+        self.assertEqual(categories["msvc_uuidof"],
+                         {"files": {}, "occurrences": 0})
+        self.assertEqual(categories["cmake_msvc_linkage"],
+                         {"files": {}, "occurrences": 0})
+
     def test_the_etw_shim_never_consumes_its_arguments(self):
         """The no-op macros must not name their parameters. If they did, the
         undefined field macros in the pinned call sites would start expanding

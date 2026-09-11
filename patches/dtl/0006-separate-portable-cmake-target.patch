@@ -1,0 +1,144 @@
+From: relay12 contributors
+Subject: [PATCH] dtl: make the public-SDK CMake target portable
+
+Make the default build exactly the public-SDK translation layer used by
+relay12. The WDK/DXBC parser remains available only through an explicit
+option, and configuration fails if that option is requested without its
+private header dependency.
+
+Use the pinned DirectX-Headers checkout supplied by the parent build, keep
+PIX disabled, load DXCore dynamically, and remove ATL, PIX package and MSVC
+delay-load linkage from the portable target.
+---
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 132c5e5..58b015c 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -6,19 +6,27 @@ project(d3d12translationlayer)
+ set(CMAKE_CXX_STANDARD 17)
+ set(CMAKE_CXX_STANDARD_REQUIRED ON)
+ 
+-include(FetchContent)
+-FetchContent_Declare(
+-    DirectX-Headers
+-    GIT_REPOSITORY https://github.com/Microsoft/DirectX-Headers.git
+-    GIT_TAG v1.619.1
+-)
+-FetchContent_MakeAvailable(DirectX-Headers)
+-
+-option(USE_PIX "Enable the use of PIX markers" ON)
++set(DTL_DIRECTX_HEADERS_SOURCE_DIR "" CACHE PATH
++    "Path to a pinned DirectX-Headers source tree")
++if(DTL_DIRECTX_HEADERS_SOURCE_DIR)
++    add_subdirectory("${DTL_DIRECTX_HEADERS_SOURCE_DIR}"
++        "${CMAKE_CURRENT_BINARY_DIR}/DirectX-Headers")
++else()
++    include(FetchContent)
++    FetchContent_Declare(
++        DirectX-Headers
++        GIT_REPOSITORY https://github.com/Microsoft/DirectX-Headers.git
++        GIT_TAG v1.619.1
++    )
++    FetchContent_MakeAvailable(DirectX-Headers)
++endif()
++
++option(USE_PIX "Enable the use of PIX markers" OFF)
++option(DTL_ENABLE_WDK_DXBC "Build the optional WDK-dependent DXBC parser" OFF)
+ 
+ add_subdirectory(src)
+ 
+-if (HAS_WDK)
++if (DTL_ENABLE_WDK_DXBC)
+     add_subdirectory(DxbcParser)
+     target_link_libraries(d3d12translationlayer dxbcparser)
+ endif()
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 8488c5d..c1d7ea0 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -1,7 +1,6 @@
+ # Copyright (c) Microsoft Corporation.
+ # Licensed under the MIT License.
+ cmake_minimum_required(VERSION 3.13)
+-include(CheckCXXSourceCompiles)
+ 
+ set(SRC
+ 	Allocator.cpp
+@@ -98,27 +97,13 @@ endif()
+ source_group(Inlines FILES ${INL})
+ source_group("Header Files\\External" FILES ${EXTERNAL_INC})
+ 
+-target_link_libraries(d3d12translationlayer Microsoft::DirectX-Headers d3d12 dxgi atls)
++target_link_libraries(d3d12translationlayer Microsoft::DirectX-Headers d3d12 dxgi)
+ 
+-# Using a compile test instead of find_library so this doesn't have to be run from a VS command prompt
+-check_cxx_source_compiles("
+-#pragma comment(lib, \"dxcore.lib\")
+-#include <dxcore.h>
+-int main() {
+-	IDXCoreAdapterFactory *fac;
+-	return DXCoreCreateAdapterFactory(&fac);
+-}" HAVE_DXCORE_LIBRARY)
+-if (HAVE_DXCORE_LIBRARY)
+-	target_link_libraries(d3d12translationlayer dxcore)
+-	target_link_options(d3d12translationlayer INTERFACE "/DELAYLOAD:dxcore.dll")
+-else()
+-	target_compile_definitions(d3d12translationlayer PRIVATE DYNAMIC_LOAD_DXCORE=1)
+-endif()
+-
+-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/../packages.config ${CMAKE_CURRENT_BINARY_DIR}/packages.config COPYONLY)
+-add_library(WinPixEventRuntime INTERFACE IMPORTED GLOBAL)
+-set_target_properties(WinPixEventRuntime PROPERTIES INTERFACE_LINK_LIBRARIES "${CMAKE_BINARY_DIR}/packages/WinPixEventRuntime.1.0.190604001/build/WinPixEventRuntime.targets")
+-target_link_libraries(d3d12translationlayer WinPixEventRuntime)
++target_compile_definitions(d3d12translationlayer PRIVATE DYNAMIC_LOAD_DXCORE=1)
++
++if(USE_PIX)
++    message(FATAL_ERROR "PIX markers are not supported by the portable build")
++endif()
+ 
+ target_compile_definitions(d3d12translationlayer PRIVATE $<$<CONFIG:DEBUG>:DBG>)
+ target_compile_definitions(d3d12translationlayer PUBLIC $<$<CONFIG:DEBUG>:TRANSLATION_LAYER_DBG=1>)
+@@ -134,20 +119,23 @@ if(MSVC)
+   target_compile_options(d3d12translationlayer PUBLIC /W4 /wd4238 /wd4324 -Werror -Wno-missing-braces -Wno-shift-overflow -Wno-delete-non-abstract-non-virtual-dtor -Wno-unused-lambda-capture -Wno-implicit-exception-spec-mismatch -Wno-unused-const-variable  -Wno-unused-variable -Wno-unused-parameter  -Wno-enum-compare -Wno-reorder-ctor -Wno-sign-compare -Wno-pessimizing-move -Wno-c++11-narrowing -Wno-address-of-temporary -Wno-switch -Wno-missing-field-initializers)
+   endif()
+   target_link_options(d3d12translationlayer INTERFACE "/ignore:4286")
+-else()
+-  target_compile_options(d3d12translationlayer PUBLIC -Wall -Wextra -pedantic -Werror)
+-endif()
++else()
++  target_compile_options(d3d12translationlayer PUBLIC -Wall -Wextra -Wpedantic -Werror)
++endif()
+ 
+ if (NOT IMPLEMENT_RECTS)
+     target_compile_definitions(d3d12translationlayer PRIVATE NO_IMPLEMENT_RECT_FNS)
+ endif()
+ 
+-include(CheckIncludeFileCXX)
+-CHECK_INCLUDE_FILE_CXX(d3d12TokenizedProgramFormat.hpp HAS_WDK)
+-
+-if (HAS_WDK)
+-    message(NOTICE "Adding WDK-dependent project.")
+-	target_compile_definitions(d3d12translationlayer PUBLIC SUPPORTS_DXBC_PARSE)
++if (DTL_ENABLE_WDK_DXBC)
++    include(CheckIncludeFileCXX)
++    CHECK_INCLUDE_FILE_CXX(d3d12TokenizedProgramFormat.hpp HAS_WDK)
++    if(NOT HAS_WDK)
++        message(FATAL_ERROR
++            "DTL_ENABLE_WDK_DXBC requires d3d12TokenizedProgramFormat.hpp")
++    endif()
++    message(NOTICE "Adding WDK-dependent project.")
++	target_compile_definitions(d3d12translationlayer PUBLIC SUPPORTS_DXBC_PARSE)
+ 
+ 	add_library(d3d12translationlayer_wdk STATIC
+ 		DxbcBuilder.cpp
+@@ -158,7 +146,6 @@ if (HAS_WDK)
+ 		../include/ShaderBinary.h
+         ../include/SharedResourceHelpers.hpp)
+ 	target_link_libraries(d3d12translationlayer_wdk d3d12translationlayer)
+-
+-else()
+-    message(WARNING "Only adding SDK-dependent projects.")
+-endif()
++else()
++    message(STATUS "Building only public-SDK translation units.")
++endif()
