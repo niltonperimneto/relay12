@@ -1,0 +1,1405 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 1b37275..a2dac2b 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -23,10 +23,17 @@ endif()
+ 
+ option(USE_PIX "Enable the use of PIX markers" OFF)
+ option(DTL_ENABLE_WDK_DXBC "Build the optional WDK-dependent DXBC parser" OFF)
+-
+-add_subdirectory(src)
+-
++set(DTL_WINDOWS_SDK_OVERLAY_DIR "" CACHE PATH
++    "Directory containing externally supplied dxva.h and WDK token headers")
++
++if(MINGW AND NOT DTL_WINDOWS_SDK_OVERLAY_DIR)
++    message(FATAL_ERROR
++        "MinGW requires DTL_WINDOWS_SDK_OVERLAY_DIR with the pinned SDK/WDK headers")
++endif()
++
++add_subdirectory(src)
++
+ if (DTL_ENABLE_WDK_DXBC)
+-    add_subdirectory(DxbcParser)
+-    target_link_libraries(d3d12translationlayer dxbcparser)
+-endif()
++    add_subdirectory(DxbcParser)
++    target_link_libraries(d3d12translationlayer dxbcparser)
++endif()
+diff --git a/DxbcParser/CMakeLists.txt b/DxbcParser/CMakeLists.txt
+index de8fb91..8a653af 100644
+--- a/DxbcParser/CMakeLists.txt
++++ b/DxbcParser/CMakeLists.txt
+@@ -10,6 +10,13 @@ add_library(dxbcparser STATIC
+     include/DXBCUtils.h
+     include/pch.h)
+ 
+-target_include_directories(dxbcparser
+-    PUBLIC include
+-    PUBLIC ../external)
+\ No newline at end of file
++target_include_directories(dxbcparser
++    PRIVATE ${DTL_WINDOWS_SDK_OVERLAY_DIR}
++    PUBLIC include
++    PUBLIC ../external)
++
++if(NOT MSVC)
++    target_compile_options(dxbcparser PRIVATE
++        -fms-extensions -Wall -Wextra -Werror
++        -Wno-sign-compare -Wno-unknown-pragmas)
++endif()
+diff --git a/DxbcParser/src/BlobContainer.cpp b/DxbcParser/src/BlobContainer.cpp
+index ff1775b..0cd9f84 100644
+--- a/DxbcParser/src/BlobContainer.cpp
++++ b/DxbcParser/src/BlobContainer.cpp
+@@ -1,7 +1,7 @@
+ // Copyright (c) Microsoft Corporation.
+ // Licensed under the MIT License.
+ #include "pch.h"
+-#include <dxbcutils.h>
++#include <DXBCUtils.h>
+ 
+ //=================================================================================================================================
+ // CDXBCParser
+diff --git a/DxbcParser/src/DXBCUtils.cpp b/DxbcParser/src/DXBCUtils.cpp
+index 826ca09..33d9a48 100644
+--- a/DxbcParser/src/DXBCUtils.cpp
++++ b/DxbcParser/src/DXBCUtils.cpp
+@@ -1,7 +1,7 @@
+ // Copyright (c) Microsoft Corporation.
+ // Licensed under the MIT License.
+ #include "pch.h"
+-#include <dxbcutils.h>
++#include <DXBCUtils.h>
+ 
+ //---------------------------------------------------------------------------------------------------------------------------------
+ // DXBCGetSizeAssumingValidPointer()
+diff --git a/include/BatchedContext.hpp b/include/BatchedContext.hpp
+index f853433..b527b1b 100644
+--- a/include/BatchedContext.hpp
++++ b/include/BatchedContext.hpp
+@@ -5,7 +5,8 @@
+ namespace D3D12TranslationLayer
+ {
+ 
+-class BatchedQuery;
++class BatchedQuery;
++class BatchedResource;
+ 
+ struct BatchedExtension
+ {
+@@ -831,4 +832,4 @@ protected:
+ };
+ 
+ 
+-}
+\ No newline at end of file
++}
+diff --git a/include/BlockAllocators.h b/include/BlockAllocators.h
+index 97f6d81..de5526f 100644
+--- a/include/BlockAllocators.h
++++ b/include/BlockAllocators.h
+@@ -245,11 +245,11 @@ public:
+     UnderlyingAllocatorImpl* m_pAllocator;
+     T* allocate(size_t size)
+     {
+-        return m_pAllocator->allocate<T>(size);
++        return m_pAllocator->template allocate<T>(size);
+     }
+     void deallocate(T* p, size_t size)
+     {
+-        m_pAllocator->deallocate<T>(p, size);
++        m_pAllocator->template deallocate<T>(p, size);
+     }
+ 
+     using propagate_on_container_copy_assignment = std::true_type;
+diff --git a/include/BlockAllocators.inl b/include/BlockAllocators.inl
+index d53aa4e..9f48fce 100644
+--- a/include/BlockAllocators.inl
++++ b/include/BlockAllocators.inl
+@@ -226,7 +226,7 @@ bool CBucketizedBlockAllocator<_OuterAllocator, _SizeToBucketFunc, _BlockType, _
+ {
+     _SizeToBucketFunc SizeToBucketFunc;
+     SIZE_T bucket = SizeToBucketFunc(block.GetSize());
+-    return bucket < this->m_numBuckets ? m_pAllocators[bucket].IsOwner(block) : false;
++    return bucket < m_numAllocators ? m_pAllocators[bucket].IsOwner(block) : false;
+ }
+ 
+ template<class _OuterAllocator, class _SizeToBucketFunc, class _BlockType, class _SizeType>
+diff --git a/include/D3D12TranslationLayerDependencyIncludes.h b/include/D3D12TranslationLayerDependencyIncludes.h
+index aaacedb..836b5ab 100644
+--- a/include/D3D12TranslationLayerDependencyIncludes.h
++++ b/include/D3D12TranslationLayerDependencyIncludes.h
+@@ -12,10 +12,10 @@
+ //SDK Headers
+ #define NOMINMAX
+ #define WIN32_LEAN_AND_MEAN
+-#include <windows.h>
++#include <windows.h>
+ #include "relay_atl_compat.hpp"
+ #include "relay_hresult_error.hpp"
+-#include <comdef.h>
++#include <comdef.h>
+ #include <strsafe.h>
+ 
+ // This defines NTSTATUS and other types that are needed for kernel headers
+@@ -27,9 +27,19 @@
+ #include <directx/dxcore.h>
+ #undef INITGUID
+ #include <directx/d3d12compatibility.h>
+-#include <directx/d3dx12.h>
++#include <directx/d3dx12.h>
++#include "relay_d3d12_struct_return.hpp"
+ #include <d3d11_3.h>
+-#include <dxgi1_5.h>
++#include <dxgi1_5.h>
++#ifndef __in_range
++#define __in_range(...)
++#endif
++#ifndef __in_ecount_opt
++#define __in_ecount_opt(...)
++#endif
++#ifndef __field_ecount_part
++#define __field_ecount_part(...)
++#endif
+ // The display-kernel present path is optional, and d3dkmthk.h is a WDK
+ // header no public SDK ships. Every declaration in this tree names
+ // D3DKMT_PRESENT only through a pointer, and a pointer to an incomplete
+diff --git a/include/ImmediateContext.hpp b/include/ImmediateContext.hpp
+index 94e1193..26d62ae 100644
+--- a/include/ImmediateContext.hpp
++++ b/include/ImmediateContext.hpp
+@@ -143,7 +143,7 @@ public:
+     {
+     }
+     CBoundedFencePool(CBoundedFencePool&& other) noexcept
+-        : CFencePool(other),
++        : CFencePool<TResourceType>(std::move(other)),
+         m_MaxInFlightDepth(other.m_MaxInFlightDepth)
+     {
+     }
+@@ -509,7 +509,7 @@ private: // Methods
+     {
+         SHeapEntry NewEntry;
+         ThrowFailure( m_pDevice->CreateDescriptorHeap(&m_Desc, IID_PPV_ARGS(&NewEntry.m_Heap)) ); // throw( _com_error )
+-        HeapOffset HeapBase = NewEntry.m_Heap->GetCPUDescriptorHandleForHeapStart();
++        HeapOffset HeapBase = RelayD3D12CPUDescriptorHeapStart(NewEntry.m_Heap);
+         NewEntry.m_FreeList.push_back({HeapBase.ptr,
+                                         HeapBase.ptr + m_Desc.NumDescriptors * m_DescriptorSize}); // throw( bad_alloc )
+ 
+@@ -697,7 +697,7 @@ struct RetiredD3D12Object : public RetiredObject
+         , m_pResidencyHandle(std::move(retiredObject.m_pResidencyHandle)) {}
+     
+ 
+-    RelayComPtr<ID3D12Object> m_pUnderlying;
++    RelayComPtr<ID3D12Object> m_pUnderlying;
+     
+ 
+     std::unique_ptr<ResidencyManagedObjectWrapper> m_pResidencyHandle;
+@@ -1298,7 +1298,7 @@ public:
+             {
+                 return allocateFunc();
+             }
+-            catch( RelayHResultError& hrEx )
++            catch( RelayHResultError& hrEx )
+             {
+                 if (hrEx.Error() != E_OUTOFMEMORY ||
+                     !ResourceAllocationFallback(threadingContext))
+@@ -1468,7 +1468,7 @@ public: // Methods
+         }
+         else
+         {
+-            return m_pDevice12->GetCustomHeapProperties(GetNodeMask(), Type);
++            return RelayD3D12CustomHeapProperties(m_pDevice12, GetNodeMask(), Type);
+         }
+     }
+ 
+diff --git a/include/ImmediateContext.inl b/include/ImmediateContext.inl
+index 7237d2a..5bfa551 100644
+--- a/include/ImmediateContext.inl
++++ b/include/ImmediateContext.inl
+@@ -164,27 +164,17 @@ inline bool CBoundState<TBindable, NumBindSlots>::DirtyBitsUpTo(_In_range_(0, Nu
+     {
+         return BitSetLessThan(m_DirtyBits.to_ullong(), NumBitsToCheck);
+     }
+-    else
+-    {
+-        constexpr UINT NumBitsPerWord = sizeof(::std::conditional_t<NumBindings <= sizeof(unsigned long) * CHAR_BIT, unsigned long, unsigned long long>) * 8;
+-        // First, check whole "words" for any bit being set.
+-        UINT NumWordsToCheck = NumBitsToCheck / NumBitsPerWord;
+-        for (UINT word = 0; word < NumWordsToCheck; ++word)
+-        {
+-            if (m_DirtyBits._Getword(word))
+-            {
+-                return true;
+-            }
+-            NumBitsToCheck -= NumBitsPerWord;
+-        }
+-        // The slot we were asking about was the last bit of the last word we checked.
+-        if (NumBitsToCheck == 0)
+-        {
+-            return false;
+-        }
+-        // Check for bits inside a word.
+-        return BitSetLessThan(m_DirtyBits._Getword(NumWordsToCheck), NumBitsToCheck);
+-    }
++    else
++    {
++        for (UINT bit = 0; bit < NumBitsToCheck; ++bit)
++        {
++            if (m_DirtyBits.test(bit))
++            {
++                return true;
++            }
++        }
++        return false;
++    }
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+@@ -340,7 +330,7 @@ inline void TRANSLATION_API ImmediateContext::DrawInstanced(UINT countPerInstanc
+         GetGraphicsCommandList()->DrawInstanced(countPerInstance, instanceCount, vertexStart, instanceStart);
+         PostDraw();
+     }
+-    catch (RelayHResultError) {} // already handled, but can't touch the command list
++    catch (RelayHResultError) {} // already handled, but can't touch the command list
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+@@ -364,7 +354,7 @@ inline void TRANSLATION_API ImmediateContext::DrawIndexedInstanced(UINT countPer
+         GetGraphicsCommandList()->DrawIndexedInstanced(countPerInstance, instanceCount, indexStart, vertexStart, instanceStart);
+         PostDraw();
+     }
+-    catch (RelayHResultError) {} // already handled, but can't touch the command list
++    catch (RelayHResultError) {} // already handled, but can't touch the command list
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+@@ -422,7 +412,7 @@ inline void TRANSLATION_API ImmediateContext::DrawAuto()
+             );
+         PostDraw();
+     }
+-    catch (RelayHResultError) {} // already handled, but can't touch the command list
++    catch (RelayHResultError) {} // already handled, but can't touch the command list
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+@@ -447,7 +437,7 @@ inline void TRANSLATION_API ImmediateContext::DrawIndexedInstancedIndirect(Resou
+             );
+         PostDraw();
+     }
+-    catch (RelayHResultError) {} // already handled, but can't touch the command list
++    catch (RelayHResultError) {} // already handled, but can't touch the command list
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+@@ -472,7 +462,7 @@ inline void TRANSLATION_API ImmediateContext::DrawInstancedIndirect(Resource* pB
+             );
+         PostDraw();
+     }
+-    catch (RelayHResultError) {} // already handled, but can't touch the command list
++    catch (RelayHResultError) {} // already handled, but can't touch the command list
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+@@ -653,7 +643,7 @@ inline void ImmediateContext::PreDraw() noexcept(false)
+         if (m_DirtyStates & e_UnorderedAccessViewsDirty)
+         {
+             auto& UAVTableBase = m_CurrentState.m_UAVTableBase;
+-            static const UINT MaxUAVs = UAVBindings.NumBindings;
++            static constexpr UINT MaxUAVs = std::remove_reference_t<decltype(UAVBindings)>::NumBindings;
+             assert(ViewHeapSlot + numUAVs <= m_ViewHeap.m_Desc.NumDescriptors);
+ 
+             D3D12_CPU_DESCRIPTOR_HANDLE UAVDescriptors[MaxUAVs];
+@@ -710,7 +700,7 @@ inline void ImmediateContext::PreDraw() noexcept(false)
+             auto pPSO = m_CurrentState.m_pPSO->GetForUse(COMMAND_LIST_TYPE::GRAPHICS);
+             if (!pPSO)
+             {
+-                throw RelayHResultError(S_OK);
++                throw RelayHResultError(S_OK);
+             }
+             GetGraphicsCommandList()->SetPipelineState(pPSO);
+         }
+@@ -851,7 +841,7 @@ inline void ImmediateContext::DirtyShaderResourcesHelper(UINT& HeapSlot) noexcep
+     auto& SRVBindings = CurrentState.m_SRVs;
+     UINT RootSigHWM = m_CurrentState.m_pPSO->GetRootSignature()->m_Desc.GetShaderStage<eShader>().GetSRVBindingCount();
+     UINT numSRVs = RootSigHWM;
+-    static const UINT MaxSRVs = SRVBindings.NumBindings;
++    static constexpr UINT MaxSRVs = std::remove_reference_t<decltype(SRVBindings)>::NumBindings;
+     assert(HeapSlot + numSRVs <= m_ViewHeap.m_Desc.NumDescriptors);
+ 
+     D3D12_CPU_DESCRIPTOR_HANDLE Descriptors[MaxSRVs];
+@@ -867,9 +857,12 @@ inline void ImmediateContext::DirtyShaderResourcesHelper(UINT& HeapSlot) noexcep
+     HeapSlot += numSRVs;
+ }
+ 
+-//----------------------------------------------------------------------------------------------------------------------------------
+-template<EShaderStage eShader>
+-inline void ImmediateContext::DirtyConstantBuffersHelper(UINT& HeapSlot) noexcept
++//----------------------------------------------------------------------------------------------------------------------------------
++template <typename TDesc>
++inline void GetBufferViewDesc(Resource* pBuffer, TDesc& Desc, UINT APIOffset, UINT APISize = -1);
++
++template<EShaderStage eShader>
++inline void ImmediateContext::DirtyConstantBuffersHelper(UINT& HeapSlot) noexcept
+ {
+     typedef SShaderTraits<eShader> TShaderTraits;
+     if ((m_DirtyStates & TShaderTraits::c_ConstantBuffersDirty) == 0)
+@@ -880,7 +873,6 @@ inline void ImmediateContext::DirtyConstantBuffersHelper(UINT& HeapSlot) noexcep
+     SStageState& CurrentState = TShaderTraits::CurrentStageState(m_CurrentState);
+     auto& CBBindings = CurrentState.m_CBs;
+     UINT numCBs = m_CurrentState.m_pPSO->GetRootSignature()->m_Desc.GetShaderStage<eShader>().GetCBBindingCount();
+-    static const UINT MaxCBs = CBBindings.NumBindings;
+ 
+     assert(HeapSlot + numCBs <= m_ViewHeap.m_Desc.NumDescriptors);
+ 
+@@ -916,7 +908,7 @@ inline void ImmediateContext::DirtySamplersHelper(UINT& HeapSlot) noexcept
+     UINT RootSigHWM = m_CurrentState.m_pPSO->GetRootSignature()->m_Desc.GetShaderStage<eShader>().GetSamplerBindingCount();
+     UINT numSamplers = RootSigHWM;
+     auto& SamplerBindings = CurrentState.m_Samplers;
+-    static const UINT MaxSamplers = SamplerBindings.NumBindings;
++    static constexpr UINT MaxSamplers = std::remove_reference_t<decltype(SamplerBindings)>::NumBindings;
+ 
+     assert(HeapSlot + numSamplers <= m_SamplerHeap.m_Desc.NumDescriptors);
+ 
+@@ -934,8 +926,8 @@ inline void ImmediateContext::DirtySamplersHelper(UINT& HeapSlot) noexcept
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+-template <typename TDesc>
+-inline void GetBufferViewDesc(Resource* pBuffer, TDesc& Desc, UINT APIOffset, UINT APISize = -1)
++template <typename TDesc>
++inline void GetBufferViewDesc(Resource* pBuffer, TDesc& Desc, UINT APIOffset, UINT APISize)
+ {
+     if (pBuffer)
+     {
+@@ -1057,7 +1049,7 @@ inline void TRANSLATION_API ImmediateContext::Dispatch(UINT x, UINT y, UINT z)
+         GetGraphicsCommandList()->Dispatch(x, y, z);
+         PostDispatch();
+     }
+-    catch (RelayHResultError) {} // already handled, but can't touch the command list
++    catch (RelayHResultError) {} // already handled, but can't touch the command list
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+@@ -1088,7 +1080,7 @@ inline void TRANSLATION_API ImmediateContext::DispatchIndirect(Resource* pBuffer
+             );
+         PostDispatch();
+     }
+-    catch (RelayHResultError) {} // already handled, but can't touch the command list
++    catch (RelayHResultError) {} // already handled, but can't touch the command list
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+@@ -1173,7 +1165,7 @@ inline void ImmediateContext::PreDispatch() noexcept(false)
+         {
+             auto& UAVTableBase = m_CurrentState.m_CSUAVTableBase;
+ 
+-            static const UINT MaxUAVs = UAVBindings.NumBindings;
++            static constexpr UINT MaxUAVs = std::remove_reference_t<decltype(UAVBindings)>::NumBindings;
+             assert(ViewHeapSlot + numUAVs <= m_ViewHeap.m_Desc.NumDescriptors);
+ 
+             D3D12_CPU_DESCRIPTOR_HANDLE UAVDescriptors[MaxUAVs];
+@@ -1214,7 +1206,7 @@ inline void ImmediateContext::PreDispatch() noexcept(false)
+             auto pPSO = m_CurrentState.m_pPSO->GetForUse(COMMAND_LIST_TYPE::GRAPHICS);
+             if (!pPSO)
+             {
+-                throw RelayHResultError(S_OK);
++                throw RelayHResultError(S_OK);
+             }
+             GetGraphicsCommandList()->SetPipelineState(pPSO);
+         }
+@@ -1433,7 +1425,7 @@ inline HRESULT ImmediateContext::EnqueueSetEvent(UINT commandListTypeMask, HANDL
+             try {
+                 FenceValues[nLists] = m_CommandLists[i]->EnsureFlushedAndFenced(); // throws
+             }
+-            catch (RelayHResultError& e)
++            catch (RelayHResultError& e)
+             {
+                 return e.Error();
+             }
+diff --git a/include/Residency.h b/include/Residency.h
+index 0e5cd67..f0487ce 100644
+--- a/include/Residency.h
++++ b/include/Residency.h
+@@ -19,7 +19,7 @@ namespace D3D12TranslationLayer
+             PinWait(const PinWait& pinWait) = default;
+             ~PinWait() = default;
+ 
+-            RelayComPtr<ID3D12Fence> m_spFence;
++            RelayComPtr<ID3D12Fence> m_spFence;
+             UINT64 m_value;
+         };
+ 
+@@ -212,7 +212,7 @@ namespace D3D12TranslationLayer
+                 FenceValue++;
+             }
+ 
+-            RelayComPtr<ID3D12Fence> pFence;
++            RelayComPtr<ID3D12Fence> pFence;
+             UINT64 FenceValue = 0;
+             UINT64 LastWaitedValues[(UINT)COMMAND_LIST_TYPE::MAX_VALID] = {};
+         };
+@@ -449,8 +449,8 @@ namespace D3D12TranslationLayer
+         ImmediateContext& ImmCtx;
+         Internal::Fence AsyncThreadFence;
+ 
+-        RelayComPtr<ID3D12Device3> Device;
+-        RelayComPtr<ID3D12Device15> Device15;
++        RelayComPtr<ID3D12Device3> Device;
++        RelayComPtr<ID3D12Device15> Device15;
+         // NOTE: This is an index not a mask. The majority of D3D12 uses bit masks to identify a GPU node whereas DXGI uses 0 based indices.
+         UINT NodeIndex = 0;
+         IDXCoreAdapter* AdapterDXCore = nullptr;
+diff --git a/include/Resource.hpp b/include/Resource.hpp
+index def7d76..3b60cef 100644
+--- a/include/Resource.hpp
++++ b/include/Resource.hpp
+@@ -465,7 +465,7 @@ namespace D3D12TranslationLayer
+ 
+         void AddHeapToTilePool(unique_comptr<ID3D12Heap> spHeap)
+         {
+-            auto HeapDesc = spHeap->GetDesc();
++            auto HeapDesc = RelayD3D12HeapDesc(spHeap.get());
+             m_TilePool.m_Allocations.emplace_back(static_cast<UINT>(HeapDesc.SizeInBytes), 0); // throw( bad_alloc )
+             auto& Allocation = m_TilePool.m_Allocations.front();
+             Allocation.m_spUnderlyingBufferHeap = std::move(spHeap);
+@@ -690,7 +690,7 @@ namespace D3D12TranslationLayer
+             // This can fire if CalcPreallocationSize doesn't account for all preallocated arrays, or if the void*& decays to void*
+             assert(reinterpret_cast<size_t>(pPreallocatedMemory) == reinterpret_cast<size_t>(spIdentity.get()) + ObjectSize);
+ 
+-            return std::move(spIdentity);
++            return spIdentity;
+         }
+ 
+         SResourceIdentity* GetIdentity() { return m_Identity.get(); }
+@@ -905,4 +905,4 @@ public:
+         HRESULT AddFenceForUnwrapResidency(ID3D12CommandQueue* pQueue);
+ 
+     };
+-};
+\ No newline at end of file
++};
+diff --git a/include/Shader.hpp b/include/Shader.hpp
+index b201268..29a0fc6 100644
+--- a/include/Shader.hpp
++++ b/include/Shader.hpp
+@@ -46,7 +46,7 @@ namespace D3D12TranslationLayer
+         Shader(ImmediateContext* pParent, const void* byteCode, SIZE_T bytecodeSize);
+ #endif
+         // Construct with ownership of DXBC and DXIL, with pre-parsed decls
+-        Shader(ImmediateContext* pParent, std::unique_ptr<BYTE[]> DXBC, RelayComHeapPtr<void>& DXIL, SIZE_T dxilSize, SShaderDecls PrecomputedDecls);
++        Shader(ImmediateContext* pParent, std::unique_ptr<BYTE[]> DXBC, RelayComHeapPtr<void>& DXIL, SIZE_T dxilSize, SShaderDecls PrecomputedDecls);
+         // Construct without ownership, shader model does not matter, with pre-parsed decls
+         Shader(ImmediateContext* pParent, const void* byteCode, SIZE_T bytecodeSize, SShaderDecls PrecomputedDecls);
+ 
+@@ -59,7 +59,7 @@ namespace D3D12TranslationLayer
+ #endif
+ 
+         std::unique_ptr<BYTE[]> const m_ByteCode;
+-        RelayComHeapPtr<void> const m_Dxil;
++        RelayComHeapPtr<void> const m_Dxil;
+         D3D12_SHADER_BYTECODE const m_Desc;
+     };
+ };
+\ No newline at end of file
+diff --git a/include/ShaderBinary.h b/include/ShaderBinary.h
+index 4a1d8ea..ca7a049 100644
+--- a/include/ShaderBinary.h
++++ b/include/ShaderBinary.h
+@@ -4,7 +4,7 @@
+ #ifndef _SHADERBINARY_H
+ #define _SHADERBINARY_H
+ 
+-#include <d3d12tokenizedprogramformat.hpp>
++#include <d3d12TokenizedProgramFormat.hpp>
+ 
+ typedef UINT CShaderToken;
+ 
+diff --git a/include/ThreadPool.hpp b/include/ThreadPool.hpp
+index bbe79bf..3a3f0a0 100644
+--- a/include/ThreadPool.hpp
++++ b/include/ThreadPool.hpp
+@@ -57,14 +57,14 @@ public:
+         m_pPool = CreateThreadpool(nullptr);
+         if (!m_pPool)
+         {
+-            throw RelayHResultError(HRESULT_FROM_WIN32(GetLastError()));
++            throw RelayHResultError(HRESULT_FROM_WIN32(GetLastError()));
+         }
+ 
+         m_pCleanup = CreateThreadpoolCleanupGroup();
+         if (!m_pCleanup)
+         {
+             CloseThreadpool(m_pPool);
+-            throw RelayHResultError(HRESULT_FROM_WIN32(GetLastError()));
++            throw RelayHResultError(HRESULT_FROM_WIN32(GetLastError()));
+         }
+ 
+         // No more failures
+@@ -92,14 +92,14 @@ public:
+     {
+         if (Work.m_pWork != nullptr)
+         {
+-            throw RelayHResultError(E_INVALIDARG);
++            throw RelayHResultError(E_INVALIDARG);
+         }
+ 
+         Work.m_WorkFunction = std::move(WorkFunction);
+         Work.m_pWork = CreateThreadpoolWork(&CThreadPoolWork::WorkCallback, &Work, &m_Environment);
+         if (!Work.m_pWork)
+         {
+-            throw RelayHResultError(HRESULT_FROM_WIN32(GetLastError()));
++            throw RelayHResultError(HRESULT_FROM_WIN32(GetLastError()));
+         }
+ 
+         SubmitThreadpoolWork(Work.m_pWork);
+diff --git a/include/Util.hpp b/include/Util.hpp
+index 4251fc6..1f6d377 100644
+--- a/include/Util.hpp
++++ b/include/Util.hpp
+@@ -72,7 +72,7 @@ namespace D3D12TranslationLayer
+     {
+         if (FAILED(hr))
+         {
+-            throw RelayHResultError(hr);
++            throw RelayHResultError(hr);
+         }
+     }
+ 
+@@ -81,7 +81,7 @@ namespace D3D12TranslationLayer
+     {
+         if (h == nullptr)
+         {
+-            throw RelayHResultError(HRESULT_FROM_WIN32(GetLastError()));
++            throw RelayHResultError(HRESULT_FROM_WIN32(GetLastError()));
+         }
+     }
+ 
+diff --git a/include/VideoProcess.hpp b/include/VideoProcess.hpp
+index 9d9e5f6..f2b9ce5 100644
+--- a/include/VideoProcess.hpp
++++ b/include/VideoProcess.hpp
+@@ -136,10 +136,9 @@ namespace D3D12TranslationLayer
+     class DeinterlacePrepass
+     {
+     public:
+-        DeinterlacePrepass(ImmediateContext* pDevice, class VideoProcess* pVP, D3D12_VIDEO_PROCESS_DEINTERLACE_FLAGS DeinterlaceMode)
+-            : m_pParent(pDevice)
+-            , m_pVP(pVP)
+-            , m_DeinterlaceMode(DeinterlaceMode)
++        DeinterlacePrepass(ImmediateContext* pDevice, class VideoProcess*, D3D12_VIDEO_PROCESS_DEINTERLACE_FLAGS DeinterlaceMode)
++            : m_pParent(pDevice)
++            , m_DeinterlaceMode(DeinterlaceMode)
+         {
+         }
+         void Process(_Inout_ VIDEO_PROCESS_INPUT_ARGUMENTS *pInputArguments, UINT NumInputStreams, _In_ VIDEO_PROCESS_OUTPUT_ARGUMENTS *pOutputArguments);
+@@ -151,7 +150,6 @@ namespace D3D12TranslationLayer
+         using VideoProcessPipelineState = DeviceChildImpl<ID3D12PipelineState>;
+ 
+         ImmediateContext* const m_pParent;
+-        VideoProcess* const m_pVP;
+         D3D12_VIDEO_PROCESS_DEINTERLACE_FLAGS m_DeinterlaceMode;
+         std::vector<std::array<unique_comptr<Resource>, 2>> m_spIntermediates;
+         std::map<DXGI_FORMAT, std::unique_ptr<VideoProcessPipelineState>> m_spDeinterlacePSOs;
+diff --git a/include/VideoReferenceDataManager.hpp b/include/VideoReferenceDataManager.hpp
+index 5b39dbd..80743df 100644
+--- a/include/VideoReferenceDataManager.hpp
++++ b/include/VideoReferenceDataManager.hpp
+@@ -14,7 +14,7 @@ namespace D3D12TranslationLayer
+     public:
+         VideoDecoder(ImmediateContext *pContext, ID3D12VideoDevice* pVideoDeviceNoRef, const D3D12_VIDEO_DECODER_DESC& desc);
+ 
+-        D3D12_VIDEO_DECODER_DESC GetDesc() { return GetForImmediateUse()->GetDesc(); }
++        D3D12_VIDEO_DECODER_DESC GetDesc() { return RelayD3D12VideoDecoderDesc(GetForImmediateUse()); }
+     };
+ 
+     class VideoDecoderHeap : public DeviceChildImpl<ID3D12VideoDecoderHeap>
+@@ -22,7 +22,7 @@ namespace D3D12TranslationLayer
+     public:
+         VideoDecoderHeap(ImmediateContext *pContext, ID3D12VideoDevice* pVideoDeviceNoRef, const D3D12_VIDEO_DECODER_HEAP_DESC& desc);
+ 
+-        D3D12_VIDEO_DECODER_HEAP_DESC GetDesc() { return GetForImmediateUse()->GetDesc(); }
++        D3D12_VIDEO_DECODER_HEAP_DESC GetDesc() { return RelayD3D12VideoDecoderHeapDesc(GetForImmediateUse()); }
+     };
+ 
+     struct ReferenceOnlyDesc
+@@ -122,4 +122,4 @@ namespace D3D12TranslationLayer
+             MarkReferenceInUse(picEntry.Index7Bits);
+         }
+     }
+-};
+\ No newline at end of file
++};
+diff --git a/include/XPlatHelpers.h b/include/XPlatHelpers.h
+index 3a11fc9..0a1ea49 100644
+--- a/include/XPlatHelpers.h
++++ b/include/XPlatHelpers.h
+@@ -132,7 +132,7 @@ namespace XPlatHelpers
+         HMODULE get() const { return _hM; }
+         operator bool() const { return _hM != nullptr; }
+ 
+-        void* proc_address(const char* pCStr) const { return GetProcAddress(_hM, pCStr); }
++        void* proc_address(const char* pCStr) const { return reinterpret_cast<void*>(GetProcAddress(_hM, pCStr)); }
+         template <typename T> T proc_address(const char* pCStr) const { return reinterpret_cast<T>(proc_address(pCStr)); }
+     };
+-}
+\ No newline at end of file
++}
+diff --git a/src/Allocator.cpp b/src/Allocator.cpp
+index 4e9cdbd..a43e164 100644
+--- a/src/Allocator.cpp
++++ b/src/Allocator.cpp
+@@ -14,7 +14,7 @@ namespace D3D12TranslationLayer
+     {
+         m_pContext->ReturnTransitionableBufferToPool(
+             m_HeapType, 
+-            pResource->GetDesc().Width, 
++            RelayD3D12ResourceDesc(pResource).Width,
+             std::move(unique_comptr<ID3D12Resource>(pResource)), 
+             // Guaranteed to be finished since this is only called after
+             // all suballocations have been through the deferred deletion queue
+diff --git a/src/BatchedContext.cpp b/src/BatchedContext.cpp
+index 5fd2782..bfad1b0 100644
+--- a/src/BatchedContext.cpp
++++ b/src/BatchedContext.cpp
+@@ -1166,7 +1166,7 @@ bool TRANSLATION_API BatchedContext::RenameAndMapBuffer(BatchedResource* pResour
+     
+         return true;
+     }
+-    catch (RelayHResultError& hrEx)
++    catch (RelayHResultError& hrEx)
+     {
+         if (hrEx.Error() == E_OUTOFMEMORY)
+         {
+@@ -1947,7 +1947,7 @@ void BatchedContext::ProcessBatchImpl(Batch* pBatchToProcess)
+     {
+         ProcessBatchWork(pBatchToProcess->m_BatchCommands); // throws
+     }
+-    catch (RelayHResultError& hrEx) { m_Callbacks.ThreadErrorCallback(hrEx.Error()); }
++    catch (RelayHResultError& hrEx) { m_Callbacks.ThreadErrorCallback(hrEx.Error()); }
+     catch (std::bad_alloc&) { m_Callbacks.ThreadErrorCallback(E_OUTOFMEMORY); }
+ }
+ 
+diff --git a/src/BlitHelper.cpp b/src/BlitHelper.cpp
+index 5714cc3..6d85638 100644
+--- a/src/BlitHelper.cpp
++++ b/src/BlitHelper.cpp
+@@ -25,24 +25,24 @@ namespace D3D12TranslationLayer
+ 
+     auto BlitHelper::PrepareShaders(Resource *pSrc, UINT srcPlanes, Resource *pDst, UINT dstPlanes, bool bEnableAlpha, bool bSwapRB, int& outSrcPixelScalingFactor) -> BlitPipelineState*
+     {
+-        const D3D12_RESOURCE_DESC &srcDesc = pSrc->GetUnderlyingResource()->GetDesc();
+-        const D3D12_RESOURCE_DESC &dstDesc = pDst->GetUnderlyingResource()->GetDesc();
++        const D3D12_RESOURCE_DESC srcDesc = RelayD3D12ResourceDesc(pSrc->GetUnderlyingResource());
++        const D3D12_RESOURCE_DESC dstDesc = RelayD3D12ResourceDesc(pDst->GetUnderlyingResource());
+ 
+         if (CD3D11FormatHelper::YUV(dstDesc.Format))
+         {
+             // YUV -> RGB conversion only for now, or RGB -> RGB stretching
+-            throw RelayHResultError(E_INVALIDARG);
++            throw RelayHResultError(E_INVALIDARG);
+         }
+ 
+         if (srcPlanes > MAX_PLANES)
+         {
+-            throw RelayHResultError(E_INVALIDARG);
++            throw RelayHResultError(E_INVALIDARG);
+         }
+ 
+         if (dstPlanes != 1)
+         {
+             // just RGB output for now
+-            throw RelayHResultError(E_INVALIDARG);
++            throw RelayHResultError(E_INVALIDARG);
+         }
+ 
+         BlitHelperKeyUnion key;
+@@ -161,7 +161,7 @@ namespace D3D12TranslationLayer
+ 
+     void BlitHelper::Blit(Resource *pSrc, UINT *pSrcSubresourceIndices, UINT numSrcSubresources, const RECT& srcRect, Resource *pDst, UINT *pDstSubresourceIndices, UINT numDstSubresources, const RECT& dstRect, bool bEnableAlpha, bool bSwapRBChannels)
+     {
+-        const D3D12_RESOURCE_DESC &dstDesc = pDst->GetUnderlyingResource()->GetDesc();
++        const D3D12_RESOURCE_DESC dstDesc = RelayD3D12ResourceDesc(pDst->GetUnderlyingResource());
+         assert( numSrcSubresources <= MAX_PLANES );
+         UINT nonMsaaSrcSubresourceIndices[MAX_PLANES];
+         memcpy( &nonMsaaSrcSubresourceIndices[0], pSrcSubresourceIndices, numSrcSubresources * sizeof(UINT) );
+@@ -418,7 +418,7 @@ namespace D3D12TranslationLayer
+         auto pResource = *ppResource;
+         assert( numSubresources == 1 ); // assert that it's only 1 because you can't have MSAA YUV resources.
+ 
+-        auto srcDesc = pResource->GetUnderlyingResource()->GetDesc();
++        auto srcDesc = RelayD3D12ResourceDesc(pResource->GetUnderlyingResource());
+         UINT width = static_cast<UINT>(srcDesc.Width);
+         UINT height = static_cast<UINT>(srcDesc.Height);
+         auto& cacheEntry = m_pParent->GetResourceCache().GetResource( pResource->AppDesc()->Format(), width, height );
+@@ -431,4 +431,4 @@ namespace D3D12TranslationLayer
+         }
+         *ppResource = pCacheResource;
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index c1d7ea0..1749738 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -85,8 +85,9 @@ file(GLOB INL ../include/*.inl *.inl)
+ file(GLOB EXTERNAL_INC ../external/*.h ../external/*.hpp)
+ 
+ add_library(d3d12translationlayer STATIC ${SRC} ${INC} ${INL} ${EXTERNAL_INC})
+-target_include_directories(d3d12translationlayer
+-    PUBLIC ../external
++target_include_directories(d3d12translationlayer
++    BEFORE PRIVATE ${DTL_WINDOWS_SDK_OVERLAY_DIR}
++    PUBLIC ../external
+     PUBLIC ../include
+     PRIVATE ./)
+ 
+@@ -120,7 +121,30 @@ if(MSVC)
+   endif()
+   target_link_options(d3d12translationlayer INTERFACE "/ignore:4286")
+ else()
+-  target_compile_options(d3d12translationlayer PUBLIC -Wall -Wextra -Wpedantic -Werror)
++  target_compile_options(d3d12translationlayer PUBLIC
++      -fms-extensions -Wall -Wextra -Werror
++      -Wno-missing-braces
++      -Wno-missing-field-initializers
++      -Wno-sign-compare
++      -Wno-switch
++      -Wno-reorder
++      -Wno-pessimizing-move)
++endif()
++
++if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
++  target_compile_options(d3d12translationlayer PUBLIC
++      -Wno-defaulted-function-deleted
++      -Wno-nested-anon-types
++      -Wno-microsoft-anon-tag
++      -Wno-gnu-anonymous-struct
++      -Wno-c2y-extensions
++      -Wno-extra-semi
++      -Wno-vla-cxx-extension
++      -Wno-single-bit-bitfield-constant-conversion
++      -Wno-assume
++      -Wno-nontrivial-memcall
++      -Wno-unused-const-variable
++      -Wno-deprecated-copy-with-user-provided-copy)
+ endif()
+ 
+ if (NOT IMPLEMENT_RECTS)
+@@ -128,9 +152,8 @@ if (NOT IMPLEMENT_RECTS)
+ endif()
+ 
+ if (DTL_ENABLE_WDK_DXBC)
+-    include(CheckIncludeFileCXX)
+-    CHECK_INCLUDE_FILE_CXX(d3d12TokenizedProgramFormat.hpp HAS_WDK)
+-    if(NOT HAS_WDK)
++    if(NOT EXISTS
++        "${DTL_WINDOWS_SDK_OVERLAY_DIR}/d3d12TokenizedProgramFormat.hpp")
+         message(FATAL_ERROR
+             "DTL_ENABLE_WDK_DXBC requires d3d12TokenizedProgramFormat.hpp")
+     endif()
+@@ -145,7 +168,14 @@ if (DTL_ENABLE_WDK_DXBC)
+ 		../include/DxbcBuilder.hpp
+ 		../include/ShaderBinary.h
+         ../include/SharedResourceHelpers.hpp)
+-	target_link_libraries(d3d12translationlayer_wdk d3d12translationlayer)
++	target_link_libraries(d3d12translationlayer_wdk d3d12translationlayer)
++    target_include_directories(d3d12translationlayer_wdk PRIVATE
++        ${DTL_WINDOWS_SDK_OVERLAY_DIR}
++        ../DxbcParser/include)
++    if(CMAKE_VERSION VERSION_GREATER 3.16)
++        target_precompile_headers(d3d12translationlayer_wdk REUSE_FROM
++            d3d12translationlayer)
++    endif()
+ else()
+     message(STATUS "Building only public-SDK translation units.")
+ endif()
+diff --git a/src/CommandListManager.cpp b/src/CommandListManager.cpp
+index f6f79e5..431c731 100644
+--- a/src/CommandListManager.cpp
++++ b/src/CommandListManager.cpp
+@@ -42,7 +42,7 @@ namespace D3D12TranslationLayer
+             queue.NodeMask = m_pParent->GetNodeMask();
+             queue.Flags = m_pParent->m_CreationArgs.DisableGPUTimeout ?
+                 D3D12_COMMAND_QUEUE_FLAG_DISABLE_GPU_TIMEOUT : D3D12_COMMAND_QUEUE_FLAG_NONE;
+-            RelayComPtr<ID3D12Device9> spDevice9;
++            RelayComPtr<ID3D12Device9> spDevice9;
+             if (SUCCEEDED(m_pParent->m_pDevice12->QueryInterface(&spDevice9)))
+             {
+                 ThrowFailure(spDevice9->CreateCommandQueue1(&queue, m_pParent->m_CreationArgs.CreatorID, IID_PPV_ARGS(&m_pCommandQueue)));
+@@ -435,7 +435,7 @@ namespace D3D12TranslationLayer
+         try {
+             FenceValue = EnsureFlushedAndFenced(); // throws
+         }
+-        catch (RelayHResultError& e)
++        catch (RelayHResultError& e)
+         {
+             return e.Error();
+         }
+diff --git a/src/FormatDescImpl.cpp b/src/FormatDescImpl.cpp
+index b738a93..69565e3 100644
+--- a/src/FormatDescImpl.cpp
++++ b/src/FormatDescImpl.cpp
+@@ -766,7 +766,7 @@ HRESULT CD3D11FormatHelper::CalculateResourceSize(
+     UINT subWidth = width;
+     UINT subHeight = height;
+     UINT subDepth = depth;
+-    for (UINT s = 0, iM = 0, iA = 0; s < subresources; ++s)
++    for (UINT s = 0, iM = 0; s < subresources; ++s)
+     {
+         UINT blockWidth;
+         if (FAILED(DivideAndRoundUp(subWidth, formatDetail.WidthAlignment, /*_Out_*/ blockWidth)))
+@@ -856,8 +856,7 @@ HRESULT CD3D11FormatHelper::CalculateResourceSize(
+         // Iterate over mip levels and array elements
+         if (++iM >= mipLevels)
+         {
+-            ++iA;
+-            iM = 0;
++            iM = 0;
+ 
+             subWidth = width;
+             subHeight = height;
+@@ -1004,7 +1003,7 @@ UINT CD3D11FormatHelper::GetBitsPerElement(DXGI_FORMAT Format)
+ UINT CD3D11FormatHelper::GetDetailTableIndexNoThrow(DXGI_FORMAT  Format)
+ {
+     UINT Index = GetDetailTableIndex( Format );
+-    assert( -1 != Index ); // Needs to be validated externally.
++    assert(UINT_MAX != Index); // Needs to be validated externally.
+     return Index;
+ }
+ 
+@@ -1053,7 +1052,7 @@ UINT CD3D11FormatHelper::GetDepthAlignment(DXGI_FORMAT Format)
+ const CD3D11FormatHelper::FORMAT_DETAIL* CD3D11FormatHelper::GetFormatDetail( DXGI_FORMAT  Format )
+ {
+     const UINT Index = GetDetailTableIndex(Format);
+-    if( -1 == Index )
++    if(UINT_MAX == Index)
+     {
+         return NULL;
+     }
+@@ -1064,7 +1063,7 @@ const CD3D11FormatHelper::FORMAT_DETAIL* CD3D11FormatHelper::GetFormatDetail( DX
+ bool CD3D11FormatHelper::IsSRGBFormat(DXGI_FORMAT Format)
+ {
+     const UINT Index = GetDetailTableIndex(Format);
+-    if( -1 == Index )
++    if(UINT_MAX == Index)
+     {
+         return false;
+     }
+diff --git a/src/ImmediateContext.cpp b/src/ImmediateContext.cpp
+index 1dc3e6f..4efc1f1 100644
+--- a/src/ImmediateContext.cpp
++++ b/src/ImmediateContext.cpp
+@@ -143,9 +143,9 @@ ImmediateContext::ImmediateContext(UINT nodeIndex, D3D12_FEATURE_DATA_D3D12_OPTI
+     D3D12_COMMAND_QUEUE_DESC SyncOnlyQueueDesc = { D3D12_COMMAND_LIST_TYPE_NONE };
+     (void)m_pDevice12->CreateCommandQueue(&SyncOnlyQueueDesc, IID_PPV_ARGS(&m_pSyncOnlyQueue));
+ 
+-    LUID adapterLUID = pDevice->GetAdapterLuid();
++    LUID adapterLUID = RelayD3D12AdapterLuid(pDevice);
+     {
+-        RelayComPtr<IDXCoreAdapterFactory> pFactory;
++        RelayComPtr<IDXCoreAdapterFactory> pFactory;
+ #if DYNAMIC_LOAD_DXCORE
+         m_DXCore.load("dxcore");
+         auto pfnDXCoreCreateAdapterFactory = m_DXCore.proc_address<HRESULT(APIENTRY*)(REFIID, void**)>("DXCoreCreateAdapterFactory");
+@@ -159,7 +159,7 @@ ImmediateContext::ImmediateContext(UINT nodeIndex, D3D12_FEATURE_DATA_D3D12_OPTI
+     }
+     if (!m_pDXCoreAdapter)
+     {
+-        RelayComPtr<IDXGIFactory4> pFactory;
++        RelayComPtr<IDXGIFactory4> pFactory;
+         ThrowFailure(CreateDXGIFactory2(0, IID_PPV_ARGS(&pFactory)));
+         ThrowFailure(pFactory->EnumAdapterByLuid(adapterLUID, IID_PPV_ARGS(&m_pDXGIAdapter)));
+     }
+@@ -195,8 +195,8 @@ ImmediateContext::ImmediateContext(UINT nodeIndex, D3D12_FEATURE_DATA_D3D12_OPTI
+     hr = m_pDevice12->CreateDescriptorHeap(&m_ViewHeap.m_Desc, IID_PPV_ARGS(&m_ViewHeap.m_pDescriptorHeap));
+     ThrowFailure(hr); //throw( _com_error )
+     m_ViewHeap.m_DescriptorSize = m_pDevice12->GetDescriptorHandleIncrementSize(m_ViewHeap.m_Desc.Type);
+-    m_ViewHeap.m_DescriptorHeapBase = m_ViewHeap.m_pDescriptorHeap->GetGPUDescriptorHandleForHeapStart().ptr;
+-    m_ViewHeap.m_DescriptorHeapBaseCPU = m_ViewHeap.m_pDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr;
++    m_ViewHeap.m_DescriptorHeapBase = RelayD3D12GPUDescriptorHeapStart(m_ViewHeap.m_pDescriptorHeap.get()).ptr;
++    m_ViewHeap.m_DescriptorHeapBaseCPU = RelayD3D12CPUDescriptorHeapStart(m_ViewHeap.m_pDescriptorHeap.get()).ptr;
+     m_ViewHeap.m_BitsToSetOnNewHeap = e_ViewsDirty;
+ 
+     if (!ComputeOnly())
+@@ -204,8 +204,8 @@ ImmediateContext::ImmediateContext(UINT nodeIndex, D3D12_FEATURE_DATA_D3D12_OPTI
+         hr = m_pDevice12->CreateDescriptorHeap(&m_SamplerHeap.m_Desc, IID_PPV_ARGS(&m_SamplerHeap.m_pDescriptorHeap));
+         ThrowFailure(hr); //throw( _com_error )
+         m_SamplerHeap.m_DescriptorSize = m_pDevice12->GetDescriptorHandleIncrementSize(m_SamplerHeap.m_Desc.Type);
+-        m_SamplerHeap.m_DescriptorHeapBase = m_SamplerHeap.m_pDescriptorHeap->GetGPUDescriptorHandleForHeapStart().ptr;
+-        m_SamplerHeap.m_DescriptorHeapBaseCPU = m_SamplerHeap.m_pDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr;
++        m_SamplerHeap.m_DescriptorHeapBase = RelayD3D12GPUDescriptorHeapStart(m_SamplerHeap.m_pDescriptorHeap.get()).ptr;
++        m_SamplerHeap.m_DescriptorHeapBaseCPU = RelayD3D12CPUDescriptorHeapStart(m_SamplerHeap.m_pDescriptorHeap.get()).ptr;
+         m_SamplerHeap.m_BitsToSetOnNewHeap = e_SamplersDirty;
+     }
+ 
+@@ -388,7 +388,7 @@ bool ImmediateContext::Shutdown() noexcept
+                     return false;
+                 }
+             }
+-            catch (RelayHResultError&)
++            catch (RelayHResultError&)
+             {
+                 return false;
+             }
+@@ -579,8 +579,8 @@ void ImmediateContext::RollOverHeap(OnlineDescriptorHeap& Heap) noexcept(false)
+     }
+ 
+     Heap.m_DescriptorRingBuffer = CFencedRingBuffer(Heap.m_Desc.NumDescriptors);
+-    Heap.m_DescriptorHeapBase = Heap.m_pDescriptorHeap->GetGPUDescriptorHandleForHeapStart().ptr;
+-    Heap.m_DescriptorHeapBaseCPU = Heap.m_pDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr;
++    Heap.m_DescriptorHeapBase = RelayD3D12GPUDescriptorHeapStart(Heap.m_pDescriptorHeap.get()).ptr;
++    Heap.m_DescriptorHeapBaseCPU = RelayD3D12CPUDescriptorHeapStart(Heap.m_pDescriptorHeap.get()).ptr;
+ 
+     ID3D12DescriptorHeap* pHeaps[2] = {m_ViewHeap.m_pDescriptorHeap.get(), m_SamplerHeap.m_pDescriptorHeap.get()};
+     GetGraphicsCommandList()->SetDescriptorHeaps(ComputeOnly() ? 1 : 2, pHeaps);
+@@ -1795,7 +1795,7 @@ void TRANSLATION_API ImmediateContext::DiscardView(ViewBase* pView, const D3D12_
+ 
+     // D3D12 requires RenderTargets and DepthStenciles to be transitioned to the corresponding write state before discard.
+     auto pAPIResource = GetUnderlyingResource(pView->m_pResource);
+-    D3D12_RESOURCE_FLAGS ResourceFlags = pAPIResource->GetDesc().Flags;
++    D3D12_RESOURCE_FLAGS ResourceFlags = RelayD3D12ResourceDesc(pAPIResource).Flags;
+ 
+     if ((ResourceFlags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) || (ResourceFlags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL))
+     {
+@@ -1898,7 +1898,7 @@ void TRANSLATION_API ImmediateContext::DiscardResource(Resource* pResource, cons
+     auto pAPIResource = GetUnderlyingResource(pResource);
+ 
+     // D3D12 requires RenderTargets and DepthStenciles to be transitioned to the corresponding write state before discard.
+-    D3D12_RESOURCE_FLAGS ResourceFlags = pAPIResource->GetDesc().Flags;
++    D3D12_RESOURCE_FLAGS ResourceFlags = RelayD3D12ResourceDesc(pAPIResource).Flags;
+     if ((ResourceFlags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) || (ResourceFlags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL))
+     {
+         D3D12_RESOURCE_STATES RequiredState =
+@@ -4077,7 +4077,7 @@ D3D12ResourceSuballocation ImmediateContext::AcquireSuballocatedHeap(AllocatorHe
+         auto block = allocator.Allocate(Size, bCannotBeOffset);
+         if (block.GetSize() == 0)
+         {
+-            throw RelayHResultError(E_OUTOFMEMORY);
++            throw RelayHResultError(E_OUTOFMEMORY);
+         }
+         return block;
+     }, threadingContext);
+@@ -4458,12 +4458,11 @@ bool TRANSLATION_API ImmediateContext::MapDynamicTexture(Resource* pResource, UI
+             creationArgsCopy.m_flags11.StructureByteStride = 0;
+ 
+             unique_comptr<Resource> renameResource = Resource::CreateResource(this, creationArgsCopy, ResourceAllocationContext::FreeThread);
+-            pResource->SetCurrentCpuHeap(Subresource, renameResource.get());
+-            
+-            CD3DX12_RANGE ReadRange(0, 0); // Map(DISCARD) is write-only
+-            D3D12_RANGE MappedRange = renameResource->GetSubresourceRange(0, pReadWriteRange);
+-
+-            if (bNeedsReadbackCopy)
++            pResource->SetCurrentCpuHeap(Subresource, renameResource.get());
++
++            CD3DX12_RANGE ReadRange(0, 0); // Map(DISCARD) is write-only
++
++            if (bNeedsReadbackCopy)
+             {
+                 // Maintain the illusion that this data is read by the CPU directly from the mapped resource.
+                 CDisablePredication DisablePredication(this);
+@@ -5384,7 +5383,7 @@ HRESULT TRANSLATION_API ImmediateContext::ResolveSharedResource(Resource* pResou
+             try {
+                 GetCommandListManager(COMMAND_LIST_TYPE::GRAPHICS)->PrepForCommandQueueSync(); // throws
+             }
+-            catch (RelayHResultError& e)
++            catch (RelayHResultError& e)
+             {
+                 return e.Error();
+             }
+diff --git a/src/PipelineState.cpp b/src/PipelineState.cpp
+index ad0347f..df977f7 100644
+--- a/src/PipelineState.cpp
++++ b/src/PipelineState.cpp
+@@ -94,7 +94,7 @@ namespace D3D12TranslationLayer
+                 {
+                     CreateImpl<Type>();
+                 }
+-                catch (RelayHResultError&) {}
++                catch (RelayHResultError&) {}
+             });
+         }
+         else
+@@ -127,7 +127,7 @@ namespace D3D12TranslationLayer
+ 
+         if (m_pParent->UseRoundTripPSOs())
+         {
+-            RelayComPtr<ID3DBlob> spBlob;
++            RelayComPtr<ID3DBlob> spBlob;
+             ThrowFailure(GetForImmediateUse()->GetCachedBlob(&spBlob)); // throw( _com_error )
+ 
+             if constexpr (Type == e_Draw)
+diff --git a/src/Query.cpp b/src/Query.cpp
+index 7a6833a..db007ee 100644
+--- a/src/Query.cpp
++++ b/src/Query.cpp
+@@ -18,7 +18,7 @@ namespace D3D12TranslationLayer
+         ZeroMemory(m_EndedCommandListID, sizeof(m_EndedCommandListID));
+     }
+ 
+-    Async::~Async()
++    Async::~Async() noexcept
+     {
+         if (m_CurrentState == AsyncState::Begun)
+         {
+@@ -138,7 +138,7 @@ namespace D3D12TranslationLayer
+                     {
+                         m_pParent->SubmitCommandList(commandListType); // throws
+                     }
+-                    catch (RelayHResultError&)
++                    catch (RelayHResultError&)
+                     {
+                         ret = false;
+                     }
+@@ -1173,4 +1173,4 @@ namespace D3D12TranslationLayer
+             PredicateValue ? D3D12_PREDICATION_OP_NOT_EQUAL_ZERO : D3D12_PREDICATION_OP_EQUAL_ZERO
+             );
+     }
+-};
+\ No newline at end of file
++};
+diff --git a/src/Resource.cpp b/src/Resource.cpp
+index 9f1c3ff..4fb0146 100644
+--- a/src/Resource.cpp
++++ b/src/Resource.cpp
+@@ -384,13 +384,13 @@ namespace D3D12TranslationLayer
+ 
+             m_Identity->m_pResidencyHandle = std::unique_ptr<ResidencyManagedObjectWrapper>(new ResidencyManagedObjectWrapper(residencyManager));
+             D3D12_RESOURCE_DESC resourceDesc12 = m_creationArgs.m_desc12;
+-            D3D12_RESOURCE_ALLOCATION_INFO allocInfo = m_pParent->m_pDevice12->GetResourceAllocationInfo(m_pParent->GetNodeMask(), 1, &resourceDesc12);
++            D3D12_RESOURCE_ALLOCATION_INFO allocInfo = RelayD3D12ResourceAllocationInfo(m_pParent->m_pDevice12, m_pParent->GetNodeMask(), 1, &resourceDesc12);
+ 
+             m_Identity->m_pResidencyHandle->Initialize(m_Identity->GetResource(), allocInfo.SizeInBytes, bIsResident);
+         }
+     }
+ 
+-    class SwapChainAssistant : public ID3D12SwapChainAssistant
++    class SwapChainAssistant final : public ID3D12SwapChainAssistant
+     {
+     private: ~SwapChainAssistant() = default;
+     public:
+@@ -404,7 +404,7 @@ namespace D3D12TranslationLayer
+         STDMETHOD(QueryInterface)(REFIID riid, void** ppv)
+         {
+             if (InlineIsEqualGUID(riid, IID_ID3D12SwapChainAssistant) ||
+-                InlineIsEqualUnknown(riid))
++                InlineIsEqualGUID(riid, IID_IUnknown))
+             {
+                 AddRef();
+                 *ppv = this;
+@@ -412,7 +412,11 @@ namespace D3D12TranslationLayer
+             }
+             return E_NOINTERFACE;
+         }
+-        STDMETHOD_(LUID, GetLUID)() { return m_LUID; }
++#ifdef __MINGW32__
++        STDMETHOD_(LUID*, GetLUID)(LUID* result) { *result = m_LUID; return result; }
++#else
++        STDMETHOD_(LUID, GetLUID)() { return m_LUID; }
++#endif
+         STDMETHOD(GetSwapChainObject)(REFIID, void**) { return E_NOTIMPL; }
+         STDMETHOD(GetCurrentResourceAndCommandQueue)(REFIID, void**, REFIID, void**) { return E_NOTIMPL; }
+         STDMETHOD(InsertImplicitSync)() { return E_NOTIMPL; }
+@@ -1082,7 +1086,7 @@ namespace D3D12TranslationLayer
+             pQueue->Signal(m_UnwrapUnderlyingResidencyDeferredWait.fence->Get(), m_UnwrapUnderlyingResidencyDeferredWait.value);
+             m_ResourceDeferredWaits.push_back(m_UnwrapUnderlyingResidencyDeferredWait);
+         }
+-        catch( RelayHResultError& hrEx )
++        catch( RelayHResultError& hrEx )
+         {
+             return hrEx.Error();
+         }
+diff --git a/src/ResourceState.cpp b/src/ResourceState.cpp
+index 07fc910..52d49bd 100644
+--- a/src/ResourceState.cpp
++++ b/src/ResourceState.cpp
+@@ -930,18 +930,18 @@ namespace D3D12TranslationLayer
+             this->SubmitResourceBarriers(barriers.data(), (UINT)barriers.size(), ppManagers[(UINT)type]);
+         };
+         auto SubmitCmdListImpl =
+-            [this, ppManagers](COMMAND_LIST_TYPE type)
++            [ppManagers](COMMAND_LIST_TYPE type)
+         {
+             // Note: Command list may not have pending commands, but queue may have commands which need to have a signal inserted.
+             ppManagers[(UINT)type]->PrepForCommandQueueSync(); // throws
+         };
+         auto HasCommandsImpl =
+-            [this, ppManagers](COMMAND_LIST_TYPE type)
++            [ppManagers](COMMAND_LIST_TYPE type)
+         {
+             return ppManagers[(UINT)type]->ShouldFlushForResourceAcquire();
+         };
+         auto GetCurrentFenceImpl =
+-            [this, ppManagers](COMMAND_LIST_TYPE type)
++            [ppManagers](COMMAND_LIST_TYPE type)
+         {
+             return ppManagers[(UINT)type]->GetCommandListID();
+         };
+@@ -966,7 +966,7 @@ namespace D3D12TranslationLayer
+             m_ResourceDeferredWaits.clear();
+         };
+         auto InsertQueueWaitImpl =
+-            [this, ppManagers](UINT64 value, COMMAND_LIST_TYPE src, COMMAND_LIST_TYPE dst)
++            [ppManagers](UINT64 value, COMMAND_LIST_TYPE src, COMMAND_LIST_TYPE dst)
+         {
+             if(src == dst || value <= ppManagers[(UINT)src]->GetFence()->GetCompletedValue())
+             {
+diff --git a/src/RootSignature.cpp b/src/RootSignature.cpp
+index 3d1d378..7b0d92d 100644
+--- a/src/RootSignature.cpp
++++ b/src/RootSignature.cpp
+@@ -8,7 +8,7 @@ namespace D3D12TranslationLayer
+ {
+     void RootSignatureBase::Create(D3D12_VERSIONED_ROOT_SIGNATURE_DESC const& rootDesc) noexcept(false)
+     {
+-        RelayComPtr<ID3DBlob> spBlob;
++        RelayComPtr<ID3DBlob> spBlob;
+ 
+         ThrowFailure(D3D12SerializeVersionedRootSignature(&rootDesc, &spBlob, NULL));
+ 
+diff --git a/src/Shader.cpp b/src/Shader.cpp
+index 4982331..3203dd3 100644
+--- a/src/Shader.cpp
++++ b/src/Shader.cpp
+@@ -5,7 +5,7 @@
+ 
+ namespace D3D12TranslationLayer
+ {
+-    Shader::Shader(ImmediateContext* pParent, std::unique_ptr<BYTE[]> DXBC, RelayComHeapPtr<void>& DXIL, SIZE_T dxilSize, SShaderDecls PrecomputedDecls)
++    Shader::Shader(ImmediateContext* pParent, std::unique_ptr<BYTE[]> DXBC, RelayComHeapPtr<void>& DXIL, SIZE_T dxilSize, SShaderDecls PrecomputedDecls)
+         : DeviceChild(pParent)
+         , SShaderDecls(std::move(PrecomputedDecls))
+         , m_ByteCode(std::move(DXBC))
+diff --git a/src/ShaderParser.cpp b/src/ShaderParser.cpp
+index f61a362..daf740a 100644
+--- a/src/ShaderParser.cpp
++++ b/src/ShaderParser.cpp
+@@ -1,10 +1,8 @@
+ // Copyright (c) Microsoft Corporation.
+ // Licensed under the MIT License.
+-#pragma once
+-
+-#include "pch.h"
+-#include <dxbcutils.h>
+-#include <shaderbinary.h>
++#include "pch.h"
++#include <DXBCUtils.h>
++#include <ShaderBinary.h>
+ 
+ namespace D3D12TranslationLayer
+ {
+diff --git a/src/SharedResourceHelpers.cpp b/src/SharedResourceHelpers.cpp
+index d5453a2..d98c875 100644
+--- a/src/SharedResourceHelpers.cpp
++++ b/src/SharedResourceHelpers.cpp
+@@ -12,7 +12,7 @@ namespace D3D12TranslationLayer
+ {
+     SharedResourceLocalHandle TRANSLATION_API SharedResourceHelpers::CreateKMTHandle(_In_ HANDLE resourceHandle)
+     {
+-        RelayComPtr<IUnknown> spResource;
++        RelayComPtr<IUnknown> spResource;
+         ThrowFailure(m_ImmCtx.m_pDevice12->OpenSharedHandle(resourceHandle, IID_PPV_ARGS(&spResource)));
+         UINT handle = GetHandleForResource(spResource);
+ 
+@@ -152,7 +152,7 @@ namespace D3D12TranslationLayer
+         UINT CPUAccessFlags = 0;
+         if (HeapProps.Type != D3D12_HEAP_TYPE_CUSTOM)
+         {
+-            HeapProps = pDevice->GetCustomHeapProperties(HeapProps.CreationNodeMask, HeapProps.Type);
++            HeapProps = RelayD3D12CustomHeapProperties(pDevice, HeapProps.CreationNodeMask, HeapProps.Type);
+         }
+         switch (HeapProps.CPUPageProperty)
+         {
+@@ -170,12 +170,12 @@ namespace D3D12TranslationLayer
+         }
+ 
+         ZeroMemory(pResourceInfo, sizeof(*pResourceInfo));
+-        RelayComPtr<IUnknown> spUnknown = QueryResourceFromKMTHandle(handle);
++        RelayComPtr<IUnknown> spUnknown = QueryResourceFromKMTHandle(handle);
+         bool bShared = false;
+         ID3D12Object* pObject = nullptr;
+ 
+         // First, check for tile pools
+-        RelayComPtr<ID3D12Heap> spHeap;
++        RelayComPtr<ID3D12Heap> spHeap;
+         if (SUCCEEDED(spUnknown->QueryInterface(&spHeap)))
+         {
+             // Shared tile pools not supported on tier 1
+@@ -185,7 +185,7 @@ namespace D3D12TranslationLayer
+                 ThrowFailure(E_INVALIDARG);
+             }
+ 
+-            pResourceInfo->TiledPool.m_HeapDesc = spHeap->GetDesc();
++            pResourceInfo->TiledPool.m_HeapDesc = RelayD3D12HeapDesc(spHeap.get());
+             pResourceInfo->m_Type = TiledPoolType;
+ 
+             bShared = (pResourceInfo->TiledPool.m_HeapDesc.Flags & D3D12_HEAP_FLAG_SHARED) != 0;
+@@ -193,7 +193,7 @@ namespace D3D12TranslationLayer
+         }
+ 
+         // Not a tile pool, must be a resource
+-        RelayComPtr<ID3D12Resource1> spResource;
++        RelayComPtr<ID3D12Resource1> spResource;
+         if (SUCCEEDED(spUnknown->QueryInterface(&spResource)))
+         {
+             D3D12_HEAP_FLAGS MiscFlags;
+@@ -239,7 +239,7 @@ namespace D3D12TranslationLayer
+ 
+         if (spResource)
+         {
+-            D3D12_RESOURCE_DESC Desc = spResource->GetDesc();
++            D3D12_RESOURCE_DESC Desc = RelayD3D12ResourceDesc(spResource.get());
+             D3D11_RESOURCE_FLAGS Flags = { };
+             D3D12_HEAP_FLAGS HeapFlags = D3D12_HEAP_FLAG_NONE;
+             D3D12_HEAP_PROPERTIES HeapProps = { };
+@@ -298,7 +298,7 @@ namespace D3D12TranslationLayer
+                 Flags.BindFlags = ConvertPossibleBindFlags(Desc, HeapFlags, formatSupport, m_CreationFlags.SupportDisplayableTextures);
+ 
+                 {
+-                    RelayComPtr<ID3D12ProtectedResourceSession> spProtectedResourceSession;
++                    RelayComPtr<ID3D12ProtectedResourceSession> spProtectedResourceSession;
+                     if (SUCCEEDED(spResource->GetProtectedResourceSession(IID_PPV_ARGS(&spProtectedResourceSession))))
+                     {
+                         Flags.MiscFlags |= D3D11_RESOURCE_MISC_HW_PROTECTED;
+@@ -395,4 +395,4 @@ namespace D3D12TranslationLayer
+         DetachKMTHandle(kmtHandle);
+         return spResource;
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/src/VideoDecode.cpp b/src/VideoDecode.cpp
+index 4cab32e..0ffd1cf 100644
+--- a/src/VideoDecode.cpp
++++ b/src/VideoDecode.cpp
+@@ -230,7 +230,7 @@ namespace D3D12TranslationLayer
+         try {
+             m_pParent->Flush(COMMAND_LIST_TYPE_VIDEO_DECODE_MASK); // throws
+         }
+-        catch (RelayHResultError&)
++        catch (RelayHResultError&)
+         {
+             // success = false;
+         }
+@@ -254,7 +254,7 @@ namespace D3D12TranslationLayer
+             ThrowFailure(E_INVALIDARG);
+         }
+ 
+-        D3D12_RESOURCE_DESC outputResourceDesc = pTextureArray->GetDesc();
++        D3D12_RESOURCE_DESC outputResourceDesc = RelayD3D12ResourceDesc(pTextureArray);
+         VIDEO_DECODE_PROFILE_BIT_DEPTH resourceBitDepth = GetFormatBitDepth(outputResourceDesc.Format);
+ 
+         if (m_decodeFormat != outputResourceDesc.Format)
+@@ -780,10 +780,10 @@ namespace D3D12TranslationLayer
+ 
+             m_referenceDataManager.TransitionReferenceOnlyOutput(d3d12OutputArguments.ConversionArguments.pReferenceTexture2D, d3d12OutputArguments.ConversionArguments.ReferenceSubresource);
+ 
+-            const D3D12_RESOURCE_DESC &descReference = d3d12OutputArguments.ConversionArguments.pReferenceTexture2D->GetDesc();
++            const D3D12_RESOURCE_DESC descReference = RelayD3D12ResourceDesc(d3d12OutputArguments.ConversionArguments.pReferenceTexture2D);
+             d3d12OutputArguments.ConversionArguments.DecodeColorSpace = CDXGIColorSpaceHelper::ConvertFromLegacyColorSpace(!CD3D11FormatHelper::YUV(descReference.Format), CD3D11FormatHelper::GetBitsPerUnit(descReference.Format), /* StudioRGB= */ false, /* P709= */ true, /* StudioYUV= */ true);
+ 
+-            const D3D12_RESOURCE_DESC &descOutput = d3d12OutputArguments.pOutputTexture2D->GetDesc();
++            const D3D12_RESOURCE_DESC descOutput = RelayD3D12ResourceDesc(d3d12OutputArguments.pOutputTexture2D);
+             d3d12OutputArguments.ConversionArguments.OutputColorSpace = CDXGIColorSpaceHelper::ConvertFromLegacyColorSpace(!CD3D11FormatHelper::YUV(descOutput.Format), CD3D11FormatHelper::GetBitsPerUnit(descOutput.Format), /* StudioRGB= */ false, /* P709= */ true, /* StudioYUV= */ true);
+ 
+             const D3D12_VIDEO_DECODER_HEAP_DESC& HeapDesc = m_spCurrentDecoderHeap->GetDesc();
+@@ -1528,4 +1528,4 @@ namespace D3D12TranslationLayer
+ 
+         return S_OK;
+     }
+-};
+\ No newline at end of file
++};
+diff --git a/src/VideoDecodeStatistics.cpp b/src/VideoDecodeStatistics.cpp
+index 9bb0c6c..10be183 100644
+--- a/src/VideoDecodeStatistics.cpp
++++ b/src/VideoDecodeStatistics.cpp
+@@ -129,9 +129,10 @@ namespace D3D12TranslationLayer
+     }
+ 
+     //----------------------------------------------------------------------------------------------------------------------------------
+-    void VideoDecodeStatistics::ReadAvailableData(ID3D12VideoDecoder* pVideoDecoder, VIDEO_DECODE_PROFILE_TYPE profileType, BYTE* pData, SIZE_T DataSize)
+-    {
+-        // From the H.264 DXVA spec. HEVC and VPx specs have similar language.
++    void VideoDecodeStatistics::ReadAvailableData(ID3D12VideoDecoder* pVideoDecoder, VIDEO_DECODE_PROFILE_TYPE profileType, BYTE* pData, SIZE_T DataSize)
++    {
++        (void)pVideoDecoder;
++        // From the H.264 DXVA spec. HEVC and VPx specs have similar language.
+         //
+         // When the accelerator receives the Execute call for status reporting, it should not stall operation to wait 
+         // for any prior operations to complete. Instead, it should immediately provide the available status information 
+@@ -289,4 +290,4 @@ namespace D3D12TranslationLayer
+         return sizeof(D3D12_QUERY_DATA_VIDEO_DECODE_STATISTICS) * Index;
+     }
+ 
+-}; // namespace D3D12TranslationLayer
+\ No newline at end of file
++}; // namespace D3D12TranslationLayer
+diff --git a/src/VideoProcess.cpp b/src/VideoProcess.cpp
+index c62e9a4..7369f21 100644
+--- a/src/VideoProcess.cpp
++++ b/src/VideoProcess.cpp
+@@ -43,7 +43,7 @@ namespace D3D12TranslationLayer
+         {
+             m_pParent->Flush(COMMAND_LIST_TYPE_VIDEO_PROCESS_MASK); //throws
+         }
+-        catch (RelayHResultError&)
++        catch (RelayHResultError&)
+         {
+             // success = false;
+         }
+@@ -274,7 +274,7 @@ namespace D3D12TranslationLayer
+             }
+         }
+         {
+-            const D3D12_RESOURCE_DESC &desc = D3D12InputStreamArguments[stream].InputStream[view].pTexture2D->GetDesc();
++            const D3D12_RESOURCE_DESC desc = RelayD3D12ResourceDesc(D3D12InputStreamArguments[stream].InputStream[view].pTexture2D);
+             D3D12_VIDEO_PROCESS_INPUT_STREAM_DESC& inputDesc = D3D12InputStreamDesc[stream];
+ 
+             inputDesc.Format = desc.Format;
+@@ -302,7 +302,7 @@ namespace D3D12TranslationLayer
+         D3D12InputStreamArguments[stream].Transform.Orientation = orientation;
+         D3D12InputStreamDesc[stream].EnableOrientation = (orientation == D3D12_VIDEO_PROCESS_ORIENTATION_DEFAULT) ? FALSE : TRUE;
+ 
+-        D3D12_RESOURCE_DESC desc = D3D12InputStreamArguments[stream].InputStream[0].pTexture2D->GetDesc();
++        D3D12_RESOURCE_DESC desc = RelayD3D12ResourceDesc(D3D12InputStreamArguments[stream].InputStream[0].pTexture2D);
+ 
+         if (!StreamInfo[stream].EnableSourceRect)
+         {
+@@ -399,7 +399,7 @@ namespace D3D12TranslationLayer
+             D3D12OutputStreamArguments.OutputStream[view].Subresource = CurrentFrame[view].SubresourceSubset.MinSubresource();
+         }
+ 
+-        const D3D12_RESOURCE_DESC &desc = D3D12OutputStreamArguments.OutputStream[0].pTexture2D->GetDesc();
++        const D3D12_RESOURCE_DESC desc = RelayD3D12ResourceDesc(D3D12OutputStreamArguments.OutputStream[0].pTexture2D);
+         D3D12_VIDEO_PROCESS_OUTPUT_STREAM_DESC& outputDesc = D3D12OutputStreamDesc;
+ 
+         outputDesc.Format = desc.Format;
+@@ -433,7 +433,7 @@ namespace D3D12TranslationLayer
+ 
+     void VIDEO_PROCESS_OUTPUT_ARGUMENTS::PrepareTransform()
+     {
+-        D3D12_RESOURCE_DESC desc = D3D12OutputStreamArguments.OutputStream[0].pTexture2D->GetDesc();
++        D3D12_RESOURCE_DESC desc = RelayD3D12ResourceDesc(D3D12OutputStreamArguments.OutputStream[0].pTexture2D);
+         if (!EnableTargetRect)
+         {
+             // if target rectangle is not set, entire output surface according to DX11 spec
+@@ -489,7 +489,8 @@ namespace D3D12TranslationLayer
+                         D3D12_VIDEO_FRAME_STEREO_FORMAT_SEPARATE : D3D12_VIDEO_FRAME_STEREO_FORMAT_NONE,
+                     pOutputArguments->D3D12OutputStreamDesc.FrameRate,
+                 };
+-                CComQIPtr<ID3D12VideoDevice> spVideoDevice = m_pParent->m_pDevice12.get();
++                RelayComPtr<ID3D12VideoDevice> spVideoDevice;
++                ThrowFailure(m_pParent->m_pDevice12->QueryInterface(IID_PPV_ARGS(&spVideoDevice)));
+                 bNeedToDeinterlace =
+                     FAILED(spVideoDevice->CheckFeatureSupport(D3D12_FEATURE_VIDEO_PROCESS_SUPPORT, &VPSupport, sizeof(VPSupport))) ||
+                     (VPSupport.DeinterlaceSupport & D3D12_VIDEO_PROCESS_DEINTERLACE_FLAG_BOB) == D3D12_VIDEO_PROCESS_DEINTERLACE_FLAG_NONE;
+@@ -724,4 +725,4 @@ namespace D3D12TranslationLayer
+         m_pParent->PostRender(COMMAND_LIST_TYPE::GRAPHICS, e_GraphicsStateDirty);
+     }
+ 
+-};
+\ No newline at end of file
++};

@@ -105,7 +105,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install --yes gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \
-            wine
+            cmake curl unzip wine
           # Wine refuses to create a prefix under a directory it does not own,
           # and the prefix stays out of the workspace so it is never packaged
           # or uploaded.
@@ -166,6 +166,46 @@ jobs:
             echo 'the SDK TraceLogging header reappeared in the prepared tree' >&2
             exit 1
           fi
+
+      - name: Build every D3D12TranslationLayer translation unit
+        run: |
+          set -euo pipefail
+          worktree="$RUNNER_TEMP/dtl-port-source"
+          overlay="$RUNNER_TEMP/windows-sdk-overlay"
+          build="$RUNNER_TEMP/dtl-build"
+          scripts/prepare-windows-sdk-overlay.sh "$overlay"
+          cmake -S "$worktree" -B "$build" -G 'Unix Makefiles' \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
+            -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DDTL_DIRECTX_HEADERS_SOURCE_DIR="$GITHUB_WORKSPACE/third_party/DirectX-Headers" \
+            -DDTL_WINDOWS_SDK_OVERLAY_DIR="$overlay" \
+            -DDTL_ENABLE_WDK_DXBC=ON
+          cmake --build "$build" --parallel 2
+          python3 - "$build" <<'PY'
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          build = Path(sys.argv[1])
+          expected = {
+              build / "src/libd3d12translationlayer.a": 31,
+              build / "src/libd3d12translationlayer_wdk.a": 4,
+              build / "DxbcParser/libdxbcparser.a": 2,
+          }
+          for archive, count in expected.items():
+              members = subprocess.check_output(
+                  ["x86_64-w64-mingw32-ar", "t", archive], text=True
+              ).splitlines()
+              if len(members) != count or len(set(members)) != count:
+                  raise SystemExit(
+                      f"{archive}: {len(members)} members ({len(set(members))} unique), "
+                      f"expected {count}"
+                  )
+          print("DTL archive translation-unit manifest: ok")
+          PY
 
       - name: Compile D3D11-on-12 conformance probe
         run: |

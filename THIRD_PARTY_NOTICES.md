@@ -18,6 +18,8 @@ Apple D3DMetal is proprietary and is not a repository dependency or a
 redistributed artifact. Users import their own copy after installing the GPL
 runtime.
 
-No Windows SDK or WDK headers may be added to this repository. Missing DDI ABI
-declarations must be independently authored from public specifications with
-documented provenance.
+No Windows SDK or WDK headers may be added to this repository. CI may consume
+them from a separately installed, license-accepted SDK or EWDK, but neither the
+headers nor that installation are packaged as build artifacts. Missing DDI ABI
+declarations intended for redistribution must be independently authored from
+public specifications with documented provenance.
