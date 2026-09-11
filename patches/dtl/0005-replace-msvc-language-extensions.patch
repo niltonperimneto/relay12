@@ -1,0 +1,39 @@
+From: relay12 contributors
+Subject: [PATCH] dtl: replace isolated MSVC language extensions
+
+MinGW-w64 GCC does not implement MSVC's __declspec(noinline) or __uuidof
+language extensions. Use GCC's namespaced noinline attribute for the one
+out-of-line allocation helper, and compare QueryInterface requests against
+the public IID constant emitted by d3d12.h.
+
+The changes preserve both contracts: reserve_contiguous_alloc remains
+non-inlined, and SwapChainAssistant still recognizes only its own interface
+and IUnknown. They also avoid adding compatibility macros for two isolated
+call sites.
+---
+diff --git a/include/segmented_stack.h b/include/segmented_stack.h
+index 0260d19..6d10fc2 100644
+--- a/include/segmented_stack.h
++++ b/include/segmented_stack.h
+@@ -290,7 +290,7 @@ inline auto segmented_stack< T, segment_size, unary >::append_contiguous_manuall
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+ template< class T, size_t segment_size, typename unary >
+-__declspec(noinline) inline bool segmented_stack< T, segment_size, unary >::reserve_contiguous_alloc(size_type /*s*/) noexcept
++[[gnu::noinline]] inline bool segmented_stack< T, segment_size, unary >::reserve_contiguous_alloc(size_type /*s*/) noexcept
+ {
+     try
+     {
+diff --git a/src/Resource.cpp b/src/Resource.cpp
+index 0f48943..a481541 100644
+--- a/src/Resource.cpp
++++ b/src/Resource.cpp
+@@ -403,7 +403,7 @@ namespace D3D12TranslationLayer
+         STDMETHOD_(ULONG, Release)() { ULONG ret = InterlockedDecrement(&m_RefCount); if (ret == 0) delete this; return ret; }
+         STDMETHOD(QueryInterface)(REFIID riid, void** ppv)
+         {
+-            if (InlineIsEqualGUID(riid, __uuidof(ID3D12SwapChainAssistant)) ||
++            if (InlineIsEqualGUID(riid, IID_ID3D12SwapChainAssistant) ||
+                 InlineIsEqualUnknown(riid))
+             {
+                 AddRef();

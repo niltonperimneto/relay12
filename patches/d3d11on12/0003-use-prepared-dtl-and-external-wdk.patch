@@ -1,0 +1,90 @@
+From: relay12 contributors
+Subject: [PATCH] d3d11on12: consume prepared DTL and external WDK
+
+Keep the pinned, patched translation layer under the parent build's control
+and accept WDK include roots supplied by the build environment. The headers
+remain external inputs and are never copied into the source or artifact.
+---
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -6,4 +6,14 @@ project(d3d11on12)
+ set(CMAKE_CXX_STANDARD 17)
+ set(CMAKE_CXX_STANDARD_REQUIRED ON)
+ 
++set(D3D11ON12_DTL_SOURCE_DIR "" CACHE PATH
++    "Path to a prepared D3D12TranslationLayer source tree")
++set(D3D11ON12_WINDOWS_KITS_INCLUDE_DIRS "" CACHE STRING
++    "Semicolon-separated external Windows SDK/WDK include directories")
++if(NOT D3D11ON12_DTL_SOURCE_DIR)
++    message(FATAL_ERROR "D3D11ON12_DTL_SOURCE_DIR is required")
++endif()
++
++add_subdirectory("${D3D11ON12_DTL_SOURCE_DIR}"
++    "${CMAKE_CURRENT_BINARY_DIR}/D3D12TranslationLayer")
+ add_subdirectory(src)
+diff --git a/include/pch.hpp b/include/pch.hpp
+--- a/include/pch.hpp
++++ b/include/pch.hpp
+@@ -8,6 +8,5 @@
+ #include <d3dx11on12.h>
+ 
+ #include "SharedResourceHelpers.hpp"
+-#include "relay_ownership.hpp"
+ 
+ #ifdef WIN32_LEAN_AND_MEAN
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -1,7 +1,6 @@
+ # Copyright (c) Microsoft Corporation.
+ # Licensed under the MIT License.
+ cmake_minimum_required(VERSION 3.14)
+-include(FetchContent)
+ 
+ file(GLOB SRC CONFIGURE_DEPENDS *.cpp)
+ file(GLOB INC ../include/*.h ../include/*.hpp ../interface/*.h *.h *.hpp)
+@@ -15,18 +14,33 @@ if (CMAKE_VERSION VERSION_GREATER 3.16)
+ 	target_precompile_headers(d3d11on12 PRIVATE ../include/pch.hpp)
+ endif()
+ 
+-FetchContent_Declare(
+-    d3d12translationlayer
+-    GIT_REPOSITORY https://github.com/microsoft/D3D12TranslationLayer.git
+-    GIT_TAG        master
+-)
+-FetchContent_MakeAvailable(d3d12translationlayer)
+-
+-target_link_libraries(d3d11on12 d3d12translationlayer_wdk)
++target_link_libraries(d3d11on12 d3d12translationlayer_wdk ole32)
+ target_include_directories(d3d11on12
+     PRIVATE ../include
+     PRIVATE ../external
+     PUBLIC ../interface
+     PRIVATE ./)
++target_include_directories(d3d11on12 SYSTEM AFTER PRIVATE
++    ${D3D11ON12_WINDOWS_KITS_INCLUDE_DIRS})
++if(NOT MSVC)
++    target_compile_options(d3d11on12 PRIVATE
++        -fms-extensions -Wall -Wextra -Werror
++        -Wno-missing-braces -Wno-missing-field-initializers
++        -Wno-sign-compare -Wno-switch -Wno-reorder
++        -Wno-pessimizing-move)
++    target_link_options(d3d11on12 PRIVATE
++        -static-libgcc -static-libstdc++)
++endif()
++if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
++    target_compile_options(d3d11on12 PRIVATE
++        -Wno-defaulted-function-deleted
++        -Wno-nested-anon-types -Wno-microsoft-anon-tag
++        -Wno-gnu-anonymous-struct -Wno-c2y-extensions
++        -Wno-extra-semi -Wno-vla-cxx-extension
++        -Wno-single-bit-bitfield-constant-conversion
++        -Wno-assume -Wno-nontrivial-memcall
++        -Wno-unused-const-variable
++        -Wno-deprecated-copy-with-user-provided-copy)
++endif()
+ source_group(Inlines FILES ${INL})
+ source_group("Header Files\\External" FILES ${EXTERNAL_INC})
+-- 
+2.51.0

@@ -15,10 +15,8 @@
       "occurrences": 0
     },
     "cmake_msvc_linkage": {
-      "files": {
-        "src/CMakeLists.txt": 7
-      },
-      "occurrences": 7
+      "files": {},
+      "occurrences": 0
     },
     "com_error": {
       "files": {},
@@ -38,16 +36,12 @@
       "occurrences": 25
     },
     "msvc_declspec": {
-      "files": {
-        "include/segmented_stack.h": 1
-      },
-      "occurrences": 1
+      "files": {},
+      "occurrences": 0
     },
     "msvc_uuidof": {
-      "files": {
-        "src/Resource.cpp": 1
-      },
-      "occurrences": 1
+      "files": {},
+      "occurrences": 0
     },
     "tracelogging_events": {
       "files": {
@@ -70,9 +64,10 @@
       "files": {
         "DxbcParser/include/DXBCUtils.h": 1,
         "include/D3D12TranslationLayerDependencyIncludes.h": 1,
+        "include/ShaderBinary.h": 1,
         "include/SwapChainHelper.hpp": 1
       },
-      "occurrences": 3
+      "occurrences": 4
     }
   },
   "revision": "b68ebbc6dab4195f7d4819ea78f2a60c985b853a",
