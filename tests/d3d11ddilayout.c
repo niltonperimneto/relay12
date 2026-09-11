@@ -1300,6 +1300,20 @@ static VOID stub_resource_copy(D3D10DDI_HDEVICE hDevice,
     ++command_list_calls;
 }
 
+static VOID stub_query_scanout_caps(D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRESOURCE hResource, UINT subresource,
+        D3DDDI_VIDEO_PRESENT_SOURCE_ID vidpn_source_id, UINT plane_index,
+        D3DWDDM2_6DDI_SCANOUT_FLAGS *flags)
+{
+    (void)hDevice;
+    (void)hResource;
+    (void)subresource;
+    (void)vidpn_source_id;
+    (void)plane_index;
+    *flags = D3DWDDM2_6DDI_SCANOUT_FLAG_NONE;
+    ++command_list_calls;
+}
+
 static VOID stub_set_blend_state(D3D10DDI_HDEVICE hDevice,
         D3D10DDI_HBLENDSTATE state, const FLOAT blend_factor[4],
         UINT sample_mask)
@@ -1698,6 +1712,7 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     funcs->pfnDynamicConstantBufferUnmap = stub_resource_unmap;
     funcs->pfnDynamicResourceUnmap = stub_resource_unmap;
     funcs->pfnResourceCopy = stub_resource_copy;
+    funcs->pfnQueryScanoutCaps = stub_query_scanout_caps;
 
     command_list_calls = 0;
     CHECK_STACK("PFND3D11DDI_ABANDONCOMMANDLIST",
@@ -1875,14 +1890,28 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     CHECK_STACK("PFND3D10DDI_RESOURCECOPY",
             funcs->pfnResourceCopy(device, vertex_buffer, vertex_buffer));
 
-    if (command_list_calls == 72 && handle_count == 1)
+    {
+        D3DWDDM2_6DDI_SCANOUT_FLAGS scanout_flags =
+                D3DWDDM2_6DDI_SCANOUT_FLAG_UNPREDICTABLE_TIMING;
+        CHECK_STACK("PFND3DWDDM2_6DDI_QUERY_SCANOUT_CAPS",
+                funcs->pfnQueryScanoutCaps(device, vertex_buffer, 0, 0, 0,
+                        &scanout_flags));
+        if (scanout_flags != D3DWDDM2_6DDI_SCANOUT_FLAG_NONE)
+        {
+            printf("[fail] query-scanout-caps did not write its output\n");
+            ++failures;
+        }
+    }
+
+    if (command_list_calls == 73 && handle_count == 1)
     {
         printf("[ ok ] the promoted command-list, deferred-context, resource, state, view, shader, "
                 "and binding/draw slots are callable as declared\n");
     }
     else
     {
-        printf("[fail] %d of 72 promoted command/deferred/resource/state/view/shader/draw slots "
+        printf("[fail] %d of 73 promoted command/deferred/resource/state/"
+                "view/shader/draw/scanout slots "
                 "reached their implementation\n", command_list_calls);
         ++failures;
     }

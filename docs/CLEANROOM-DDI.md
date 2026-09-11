@@ -286,7 +286,7 @@ worth carrying forward.
 nothing in the ABI, can distinguish a host that implements one family with the
 other's order, so the parameter names in the declarations are load-bearing.
 
-**Two slots have no published signature.** The structure page names
+**Two core-layer callback slots have no published signature.** The structure page names
 `PFND3DWDDM2_2DDI_SHADERCACHE_GET_VALUE_CB` and
 `PFND3DWDDM2_6DDI_QUERY_SCANOUT_CAPS_CB` but prints no link for either where
 it links every other member, and both surfaces return 404. Under rule 3 that
@@ -295,6 +295,13 @@ halts authoring for those two rather than the group: they take
 exactly and cannot be called without an explicit cast. Note the neighbouring
 `store_value` and `addref_release` pages *do* exist, so this is a gap in the
 published set rather than a whole undocumented feature.
+
+The similarly named `PFND3DWDDM2_6DDI_QUERY_SCANOUT_CAPS` (without `_CB`) is
+a different entry point in the driver-filled WDDM 2.6 device table. Its public
+function and scanout-flag pages are available, so that device slot is now
+strongly typed and callable. The shader-cache hash page is also available and
+its sixteen-byte structure is authored, unblocking part of the eventual GET
+callback work without guessing the callback's still-unpublished parameters.
 
 **Two spellings that look like mistakes and are not.**
 `pfnDisableDeferredStagingResourceDestruction` carries no `Cb` suffix, and

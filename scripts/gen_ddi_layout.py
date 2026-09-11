@@ -450,6 +450,14 @@ _SRV_ARM_TYPES = [
     ("BufferEx", BUFFEREX_SRV),
 ]
 
+# Group: shader-cache hash
+# Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3dwddm2_2ddi_shadercache_hash
+# Retrieved: 2026-09-11
+SHADERCACHE_HASH = Struct(
+    "D3DWDDM2_2DDI_SHADERCACHE_HASH",
+    [Field("Hash", "BYTE[16]", 16, 1)],
+)
+
 _SRV_ARM_FIELDS = [
     Field(name, arm.name, arm.walk()[1], arm.walk()[2])
     for name, arm in _SRV_ARM_TYPES
@@ -1167,6 +1175,7 @@ PROMOTED_SLOTS = {
     "PFND3D10DDI_SETBLENDSTATE",
     "PFND3D10DDI_SETDEPTHSTENCILSTATE",
     "PFND3D10DDI_SETRASTERIZERSTATE",
+    "PFND3DWDDM2_6DDI_QUERY_SCANOUT_CAPS",
 }
 
 if not PROMOTED_SLOTS <= {type_name for _, type_name in DEVICEFUNC_SLOTS}:
@@ -1187,6 +1196,7 @@ if len({type_name for _, type_name in DEVICEFUNC_SLOTS}) != 138:
     )
 
 GROUPS = HANDLES + [
+    SHADERCACHE_HASH,
     ADAPTERFUNCS,
     ADAPTERFUNCS_2,
     OPENADAPTER,
