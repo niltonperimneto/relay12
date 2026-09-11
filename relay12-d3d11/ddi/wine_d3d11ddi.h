@@ -840,8 +840,9 @@ WINE_DDI_STATIC_ASSERT(
  * implements one family with the other's order.  The parameter names below
  * are therefore load-bearing documentation rather than decoration.
  *
- * Two slots are declared without a signature.  The structure page names their
- * types but the public set contains no page for either
+ * Two core-layer callback slots are declared without a signature.  The
+ * structure page names their types but the public set contains no page for
+ * either
  * PFND3DWDDM2_2DDI_SHADERCACHE_GET_VALUE_CB or
  * PFND3DWDDM2_6DDI_QUERY_SCANOUT_CAPS_CB: both surfaces return 404, and the
  * structure page prints no link for them where it links every other member.
@@ -874,7 +875,22 @@ WINE_DDI_ASSERT_ALIGN(D3DWDDM2_2DDI_HRTCACHESESSION, 8);
 WINE_DDI_ASSERT_FIELD(D3DWDDM2_2DDI_HRTCACHESESSION, handle, 0);
 WINE_DDI_ASSERT_FIELD_SIZE(D3DWDDM2_2DDI_HRTCACHESESSION, handle, 8);
 
-typedef struct D3DWDDM2_2DDI_SHADERCACHE_HASH D3DWDDM2_2DDI_SHADERCACHE_HASH;
+/*
+ * Group: shader-cache hash
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3dwddm2_2ddi_shadercache_hash
+ * Source mirror: https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs-ddi/staging/wdk-ddi-src/content/d3d10umddi/ns-d3d10umddi-d3dwddm2_2ddi_shadercache_hash.md
+ * Retrieved: 2026-09-11
+ */
+typedef struct D3DWDDM2_2DDI_SHADERCACHE_HASH
+{
+    BYTE Hash[16];
+} D3DWDDM2_2DDI_SHADERCACHE_HASH;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3DWDDM2_2DDI_SHADERCACHE_HASH);
+WINE_DDI_ASSERT_SIZE(D3DWDDM2_2DDI_SHADERCACHE_HASH, 16);
+WINE_DDI_ASSERT_ALIGN(D3DWDDM2_2DDI_SHADERCACHE_HASH, 1);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_2DDI_SHADERCACHE_HASH, Hash, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3DWDDM2_2DDI_SHADERCACHE_HASH, Hash, 16);
 typedef struct _D3DDDICB_CREATECONTEXT D3DDDICB_CREATECONTEXT;
 typedef struct _D3DDDICB_CREATECONTEXTVIRTUAL D3DDDICB_CREATECONTEXTVIRTUAL;
 
@@ -2502,7 +2518,31 @@ typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_2DDI_CALCPRIVATE_SHADERCACHE_
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_2DDI_CREATE_SHADERCACHE_SESSION;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_2DDI_DESTROY_SHADERCACHE_SESSION;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_2DDI_SET_SHADERCACHE_SESSION;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_6DDI_QUERY_SCANOUT_CAPS;
+/*
+ * Group: WDDM 2.6 scanout capability query
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3dwddm2_6ddi_query_scanout_caps
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ne-d3d10umddi-d3dwddm2_6ddi_scanout_flags
+ * Source mirror: https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs-ddi/staging/wdk-ddi-src/content/d3d10umddi/nc-d3d10umddi-pfnd3dwddm2_6ddi_query_scanout_caps.md
+ * Source mirror: https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs-ddi/staging/wdk-ddi-src/content/d3d10umddi/ne-d3d10umddi-d3dwddm2_6ddi_scanout_flags.md
+ * Retrieved: 2026-09-11
+ */
+typedef UINT D3DDDI_VIDEO_PRESENT_SOURCE_ID;
+
+typedef enum D3DWDDM2_6DDI_SCANOUT_FLAGS
+{
+    D3DWDDM2_6DDI_SCANOUT_FLAG_NONE,
+    D3DWDDM2_6DDI_SCANOUT_FLAG_TRANSFORMATION_REQUIRED,
+    D3DWDDM2_6DDI_SCANOUT_FLAG_TRANSFORMATION_DESIRED,
+    D3DWDDM2_6DDI_SCANOUT_FLAG_UNPREDICTABLE_TIMING
+} D3DWDDM2_6DDI_SCANOUT_FLAGS;
+
+typedef void (*PFND3DWDDM2_6DDI_QUERY_SCANOUT_CAPS)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRESOURCE hResource,
+        UINT Subresource,
+        D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+        UINT PlaneIdx,
+        D3DWDDM2_6DDI_SCANOUT_FLAGS *pFlags);
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_6DDI_PREPARE_SCANOUT_TRANSFORMATION;
 
 struct D3DWDDM2_6DDI_DEVICEFUNCS
