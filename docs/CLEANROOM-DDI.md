@@ -4,9 +4,10 @@
 
 This is the method and specification for authoring the declaration groups in
 `relay12-d3d11/ddi/wine_d3d11ddi.h`. The binding rules live in that header and
-take precedence over anything here. `docs/D3D11ON12.md` is the macro design and
-system roadmap; this document is the single source of truth for how the DDI
+take precedence over anything here. `docs/D3D11ON12.md` is the macro design;
+this document is the single source of truth for how the DDI
 declarations get written, in what order, and against which sources.
+Project phase and milestone status lives only in `PORT-QUALITY-ROADMAP.md`.
 
 It exists because the surface is enumerable, the documentation sources are
 public, and the declaration sequence is determined strictly by risk: mistakes
@@ -92,6 +93,14 @@ created device object rather than blindly trust the selected version.
 `D3D11On12`'s `include/pch.hpp` includes WDK headers (`d3d10umddi.h`,
 `dxgiddi.h`, `d3dkmthk.h`). WineCX provides none of these. The clean-room
 boundary covers strictly what those headers supply that `D3D11On12` references.
+
+CI downloads pinned, licensed SDK/WDK packages into a temporary overlay solely
+to compile the upstream MIT components. Materialising those files does not make
+them clean-room sources: contributors authoring or reviewing GPL DDI
+declarations must not inspect, transcribe, or derive declarations from that
+overlay. Compiles of `wine_d3d11ddi.h`, its layout model, and its conformance
+harnesses must not receive the overlay include path. CI audits compiler
+dependency files and fails if any resolved header is under the overlay root.
 
 `interface/D3D11On12DDI.h` is MIT-licensed and defines the host-driver boundary.
 `SOpenAdapterArgs` passes `ID3D12Device1*` and `ID3D12CommandQueue*` directly,

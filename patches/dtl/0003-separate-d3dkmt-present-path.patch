@@ -48,7 +48,7 @@ index 1ab7819..377d66e 100644
 +#ifdef TRANSLATION_LAYER_SUPPORTS_D3DKMT_PRESENT
  #include <d3dkmthk.h>
 +#else
-+struct D3DKMT_PRESENT;
++typedef struct _D3DKMT_PRESENT D3DKMT_PRESENT;
 +#endif
  
  //STL

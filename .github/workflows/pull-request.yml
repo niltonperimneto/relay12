@@ -69,6 +69,9 @@ jobs:
           # this names the call and its wrapper instead of surfacing as a
           # cross-compile error, and it covers the MSVC branch too.
           python3 scripts/check_dtl_struct_return.py "$worktree"
+          # Linux filename semantics are part of the port contract. A local
+          # build on a case-insensitive filesystem cannot establish this.
+          python3 scripts/check_dtl_include_case.py "$worktree"
           c++ -std=c++17 -Wall -Wextra -Werror \
             -Icompat tests/relay_hresult_error_test.cpp \
             -o "$RUNNER_TEMP/relay_hresult_error_test"
@@ -192,6 +195,19 @@ jobs:
           overlay="$RUNNER_TEMP/windows-sdk-overlay"
           build="$RUNNER_TEMP/dtl-build"
           scripts/prepare-windows-sdk-overlay.sh "$overlay"
+          # Generate dependencies using the same clean-room include root used
+          # by the layout tests. CPATH or a future workflow refactor that leaks
+          # the overlay into these compiles is therefore visible and fatal.
+          cleanroom_deps="$RUNNER_TEMP/cleanroom-deps"
+          mkdir -p "$cleanroom_deps"
+          for source in tests/d3d11ddi*.c; do
+            name=$(basename "$source" .c)
+            x86_64-w64-mingw32-gcc -std=gnu11 \
+              -Irelay12-d3d11 -Irelay12-d3d11/ddi \
+              -MM -MF "$cleanroom_deps/$name.d" "$source"
+          done
+          python3 scripts/check_cleanroom_isolation.py --overlay "$overlay" \
+            "$cleanroom_deps"/*.d
           cmake -S "$worktree" -B "$build" -G 'Unix Makefiles' \
             -DCMAKE_SYSTEM_NAME=Windows \
             -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \

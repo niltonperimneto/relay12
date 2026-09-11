@@ -1,6 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-only
-# Materialize the two SDK/WDK headers needed by the MinGW DTL build.
+# Materialize the SDK/WDK display headers needed by the MinGW DTL and
+# D3D11On12 builds.
 set -eu
 
 output_dir=${1:?usage: prepare-windows-sdk-overlay.sh OUTPUT_DIR}
@@ -54,12 +55,24 @@ copy_header() {
     cp "$found" "$output_dir/$header"
 }
 
-# Every SDK or WDK header the D3D12TranslationLayer build includes and neither
-# MinGW-w64 nor third_party/DirectX-Headers provides.
+# Direct DTL requirements not supplied by MinGW-w64 or DirectX-Headers.
+# FormatDesc.hpp and DXGIColorSpaceHelper.h deliberately are absent: they are
+# DTL-local headers, not Windows SDK files.
 copy_header dxva.h
 copy_header d3d12TokenizedProgramFormat.hpp
-copy_header formatdesc.hpp
-copy_header dxgiColorSpaceHelper.h
+
+# Direct D3D11On12 display/DDI requirements.
+copy_header d3dkmthk.h
+copy_header dxgiddi.h
+copy_header d3d10umddi.h
+
+# Transitive closure pulled in by the display/DDI headers above. Keeping this
+# group explicit makes package drift fail in the overlay preparation step.
+copy_header d3dkmddi.h
+copy_header d3dkmdt.h
+copy_header d3dukmdt.h
+copy_header dxmini.h
+copy_header d3dumddi.h
 
 # Clang and GCC correctly reject the SDK's signed `~0 << bit` enum constant.
 # Preserve the mask while making the shift unsigned. Refuse an SDK drift that

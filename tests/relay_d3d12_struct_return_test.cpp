@@ -22,6 +22,19 @@
 #include <cassert>
 #include <cstdio>
 
+// Included before the mock, and before the type aliases below, because the
+// mock's shape has to agree with the branch the header selects. Reading
+// RELAY_D3D12_STRUCT_RETURN_VIA_OUT_PARAM ahead of this include saw it
+// undefined, so on MinGW -- where the header defaults it to 1 -- the mock
+// compiled the MSVC shape while the wrappers expanded to the out-parameter
+// one. The wrappers are macros, so the D3D12 type names in their replacement
+// lists are not looked up until a call site expands them; defining those
+// aliases after this include is therefore still in time.
+#include "relay_d3d12_struct_return.hpp"
+
+#define D3D12_RESOURCE_DESC MockDesc
+#define D3D12_HEAP_PROPERTIES MockDesc
+
 namespace
 {
     int failures = 0;
@@ -126,13 +139,6 @@ namespace
         return value;
     }
 }
-
-// The wrappers name D3D12 types, so the mock has to answer to those names.
-// Done after the mock so the macros below expand against it.
-#define D3D12_RESOURCE_DESC MockDesc
-#define D3D12_HEAP_PROPERTIES MockDesc
-
-#include "relay_d3d12_struct_return.hpp"
 
 int main()
 {
