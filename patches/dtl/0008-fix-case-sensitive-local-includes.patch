@@ -1,0 +1,23 @@
+diff --git a/include/D3D12TranslationLayerIncludes.h b/include/D3D12TranslationLayerIncludes.h
+index f41070f..6697bdb 100644
+--- a/include/D3D12TranslationLayerIncludes.h
++++ b/include/D3D12TranslationLayerIncludes.h
+@@ -23,8 +23,8 @@
+ 
+ #include <ThreadPool.hpp>
+ #include <segmented_stack.h>
+-#include <formatdesc.hpp>
+-#include <dxgiColorSpaceHelper.h>
++#include <FormatDesc.hpp>
++#include <DXGIColorSpaceHelper.h>
+ 
+ #include "MaxFrameLatencyHelper.hpp"
+ #include "Shader.hpp"
+@@ -57,6 +57,6 @@
+ #include "View.inl"
+ #include "Sampler.inl"
+ #include "Shader.inl"
+ #include "ImmediateContext.inl"
+-#include "CommandListManager.inl"
++#include "commandlistmanager.inl"
+ #include <BlockAllocators.inl>

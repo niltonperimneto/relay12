@@ -1,0 +1,14 @@
+diff --git a/src/SharedResourceHelpers.cpp b/src/SharedResourceHelpers.cpp
+--- a/src/SharedResourceHelpers.cpp
++++ b/src/SharedResourceHelpers.cpp
+@@ -123,6 +123,8 @@ UINT ConvertPossibleBindFlags(
+         }
+         else if ((HeapFlags & D3D12_HEAP_FLAG_ALLOW_DISPLAY) == 0)
+         {
+-            BindFlags |= (formatSupport.Support1 & D3D12_FORMAT_SUPPORT1_DECODER_OUTPUT) ? D3D11_BIND_DECODER : 0u;
+-            BindFlags |= (formatSupport.Support1 & D3D12_FORMAT_SUPPORT1_VIDEO_ENCODER) ? D3D11_BIND_VIDEO_ENCODER : 0u;
++            BindFlags |= (formatSupport.Support1 & D3D12_FORMAT_SUPPORT1_DECODER_OUTPUT)
++                ? static_cast<UINT>(D3D11_BIND_DECODER) : 0u;
++            BindFlags |= (formatSupport.Support1 & D3D12_FORMAT_SUPPORT1_VIDEO_ENCODER)
++                ? static_cast<UINT>(D3D11_BIND_VIDEO_ENCODER) : 0u;
+         }
