@@ -1,0 +1,119 @@
+name: D3D11On12 MinGW EWDK integration
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  availability:
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Report integration-lane availability
+        run: |
+          if [ '${{ vars.RELAY12_EWDK_CI_ENABLED }}' = 'true' ]; then
+            echo 'The self-hosted Windows/EWDK integration lane is enabled.'
+          else
+            echo 'The integration lane is disabled. Set RELAY12_EWDK_CI_ENABLED=true'
+            echo 'after registering a Windows X64 runner labelled relay12-ewdk.'
+          fi
+
+  build-linked-driver:
+    if: vars.RELAY12_EWDK_CI_ENABLED == 'true'
+    runs-on: [self-hosted, Windows, X64, relay12-ewdk]
+    timeout-minutes: 60
+    env:
+      EWDK_ROOT: ${{ vars.RELAY12_EWDK_ROOT }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Verify runner toolchain and EWDK
+        run: |
+          set -euo pipefail
+          test -n "$EWDK_ROOT"
+          test -d "$EWDK_ROOT"
+          command -v cmake
+          command -v python3
+          command -v x86_64-w64-mingw32-gcc
+          command -v x86_64-w64-mingw32-g++
+          command -v x86_64-w64-mingw32-objdump
+          for header in d3dkmthk.h dxgiddi.h d3d10umddi.h; do
+            count=$(find "$EWDK_ROOT" -type f -iname "$header" | wc -l | tr -d ' ')
+            test "$count" -gt 0 || {
+              echo "EWDK is missing $header" >&2
+              exit 1
+            }
+          done
+
+      - name: Prepare pinned source trees and SDK overlay
+        run: |
+          set -euo pipefail
+          dtl="$RUNNER_TEMP/dtl-port-source"
+          driver="$RUNNER_TEMP/d3d11on12-port-source"
+          git clone --quiet --no-hardlinks third_party/D3D12TranslationLayer "$dtl"
+          git clone --quiet --no-hardlinks third_party/D3D11On12 "$driver"
+          scripts/prepare-dtl-source.sh "$dtl"
+          scripts/prepare-d3d11on12-source.sh "$driver"
+          scripts/prepare-windows-sdk-overlay.sh "$RUNNER_TEMP/windows-sdk-overlay"
+
+      - name: Configure and link d3d11on12.dll
+        run: |
+          set -euo pipefail
+          header_dir() {
+            # An EWDK can contain more than one kit. Always select the newest
+            # versioned include tree instead of relying on filesystem order.
+            dirname "$(find "$EWDK_ROOT" -type f -iname "$1" | sort -V | tail -1)"
+          }
+          wdk_includes="$(header_dir d3dkmthk.h);$(header_dir dxgiddi.h);$(header_dir d3d10umddi.h)"
+          cmake -S "$RUNNER_TEMP/d3d11on12-port-source" \
+            -B "$RUNNER_TEMP/d3d11on12-build" -G 'MinGW Makefiles' \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
+            -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
+            -DCMAKE_RC_COMPILER=x86_64-w64-mingw32-windres \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DD3D11ON12_DTL_SOURCE_DIR="$RUNNER_TEMP/dtl-port-source" \
+            -DD3D11ON12_WINDOWS_KITS_INCLUDE_DIRS="$wdk_includes" \
+            -DDTL_DIRECTX_HEADERS_SOURCE_DIR="$GITHUB_WORKSPACE/third_party/DirectX-Headers" \
+            -DDTL_WINDOWS_SDK_OVERLAY_DIR="$RUNNER_TEMP/windows-sdk-overlay" \
+            -DDTL_ENABLE_WDK_DXBC=ON
+          cmake --build "$RUNNER_TEMP/d3d11on12-build" --parallel 2
+          test -s "$RUNNER_TEMP/d3d11on12-build/src/d3d11on12.dll"
+
+      - name: Audit export and runtime dependencies
+        run: |
+          set -euo pipefail
+          dll="$RUNNER_TEMP/d3d11on12-build/src/d3d11on12.dll"
+          dump=$(x86_64-w64-mingw32-objdump -p "$dll")
+          exports=$(printf '%s\n' "$dump" | sed -n \
+            '/\[Ordinal\/Name Pointer\] Table/,/^$/p' | grep -o 'OpenAdapter_D3D11On12' | wc -l)
+          test "$exports" -eq 1
+          if printf '%s\n' "$dump" | grep -Eiq 'libstdc\+\+|libgcc_s'; then
+            echo 'linked driver imports a dynamic MinGW C++ runtime' >&2
+            exit 1
+          fi
+          printf '%s\n' "$dump" | grep 'DLL Name:'
+
+      - name: Smoke-load the linked driver
+        run: |
+          set -euo pipefail
+          x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -Werror \
+            -static-libgcc tests/d3d11on12_load_probe.c \
+            -o "$RUNNER_TEMP/d3d11on12_load_probe.exe"
+          "$RUNNER_TEMP/d3d11on12_load_probe.exe" \
+            "$RUNNER_TEMP/d3d11on12-build/src/d3d11on12.dll"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: d3d11on12-mingw-${{ github.sha }}
+          path: ${{ runner.temp }}/d3d11on12-build/src/d3d11on12.dll
+          if-no-files-found: error
+          retention-days: 14
