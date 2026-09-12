@@ -1,0 +1,29 @@
+{
+  "catalogVersion": 1,
+  "runtimes": [
+    {
+      "identifier": "relay12-canary-4.6.95",
+      "version": "4.6.95",
+      "channel": "canary",
+      "archiveURL": "https://github.com/niltonperimneto/relay12/releases/download/runtime-canary-v4.6.95/Libraries.tar.gz",
+      "sha256": "5dec9391af71335954d29daa3b732d139ff043176594226eb96224fdd781899d",
+      "minimumMacOS": "26.0",
+      "wineVersion": "11.16",
+      "capabilities": {
+        "gptkMajorVersions": [
+          3,
+          4
+        ],
+        "wsarecvmsg": true,
+        "ipv4ReceiveTOS": true,
+        "ipv6ReceiveTrafficClass": true,
+        "overlappedReceiveMessage": true,
+        "dxvk": true,
+        "dxmt": true,
+        "wined3d": true,
+        "wow64": true
+      },
+      "publishedAt": "2026-09-12T01:21:13Z"
+    }
+  ]
+}
