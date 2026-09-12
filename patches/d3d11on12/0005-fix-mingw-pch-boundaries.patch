@@ -1,0 +1,66 @@
+From: relay12 contributors
+Subject: [PATCH] d3d11on12: fix MinGW portability boundaries
+
+Use relay12's portable tracing provider, satisfy dependent-template parsing,
+and use the portable SAL spelling accepted by MinGW.
+---
+diff --git a/include/pch.hpp b/include/pch.hpp
+--- a/include/pch.hpp
++++ b/include/pch.hpp
+@@ -5,8 +5,13 @@
+ #include <D3D12TranslationLayerDependencyIncludes.h>
+ #include <D3D12TranslationLayerIncludes.h>
+ 
+ #include <d3dx11on12.h>
+ 
+ #include "SharedResourceHelpers.hpp"
++#include "relay_tracelogging.hpp"
++
++#ifndef __in
++#define __in _In_
++#endif
+ 
+ #ifdef WIN32_LEAN_AND_MEAN
+@@ -60,5 +65,5 @@
+ }
+ extern bool GetCompatValue(PCSTR, UINT64*);
+ 
+-TRACELOGGING_DECLARE_PROVIDER(g_hD3D11On12TraceLoggingProvider);
++extern TraceLoggingHProvider g_hD3D11On12TraceLoggingProvider;
+ 
+diff --git a/include/PipelineStateCache.hpp b/include/PipelineStateCache.hpp
+--- a/include/PipelineStateCache.hpp
++++ b/include/PipelineStateCache.hpp
+@@ -129,4 +129,4 @@
+         PipelineStateCacheLocked<Key> GetCache()
+         {
+-            return m_parentDevice.GetPSOCache<Key>();
++            return m_parentDevice.template GetPSOCache<Key>();
+         }
+diff --git a/src/main.cpp b/src/main.cpp
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -7,10 +7,5 @@
+ #define D3D11ON12_PROVIDER_GUID (0xa0ab5aac, 0xe0a4, 0x4f10, 0x83, 0xc6, 0x31, 0x93, 0x9c, 0x60, 0x4f, 0xd9)
+ #define D3D11ON12_PROVIDER_DESC "Microsoft.Windows.Graphics.D3D11On12"
+ 
+-TRACELOGGING_DEFINE_PROVIDER(
+-    g_hD3D11On12TraceLoggingProvider,
+-    D3D11ON12_PROVIDER_DESC,
+-    D3D11ON12_PROVIDER_GUID,
+-    TraceLoggingOptionMicrosoftTelemetry()
+-);
++TraceLoggingHProvider g_hD3D11On12TraceLoggingProvider = nullptr;
+ 
+@@ -47,9 +42,7 @@
+     case (DLL_PROCESS_ATTACH):
+         DisableThreadLibraryCalls( hInstance );
+-        TraceLoggingRegister(g_hD3D11On12TraceLoggingProvider);
+         D3D12TranslationLayer::SetTraceloggingProvider(g_hD3D11On12TraceLoggingProvider);
+         break;
+ 
+     case (DLL_PROCESS_DETACH): // DLL_PROCESS_DETACH will be sent even if DLL_PROCESS_ATTACH fails
+-        TraceLoggingUnregister(g_hD3D11On12TraceLoggingProvider);
+         break;
+-- 
+2.51.0
