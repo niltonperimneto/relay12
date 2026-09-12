@@ -1,0 +1,31 @@
+From: relay12 contributors
+Subject: [PATCH] d3d11on12: route the GetProcAddress cast through void*
+
+GCC rejects casting FARPROC straight to PCOMPATVALUE under
+-Wcast-function-type: FARPROC is INT_PTR(WINAPI*)() and the target has a
+different signature. Casting via void* is the accepted spelling and is
+already what patches/dtl/0007 does for its own GetProcAddress wrapper, so the
+two ports stay consistent.
+
+Behaviour is unchanged. dxgi.dll's CompatValue is resolved by name at run
+time either way, and the function is still treated as absent when the export
+is missing.
+---
+diff --git a/src/main.cpp b/src/main.cpp
+index c4f397a..34f150a 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -20,7 +20,12 @@ bool GetCompatValue(const char* str, UINT64* pValue)
+     static PCOMPATVALUE pfnCompatValue = nullptr;
+     if (!pfnCompatValue)
+     {
+-        pfnCompatValue = reinterpret_cast<PCOMPATVALUE>(GetProcAddress(GetModuleHandleW(L"dxgi.dll"), "CompatValue"));
++        // GCC rejects a direct FARPROC-to-PCOMPATVALUE cast under
++        // -Wcast-function-type. Going through void* is the same idiom
++        // the D3D12TranslationLayer port uses for GetProcAddress.
++        pfnCompatValue = reinterpret_cast<PCOMPATVALUE>(
++                reinterpret_cast<void *>(GetProcAddress(
++                        GetModuleHandleW(L"dxgi.dll"), "CompatValue")));
+     }
+     if (pfnCompatValue)
+     {
