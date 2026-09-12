@@ -1,0 +1,70 @@
+From: relay12 contributors
+Subject: [PATCH] d3d11on12: resolve GCC warnings-as-errors in the adapter and video paths
+
+Six -Werror diagnostics, none of which is a latent bug, and each preserved
+rather than silenced.
+
+Four C_ASSERTs in adapter.cpp check that D3D12_CONSERVATIVE_RASTERIZATION_TIER
+and D3DWDDM2_0DDI_CONSERVATIVE_RASTERIZATION_* agree numerically.
+-Werror=enum-compare is right that the types differ, and agreeing across that
+difference is precisely what the assertion is for, so both sides are compared
+as int. The check survives; only the spelling changes.
+
+VideoProcess.cpp compares a FlipMode that arrived through the DDI against the
+API enumerator of the same meaning. The two enumerations mirror each other --
+the assertions above are this tree's own statement of that -- so the
+comparison is made as int. The DDI enumerator would have been the better
+spelling, as with the crypto GUIDs in 0007, but GCC named no DDI alternative
+here and inventing a name that may not exist is worse than a cast.
+
+adapter.cpp's hr is read only by assert(), so a release build sets it and
+never uses it.
+
+  A note for whoever picks up error handling. That assert() is the only thing
+  looking at two CheckFeatureSupport HRESULTs, so in a release build both
+  failures are swallowed -- which the port-quality roadmap's "no swallowed
+  errors" rule would reject. Changing it to propagate is a behaviour change to
+  upstream MIT code and a decision in its own right, so this patch preserves
+  what upstream does and marks the variable used. It is recorded here rather
+  than fixed quietly.
+---
+diff --git a/src/VideoProcess.cpp b/src/VideoProcess.cpp
+index 915f2d5..be323f6 100644
+--- a/src/VideoProcess.cpp
++++ b/src/VideoProcess.cpp
+@@ -385,7 +385,7 @@ RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+             {
+                 ThrowFailure(E_NOTIMPL);
+             }
+-            if (FlipMode != D3D11_VIDEO_PROCESSOR_STEREO_FLIP_NONE)
++            if (static_cast<int>(FlipMode) != static_cast<int>(D3D11_VIDEO_PROCESSOR_STEREO_FLIP_NONE))
+             {
+                 ThrowFailure(E_NOTIMPL);
+             }
+diff --git a/src/adapter.cpp b/src/adapter.cpp
+index fcb244b..eb8d1dd 100644
+--- a/src/adapter.cpp
++++ b/src/adapter.cpp
+@@ -53,6 +53,7 @@ namespace D3D11On12
+     
+         hr = m_pUnderlyingDevice->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &m_Caps, sizeof(m_Caps));
+         assert(SUCCEEDED(hr));
++        (void)hr; // only read by assert(), which a release build removes
+ 
+         D3D_FEATURE_LEVEL FLList[] = {
+              D3D_FEATURE_LEVEL_1_0_CORE, 
+@@ -290,10 +291,10 @@ namespace D3D11On12
+                 if (pArgs->DataSize != sizeof(*pCaps))
+                     return E_INVALIDARG;
+     
+-                C_ASSERT(D3D12_CONSERVATIVE_RASTERIZATION_TIER_NOT_SUPPORTED == D3DWDDM2_0DDI_CONSERVATIVE_RASTERIZATION_NOT_SUPPORTED);
+-                C_ASSERT(D3D12_CONSERVATIVE_RASTERIZATION_TIER_1        == D3DWDDM2_0DDI_CONSERVATIVE_RASTERIZATION_TIER_1);
+-                C_ASSERT(D3D12_CONSERVATIVE_RASTERIZATION_TIER_2        == D3DWDDM2_0DDI_CONSERVATIVE_RASTERIZATION_TIER_2);
+-                C_ASSERT(D3D12_CONSERVATIVE_RASTERIZATION_TIER_3        == D3DWDDM2_0DDI_CONSERVATIVE_RASTERIZATION_TIER_3);
++                C_ASSERT(static_cast<int>(D3D12_CONSERVATIVE_RASTERIZATION_TIER_NOT_SUPPORTED) == static_cast<int>(D3DWDDM2_0DDI_CONSERVATIVE_RASTERIZATION_NOT_SUPPORTED));
++                C_ASSERT(static_cast<int>(D3D12_CONSERVATIVE_RASTERIZATION_TIER_1)        == static_cast<int>(D3DWDDM2_0DDI_CONSERVATIVE_RASTERIZATION_TIER_1));
++                C_ASSERT(static_cast<int>(D3D12_CONSERVATIVE_RASTERIZATION_TIER_2)        == static_cast<int>(D3DWDDM2_0DDI_CONSERVATIVE_RASTERIZATION_TIER_2));
++                C_ASSERT(static_cast<int>(D3D12_CONSERVATIVE_RASTERIZATION_TIER_3)        == static_cast<int>(D3DWDDM2_0DDI_CONSERVATIVE_RASTERIZATION_TIER_3));
+                 pCaps->ConservativeRasterizationTier = static_cast<D3DWDDM2_0DDI_CONSERVATIVE_RASTERIZATION_TIER>(Caps12.ConservativeRasterizationTier);
+     
+ #ifdef DX_ASTC_PROTOTYPE_ENABLED

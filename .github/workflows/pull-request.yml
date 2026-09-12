@@ -102,6 +102,12 @@ jobs:
           fi
           # Both ABI branches, on one compiler. A wrong expansion here does
           # not fail to compile; it returns a zeroed descriptor.
+          # Silent failure mode: a detector answering false for a field the
+          # destination does have would just not copy it, with no diagnostic.
+          c++ -std=c++17 -Wall -Wextra -Werror \
+            -Icompat tests/relay_member_detect_test.cpp \
+            -o "$RUNNER_TEMP/relay_member_detect_test"
+          "$RUNNER_TEMP/relay_member_detect_test"
           for selector in 0 1; do
             c++ -std=c++17 -Wall -Wextra -Werror -Icompat \
               "-DRELAY_D3D12_STRUCT_RETURN_VIA_OUT_PARAM=$selector" \
@@ -176,6 +182,11 @@ jobs:
             -Icompat tests/relay_d3d12_struct_return_test.cpp \
             -o "$RUNNER_TEMP/relay_struct_return.exe"
           wine "$RUNNER_TEMP/relay_struct_return.exe"
+          x86_64-w64-mingw32-g++ -std=c++17 -Wall -Wextra -Werror \
+            -static-libgcc -static-libstdc++ \
+            -Icompat tests/relay_member_detect_test.cpp \
+            -o "$RUNNER_TEMP/relay_member_detect.exe"
+          wine "$RUNNER_TEMP/relay_member_detect.exe"
           worktree="$RUNNER_TEMP/dtl-port-source"
           # A positive milestone now, not an expected failure. ATL, _com_error,
           # the D3DKMT present path and the SDK ETW header are all behind us,
