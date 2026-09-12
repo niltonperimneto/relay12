@@ -1,0 +1,36 @@
+From: relay12 contributors
+Subject: [PATCH] d3d11on12: make dependent types explicit for GCC
+
+Include the standard math declarations and qualify dependent types where
+MSVC accepts the shorter spelling but GCC requires standard C++ syntax.
+---
+diff --git a/include/util.hpp b/include/util.hpp
+--- a/include/util.hpp
++++ b/include/util.hpp
+@@ -2,4 +2,6 @@
+ // Licensed under the MIT License.
+ #pragma once
+ 
++#include <cmath>
++
+ namespace D3D11On12
+diff --git a/include/view.inl b/include/view.inl
+--- a/include/view.inl
++++ b/include/view.inl
+@@ -18,4 +18,4 @@
+         m_spView(nullptr, { device.GetBatchedContext() })
+     {
+-        m_spView.reset(new Traits::TranslationLayerView(&device.GetImmediateContextNoFlush(), GetTranslationDesc(resource, pDesc), resource));
++        m_spView.reset(new typename Traits::TranslationLayerView(&device.GetImmediateContextNoFlush(), GetTranslationDesc(resource, pDesc), resource));
+     }
+diff --git a/include/Shader.inl b/include/Shader.inl
+--- a/include/Shader.inl
++++ b/include/Shader.inl
+@@ -42,4 +42,4 @@
+         : m_bIsStreamOutput(false)
+         , m_pUnderlying(std::move(spUnderlying))
+-        , PipelineStateCacheKeyComponent(*pDevice)
++        , PipelineStateCacheKeyComponent<typename PSOCacheKeyType<TIface>::KeyType>(*pDevice)
+     {
+-- 
+2.51.0
