@@ -18,6 +18,8 @@ cp "$repository_root/compat/relay_ownership.hpp" \
     "$source_dir/include/relay_ownership.hpp"
 cp "$repository_root/compat/relay_tracelogging.hpp" \
     "$source_dir/include/relay_tracelogging.hpp"
+cp "$repository_root/compat/relay_msvc_pragma.hpp" \
+    "$source_dir/include/relay_msvc_pragma.hpp"
 
 for patch in "$repository_root"/patches/d3d11on12/*.patch; do
     # The pinned Microsoft tree stores these sources as CRLF. The relay patch
