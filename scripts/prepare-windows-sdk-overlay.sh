@@ -73,6 +73,25 @@ copy_header d3dkmdt.h
 copy_header d3dukmdt.h
 copy_header dxmini.h
 copy_header d3dumddi.h
+copy_header coguid.h
+
+report_optional_header() {
+    header=$1
+    found=$(find "$scratch_dir/sdk" "$scratch_dir/wdk" -type f -name "$header" \
+        | sort | head -n 1)
+    if test -n "$found"; then
+        cp "$found" "$output_dir/$header"
+        echo "overlay: $header is available in the pinned packages"
+    else
+        echo "overlay: $header is NOT in the pinned packages" >&2
+    fi
+}
+
+# The shader path's dependencies. Reported, not required: see
+# docs/D3D11ON12.md on the DXBC-to-DXIL decision still open.
+report_optional_header DxbcConverter.h
+report_optional_header dxcapi.h
+report_optional_header DxilPipelineStateValidation.h
 
 # Clang and GCC correctly reject the SDK's signed `~0 << bit` enum constant.
 # Preserve the mask while making the shift unsigned. Refuse an SDK drift that
