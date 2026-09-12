@@ -1,0 +1,52 @@
+From: relay12 contributors
+Subject: [PATCH] d3d11on12: drop a redundant enum typedef and receive an ignored HRESULT
+
+Two more -Werror diagnostics in device.cpp, both narrow.
+
+CreateFence declares `typedef enum DXGI_INTERNAL_CREATEFENCE_FLAGS {...}
+DXGI_INTERNAL_CREATEFENCE_FLAGS;` at function scope. That is a C idiom: in
+C++ the enum-specifier already introduces the type name, so the typedef name
+is redundant and nothing uses it, which -Wunused-local-typedefs reports. The
+enumerators are used, immediately below, and are untouched -- only the
+duplicate name goes.
+
+ReportError calls pfnEscapeCb for a device-status query and deliberately
+ignores the result; the comment above it explains why, and that intent is
+kept. The existing `(void)` cast does not satisfy GCC's warn_unused_result,
+which is only met by actually receiving the value, so the result is stored
+and then marked unused. Same shape as the hr fix in 0008.
+---
+diff --git a/src/device.cpp b/src/device.cpp
+index 02c79e8..9b96a7b 100644
+--- a/src/device.cpp
++++ b/src/device.cpp
+@@ -692,7 +692,12 @@ namespace D3D11On12
+             EscapeCB.pPrivateDriverData = &StateCheck;
+             EscapeCB.PrivateDriverDataSize = sizeof(StateCheck);
+             EscapeCB.Flags.DeviceStatusQuery = 1;
+-            (void)m_pKTCallbacks->pfnEscapeCb(nullptr, &EscapeCB);
++            // Best-effort: a failure here only means the device-status
++            // query did not happen. A (void) cast does not satisfy
++            // warn_unused_result, so receive the value and drop it.
++            const HRESULT escapeStatus =
++                    m_pKTCallbacks->pfnEscapeCb(nullptr, &EscapeCB);
++            (void)escapeStatus;
+         }
+         DeviceBase::ReportError(hr);
+     }
+@@ -1231,13 +1236,13 @@ namespace D3D11On12
+     {
+         D3D11on12_DDI_ENTRYPOINT_START();
+ 
+-        typedef enum DXGI_INTERNAL_CREATEFENCE_FLAGS
++        enum DXGI_INTERNAL_CREATEFENCE_FLAGS
+         {
+             DXGI_INTERNAL_CREATEFENCE_SHARED = 0x1,
+             DXGI_INTERNAL_CREATEFENCE_SHARED_CROSS_ADAPTER = 0x2,
+             DXGI_INTERNAL_CREATEFENCE_DEFERRED_WAITS = 0x4,
+             DXGI_INTERNAL_CREATEFENCE_MONITORED = 0x10
+-        } DXGI_INTERNAL_CREATEFENCE_FLAGS;
++        };
+ 
+         D3D12TranslationLayer::FENCE_FLAGS TranslationFlags =
+             ((DXGIInternalFenceFlags & DXGI_INTERNAL_CREATEFENCE_DEFERRED_WAITS)       ? D3D12TranslationLayer::FENCE_FLAG_DEFERRED_WAITS       : D3D12TranslationLayer::FENCE_FLAG_NONE) |
