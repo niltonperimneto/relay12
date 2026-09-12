@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
-"""Reject local DTL includes whose spelling differs from the real filename."""
+"""Reject local includes whose spelling differs from the real filename."""
 
 import argparse
 import collections
@@ -20,17 +20,18 @@ def without_comments(text):
     return re.sub(r"//[^\n]*|/[*].*?[*]/", replace, text, flags=re.DOTALL)
 
 
-def filename_index(source_dir):
+def filename_index(source_dir, include_roots=()):
     """Map a case-folded basename to every spelling present in the tree."""
     index = collections.defaultdict(set)
-    for path in source_dir.rglob("*"):
-        if path.is_file():
-            index[path.name.casefold()].add(path.name)
+    for root in (source_dir, *include_roots):
+        for path in root.rglob("*"):
+            if path.is_file():
+                index[path.name.casefold()].add(path.name)
     return index
 
 
-def check_tree(source_dir):
-    index = filename_index(source_dir)
+def check_tree(source_dir, include_roots=()):
+    index = filename_index(source_dir, include_roots)
     errors = []
     for path in sorted(source_dir.rglob("*")):
         if not path.is_file() or path.suffix.lower() not in SOURCE_SUFFIXES:
@@ -55,12 +56,14 @@ def check_tree(source_dir):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("source_dir", type=pathlib.Path)
+    parser.add_argument("--include-root", action="append", default=[],
+                        type=pathlib.Path)
     args = parser.parse_args()
-    errors = check_tree(args.source_dir)
+    errors = check_tree(args.source_dir, args.include_root)
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1
-    print("DTL local include filename case: ok")
+    print("local include filename case: ok")
     return 0
 
 
