@@ -1,0 +1,51 @@
+From: relay12 contributors
+Subject: [PATCH] d3d11on12: match dependency and local header spelling
+
+Linux filesystems are case-sensitive even when MinGW targets Windows. Match
+the spellings published by D3D12TranslationLayer and the driver's own source
+tree so the portable consumer build finds every header.
+---
+diff --git a/include/Shader.hpp b/include/Shader.hpp
+--- a/include/Shader.hpp
++++ b/include/Shader.hpp
+@@ -3,6 +3,6 @@
+ #pragma once
+-#include <dxbcutils.h>
+-#include <shaderbinary.h>
++#include <DXBCUtils.h>
++#include <ShaderBinary.h>
+ 
+ namespace D3D11On12
+ {
+diff --git a/include/pch.hpp b/include/pch.hpp
+--- a/include/pch.hpp
++++ b/include/pch.hpp
+@@ -84,5 +84,5 @@
+ #include "State.hpp"
+ #include "PipelineState.hpp"
+-#include "Layer.hpp"
+-#include "Adapter.hpp"
++#include "layer.hpp"
++#include "adapter.hpp"
+ #include "VideoTranslate.hpp"
+@@ -91,5 +91,5 @@
+ #include "VideoDecode.hpp"
+ #include "VideoProcess.hpp"
+ #include "VideoProcessEnum.hpp"
+-#include "Device.hpp"
++#include "device.hpp"
+ #include "Resource.hpp"
+diff --git a/src/shader.cpp b/src/shader.cpp
+--- a/src/shader.cpp
++++ b/src/shader.cpp
+@@ -3,6 +3,6 @@
+ #include "pch.hpp"
+-#include <dxc\Dxcapi.h>
++#include <dxc\dxcapi.h>
+ #include <DxbcConverter.h>
+-#include <dxc\DxilContainer\dxilpipelinestatevalidation.h>
++#include <dxc\DxilContainer\DxilPipelineStateValidation.h>
+ 
+ namespace D3D11On12
+-- 
+2.51.0
