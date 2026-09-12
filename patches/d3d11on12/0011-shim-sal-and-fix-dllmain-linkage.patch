@@ -1,0 +1,46 @@
+From: relay12 contributors
+Subject: [PATCH] d3d11on12: shim __nullterminated and drop a redundant extern
+
+Two parse failures in src/main.cpp under GCC.
+
+The PCOMPATVALUE typedef annotates its parameters with SAL1:
+`__in __nullterminated const char *`. mingw-w64's sal.h defines __in and
+__out_opt but not __nullterminated, and an unknown annotation inside a
+parameter list cascades -- the reported 'stdcall' attribute, 'pValue' and
+PCOMPATVALUE errors that follow are all downstream of it. This tree already
+carries a shim for __in in pch.hpp; __nullterminated joins it there, defined
+empty, since these annotations carry no codegen meaning.
+
+`extern "C" extern BOOL WINAPI DllMain(...)` is accepted by MSVC and rejected
+by GCC as an invalid use of extern in a linkage specification. The linkage
+specification already provides external linkage, so the second extern is
+redundant and goes.
+---
+diff --git a/include/pch.hpp b/include/pch.hpp
+index ad266cf..d42039a 100644
+--- a/include/pch.hpp
++++ b/include/pch.hpp
+@@ -15,6 +15,10 @@
+ #ifndef __in
+ #define __in _In_
+ #endif
++
++#ifndef __nullterminated
++#define __nullterminated
++#endif
+ 
+ #ifdef WIN32_LEAN_AND_MEAN
+ // This defines NTSTATUS and other types that are needed for kernel headers
+diff --git a/src/main.cpp b/src/main.cpp
+index 817e238..c4f397a 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -30,7 +30,7 @@ bool GetCompatValue(const char* str, UINT64* pValue)
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+-extern "C" extern BOOL WINAPI DllMain(
++extern "C" BOOL WINAPI DllMain(
+     HINSTANCE hInstance,
+     UINT dwReason,
+     LPVOID ) noexcept
