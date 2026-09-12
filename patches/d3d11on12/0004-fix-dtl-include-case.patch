@@ -20,6 +20,12 @@ diff --git a/include/Shader.hpp b/include/Shader.hpp
 diff --git a/include/pch.hpp b/include/pch.hpp
 --- a/include/pch.hpp
 +++ b/include/pch.hpp
+@@ -78,4 +78,4 @@
+-#include "Util.hpp"
++#include "util.hpp"
+ #include "DeviceChild.hpp"
+ #include "PipelineStateCache.hpp"
+ #include "Shader.hpp"
 @@ -84,5 +84,5 @@
  #include "State.hpp"
  #include "PipelineState.hpp"
@@ -28,13 +34,23 @@ diff --git a/include/pch.hpp b/include/pch.hpp
 +#include "layer.hpp"
 +#include "adapter.hpp"
  #include "VideoTranslate.hpp"
-@@ -91,5 +91,5 @@
+@@ -91,8 +91,8 @@
  #include "VideoDecode.hpp"
  #include "VideoProcess.hpp"
  #include "VideoProcessEnum.hpp"
 -#include "Device.hpp"
+-#include "Resource.hpp"
+-#include "View.hpp"
 +#include "device.hpp"
- #include "Resource.hpp"
++#include "resource.hpp"
++#include "view.hpp"
+ #include "Query.hpp"
+ #include "Sampler.hpp"
+@@ -99,3 +99,3 @@
+ #include "InputLayout.inl"
+-#include "View.inl"
++#include "view.inl"
+ #include "Shader.inl"
 diff --git a/src/shader.cpp b/src/shader.cpp
 --- a/src/shader.cpp
 +++ b/src/shader.cpp

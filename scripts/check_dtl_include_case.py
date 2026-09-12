@@ -31,7 +31,8 @@ def filename_index(source_dir, include_roots=()):
 
 
 def check_tree(source_dir, include_roots=()):
-    index = filename_index(source_dir, include_roots)
+    local_index = filename_index(source_dir)
+    dependency_index = filename_index(source_dir, include_roots)
     errors = []
     for path in sorted(source_dir.rglob("*")):
         if not path.is_file() or path.suffix.lower() not in SOURCE_SUFFIXES:
@@ -43,7 +44,9 @@ def check_tree(source_dir, include_roots=()):
             if not match:
                 continue
             requested = pathlib.PurePosixPath(match.group(1).replace("\\", "/")).name
-            spellings = sorted(index.get(requested.casefold(), ()))
+            spellings = sorted(local_index.get(requested.casefold(), ()))
+            if not spellings:
+                spellings = sorted(dependency_index.get(requested.casefold(), ()))
             # No local case-insensitive match means this is an external header.
             if not spellings or requested in spellings:
                 continue
