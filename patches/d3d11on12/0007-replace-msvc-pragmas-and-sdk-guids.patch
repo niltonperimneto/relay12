@@ -1,0 +1,297 @@
+From: relay12 contributors
+Subject: [PATCH] d3d11on12: replace MSVC pragmas and SDK-only crypto GUIDs
+
+Three MinGW blockers, all in driver-side DDI code.
+
+C4127 suppressions, at all 21 sites. Each suppresses MSVC's "conditional
+expression is constant", which the ENTRYPOINT_END_REPORT_HR_AND_RETURN_VALUE
+macro provokes. GCC has no such warning and rejects the pragma under
+-Werror=unknown-pragmas. They now go through
+RELAY_SUPPRESS_CONSTANT_CONDITIONAL, a _Pragma on MSVC and nothing elsewhere.
+
+All 21 are converted, not the 4 the build reported. Compilation stops at the
+first failing translation unit, so the other 17 were simply not reached yet;
+fixing only what CI named would have moved the wall rather than removed it.
+
+Bracketing the pragma with #ifdef/#endif would have been wrong:
+`warning(suppress: n)` applies to the next line, so the #endif would sit
+between it and the statement, and the suppression would quietly stop working
+on the one compiler that needs it -- a regression nothing in this repository
+could catch.
+
+D3D11_DECODER_ENCRYPTION_HW_CENC and D3D11_KEY_EXCHANGE_HW_PROTECTION are
+GUIDs the Windows SDK's d3d11.h declares and MinGW-w64's does not. They are
+protocol GUIDs passed unchanged from the application through the runtime to
+the driver, so the DDI header's names carry the same values. The DDI spelling
+is also the more accurate one here rather than a workaround: these are DDI
+entry points taking D3D10DDI_HDEVICE, and the line directly below the CENC
+comparison already reads
+D3DWDDM2_0DDI_VIDEO_DECODER_BEGIN_FRAME_CRYPTO_SESSION.
+
+The rename is word-boundaried and excludes a trailing underscore, so
+D3D11_KEY_EXCHANGE_HW_PROTECTION_DATA -- which MinGW does declare and which
+this code also uses -- is untouched.
+---
+diff --git a/include/pch.hpp b/include/pch.hpp
+index 7f902de..bf9c37a 100644
+--- a/include/pch.hpp
++++ b/include/pch.hpp
+@@ -9,6 +9,7 @@
+ 
+ #include "SharedResourceHelpers.hpp"
+ #include "relay_tracelogging.hpp"
++#include "relay_msvc_pragma.hpp"
+ 
+ #ifndef __in
+ #define __in _In_
+diff --git a/src/VideoDecode.cpp b/src/VideoDecode.cpp
+index 62cfdd8..134594f 100644
+--- a/src/VideoDecode.cpp
++++ b/src/VideoDecode.cpp
+@@ -10,7 +10,7 @@ namespace D3D11On12
+     {
+         D3D11on12_DDI_ENTRYPOINT_START();
+         const SIZE_T videoDecodeSize = sizeof(VideoDecode);
+-#pragma warning( suppress : 4127 ) // conditional expression is constant
++RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         D3D11on12_DDI_ENTRYPOINT_END_REPORT_HR_AND_RETURN_VALUE(hDevice, S_OK, videoDecodeSize);
+     }
+ 
+@@ -146,7 +146,7 @@ namespace D3D11On12
+             ZeroMemory(&m_inputArguments, sizeof(m_inputArguments));
+             ZeroMemory(&m_outputArguments, sizeof(m_outputArguments));
+ 
+-            if (m_bitstreamEncryption == D3D11_DECODER_ENCRYPTION_HW_CENC  &&  pVideoDecoderBeginFrame->ContentKeySize != sizeof(D3D11_VIDEO_DECODER_BEGIN_FRAME_CRYPTO_SESSION))
++            if (m_bitstreamEncryption == D3DWDDM2_0DDI_DECODER_ENCRYPTION_HW_CENC  &&  pVideoDecoderBeginFrame->ContentKeySize != sizeof(D3D11_VIDEO_DECODER_BEGIN_FRAME_CRYPTO_SESSION))
+             {
+                 const D3DWDDM2_0DDI_VIDEO_DECODER_BEGIN_FRAME_CRYPTO_SESSION *pBeginFrameCryptoSession = static_cast<const D3DWDDM2_0DDI_VIDEO_DECODER_BEGIN_FRAME_CRYPTO_SESSION *>(pVideoDecoderBeginFrame->pContentKey);
+                 m_inputArguments.DecryptionArguments.pKeyInfo = pBeginFrameCryptoSession->pBlob;
+diff --git a/src/VideoDevice.cpp b/src/VideoDevice.cpp
+index 2a04550..4c1cd15 100644
+--- a/src/VideoDevice.cpp
++++ b/src/VideoDevice.cpp
+@@ -401,7 +401,7 @@ namespace D3D11On12
+     {
+         D3D11on12_DDI_ENTRYPOINT_START();
+         const SIZE_T videoDecoderOutputViewSize = sizeof(VideoDecoderOutputView);
+-#pragma warning( suppress : 4127 ) // conditional expression is constant
++RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         D3D11on12_DDI_ENTRYPOINT_END_REPORT_HR_AND_RETURN_VALUE(hDevice, S_OK, videoDecoderOutputViewSize);
+     }
+ 
+@@ -425,7 +425,7 @@ namespace D3D11On12
+     {
+         D3D11on12_DDI_ENTRYPOINT_START();
+         const SIZE_T videoProcessorInputViewSize = sizeof(VideoProcessorInputView);
+-#pragma warning( suppress : 4127 ) // conditional expression is constant
++RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         D3D11on12_DDI_ENTRYPOINT_END_REPORT_HR_AND_RETURN_VALUE(hDevice, S_OK, videoProcessorInputViewSize);
+     }
+ 
+@@ -450,7 +450,7 @@ namespace D3D11On12
+     {
+         D3D11on12_DDI_ENTRYPOINT_START();
+         const SIZE_T videoProcessorOutputViewSize = sizeof(VideoProcessorOutputView);
+-#pragma warning( suppress : 4127 ) // conditional expression is constant
++RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         D3D11on12_DDI_ENTRYPOINT_END_REPORT_HR_AND_RETURN_VALUE(hDevice, S_OK, videoProcessorOutputViewSize);
+     }
+ 
+@@ -552,7 +552,7 @@ namespace D3D11On12
+ 
+         if (CheckHardwareDRMSupport(pDevice, pCryptoType, pDecodeProfile))
+         {
+-            *pKeyExchangeType = D3D11_KEY_EXCHANGE_HW_PROTECTION;
++            *pKeyExchangeType = D3DWDDM2_0DDI_KEY_EXCHANGE_HW_PROTECTION;
+         }
+ 
+         D3D11on12_DDI_ENTRYPOINT_END_AND_RETURN_HR(hr);
+diff --git a/src/VideoProcess.cpp b/src/VideoProcess.cpp
+index d46acad..915f2d5 100644
+--- a/src/VideoProcess.cpp
++++ b/src/VideoProcess.cpp
+@@ -8,7 +8,7 @@ namespace D3D11On12
+     {
+         D3D11on12_DDI_ENTRYPOINT_START();
+         const SIZE_T videoProcessSize = sizeof(VideoProcess);
+-#pragma warning( suppress : 4127 ) // conditional expression is constant
++RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         D3D11on12_DDI_ENTRYPOINT_END_REPORT_HR_AND_RETURN_VALUE(hDevice, S_OK, videoProcessSize);
+     }
+ 
+diff --git a/src/VideoProcessEnum.cpp b/src/VideoProcessEnum.cpp
+index 42ceb78..bfdb4d1 100644
+--- a/src/VideoProcessEnum.cpp
++++ b/src/VideoProcessEnum.cpp
+@@ -8,7 +8,7 @@ namespace D3D11On12
+     {
+         D3D11on12_DDI_ENTRYPOINT_START();
+         const SIZE_T videoProcessEnumSize = sizeof(VideoProcessEnum);
+-#pragma warning( suppress : 4127 ) // conditional expression is constant
++RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         D3D11on12_DDI_ENTRYPOINT_END_REPORT_HR_AND_RETURN_VALUE(hDevice, S_OK, videoProcessEnumSize);
+     }
+ 
+diff --git a/src/context.cpp b/src/context.cpp
+index cc6c381..f478c1b 100644
+--- a/src/context.cpp
++++ b/src/context.cpp
+@@ -16,7 +16,7 @@ namespace D3D11On12
+ 
+         BOOL flushResult = pDevice->GetBatchedContext().Flush(CommandListTypeMask(ContextType));
+ 
+-#pragma warning( suppress : 4127 ) // conditional expression is constant
++RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         D3D11on12_DDI_ENTRYPOINT_END_REPORT_HR_AND_RETURN_VALUE(hDevice, S_OK, flushResult);
+     }
+ 
+diff --git a/src/inputlayout.cpp b/src/inputlayout.cpp
+index 0b274ed..9f9ce42 100644
+--- a/src/inputlayout.cpp
++++ b/src/inputlayout.cpp
+@@ -8,7 +8,7 @@ namespace D3D11On12
+     {
+         D3D11on12_DDI_ENTRYPOINT_START();
+         SIZE_T inputLayoutSize =  sizeof(InputLayout);
+-#pragma warning( suppress : 4127 ) // conditional expression is constant
++RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         D3D11on12_DDI_ENTRYPOINT_END_REPORT_HR_AND_RETURN_VALUE(hDevice, S_OK, inputLayoutSize);
+     }
+ 
+diff --git a/src/resource.cpp b/src/resource.cpp
+index aa09bef..c4fcfa6 100644
+--- a/src/resource.cpp
++++ b/src/resource.cpp
+@@ -8,7 +8,7 @@ namespace D3D11On12
+     {
+         D3D11on12_DDI_ENTRYPOINT_START();
+         const SIZE_T resourceSize = sizeof(Resource);
+-#pragma warning( suppress : 4127 ) // conditional expression is constant
++RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         D3D11on12_DDI_ENTRYPOINT_END_REPORT_HR_AND_RETURN_VALUE(hDevice, S_OK, resourceSize);
+     }
+ 
+@@ -16,7 +16,7 @@ namespace D3D11On12
+     {
+         D3D11on12_DDI_ENTRYPOINT_START();
+         const SIZE_T resourceSize = sizeof(Resource);
+-#pragma warning( suppress : 4127 ) // conditional expression is constant
++RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         D3D11on12_DDI_ENTRYPOINT_END_REPORT_HR_AND_RETURN_VALUE(hDevice, S_OK, resourceSize);
+     }
+ 
+diff --git a/src/sampler.cpp b/src/sampler.cpp
+index a19ee8a..1ef6737 100644
+--- a/src/sampler.cpp
++++ b/src/sampler.cpp
+@@ -8,7 +8,7 @@ namespace D3D11On12
+     {
+         D3D11on12_DDI_ENTRYPOINT_START();
+         SIZE_T samplerSize = sizeof(Sampler);
+-#pragma warning( suppress : 4127 ) // conditional expression is constant
++RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         D3D11on12_DDI_ENTRYPOINT_END_REPORT_HR_AND_RETURN_VALUE(hDevice, S_OK, samplerSize);
+     }
+ 
+diff --git a/src/shader.cpp b/src/shader.cpp
+index bf3ce95..abc4639 100644
+--- a/src/shader.cpp
++++ b/src/shader.cpp
+@@ -60,7 +60,7 @@ namespace D3D11On12
+         D3D11on12_DDI_ENTRYPOINT_START();
+ 
+         const SIZE_T shaderSize = T11On12VertexShader::CalcPrivateSize(pShaderCode, pSignatures);
+-#pragma warning( suppress : 4127 ) // conditional expression is constant
++RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         D3D11on12_DDI_ENTRYPOINT_END_REPORT_HR_AND_RETURN_VALUE(hDevice, S_OK, shaderSize);
+     }
+ 
+@@ -69,7 +69,7 @@ namespace D3D11On12
+         D3D11on12_DDI_ENTRYPOINT_START();
+ 
+         const SIZE_T shaderSize = StreamOutShader::CalcPrivateSize(pCreateGeoShaderWithSO, pSignatures);
+-#pragma warning( suppress : 4127 ) // conditional expression is constant
++RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         D3D11on12_DDI_ENTRYPOINT_END_REPORT_HR_AND_RETURN_VALUE(hDevice, S_OK, shaderSize);
+ 
+     }
+@@ -79,7 +79,7 @@ namespace D3D11On12
+         D3D11on12_DDI_ENTRYPOINT_START();
+ 
+         const SIZE_T shaderSize = T11On12HullShader::CalcPrivateSize(pShaderCode, pSignatures);
+-#pragma warning( suppress : 4127 ) // conditional expression is constant
++RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         D3D11on12_DDI_ENTRYPOINT_END_REPORT_HR_AND_RETURN_VALUE(hDevice, S_OK, shaderSize);
+     }
+ 
+diff --git a/src/state.cpp b/src/state.cpp
+index 868bb58..de212b2 100644
+--- a/src/state.cpp
++++ b/src/state.cpp
+@@ -8,7 +8,7 @@ namespace D3D11On12
+     {
+         D3D11on12_DDI_ENTRYPOINT_START();
+         const SIZE_T blendStateSize = sizeof(BlendState);
+-#pragma warning( suppress : 4127 ) // conditional expression is constant
++RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         D3D11on12_DDI_ENTRYPOINT_END_REPORT_HR_AND_RETURN_VALUE(hDevice, S_OK, blendStateSize);
+     }
+ 
+@@ -44,7 +44,7 @@ namespace D3D11On12
+     {
+         D3D11on12_DDI_ENTRYPOINT_START();
+         const SIZE_T depthStencilSize = sizeof(DepthStencilState);
+-#pragma warning( suppress : 4127 ) // conditional expression is constant
++RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         D3D11on12_DDI_ENTRYPOINT_END_REPORT_HR_AND_RETURN_VALUE(hDevice, S_OK, depthStencilSize);
+     }
+ 
+@@ -93,7 +93,7 @@ namespace D3D11On12
+     {
+         D3D11on12_DDI_ENTRYPOINT_START();
+         const SIZE_T rasterizerStateSize = sizeof(RasterizerState);
+-#pragma warning( suppress : 4127 ) // conditional expression is constant
++RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         D3D11on12_DDI_ENTRYPOINT_END_REPORT_HR_AND_RETURN_VALUE(hDevice, S_OK, rasterizerStateSize);
+     }
+ 
+diff --git a/src/view.cpp b/src/view.cpp
+index 47ef01f..44bb798 100644
+--- a/src/view.cpp
++++ b/src/view.cpp
+@@ -10,7 +10,7 @@ namespace D3D11On12
+         D3D11on12_DDI_ENTRYPOINT_START();
+ 
+         const SIZE_T depthStencilViewSize = sizeof(DepthStencilView);
+-#pragma warning( suppress : 4127 ) // conditional expression is constant
++RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         D3D11on12_DDI_ENTRYPOINT_END_REPORT_HR_AND_RETURN_VALUE(hDevice, S_OK, depthStencilViewSize);
+     }
+ 
+@@ -35,7 +35,7 @@ namespace D3D11On12
+     {
+         D3D11on12_DDI_ENTRYPOINT_START();
+         const SIZE_T renderTargetViewSize = sizeof(RenderTargetView);
+-#pragma warning( suppress : 4127 ) // conditional expression is constant
++RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         D3D11on12_DDI_ENTRYPOINT_END_REPORT_HR_AND_RETURN_VALUE(hDevice, S_OK, renderTargetViewSize);
+     }
+ 
+@@ -59,7 +59,7 @@ namespace D3D11On12
+     {
+         D3D11on12_DDI_ENTRYPOINT_START();
+         const SIZE_T shaderResourceViewSize = sizeof(ShaderResourceView);
+-#pragma warning( suppress : 4127 ) // conditional expression is constant
++RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         D3D11on12_DDI_ENTRYPOINT_END_REPORT_HR_AND_RETURN_VALUE(hDevice, S_OK, shaderResourceViewSize);
+     }
+ 
+@@ -85,7 +85,7 @@ namespace D3D11On12
+         D3D11on12_DDI_ENTRYPOINT_START();
+ 
+         const SIZE_T unorderedAccessViewSize = sizeof(UnorderedAccessView);
+-#pragma warning( suppress : 4127 ) // conditional expression is constant
++RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         D3D11on12_DDI_ENTRYPOINT_END_REPORT_HR_AND_RETURN_VALUE(hDevice, S_OK, unorderedAccessViewSize);
+     }
+ 
