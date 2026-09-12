@@ -75,6 +75,8 @@ jobs:
           # Linux filename semantics are part of the port contract. A local
           # build on a case-insensitive filesystem cannot establish this.
           python3 scripts/check_dtl_include_case.py "$worktree"
+          python3 scripts/check_dtl_include_case.py \
+            "$RUNNER_TEMP/d3d11on12-port-source" --include-root "$worktree"
           c++ -std=c++17 -Wall -Wextra -Werror \
             -Icompat tests/relay_hresult_error_test.cpp \
             -o "$RUNNER_TEMP/relay_hresult_error_test"

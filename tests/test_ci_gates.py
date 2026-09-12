@@ -303,6 +303,17 @@ class DtlStructReturnGate(unittest.TestCase):
 
 
 class DtlIncludeCaseGate(unittest.TestCase):
+    def test_external_include_root_case_is_checked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory) / "consumer"
+            dependency = pathlib.Path(directory) / "dependency"
+            root.mkdir()
+            dependency.mkdir()
+            (root / "consumer.hpp").write_text("#include <dxbcutils.h>\n")
+            (dependency / "DXBCUtils.h").write_text("#pragma once\n")
+            errors = check_dtl_include_case.check_tree(root, [dependency])
+            self.assertTrue(any("DXBCUtils.h" in error for error in errors))
+
     def test_matching_local_include_passes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
