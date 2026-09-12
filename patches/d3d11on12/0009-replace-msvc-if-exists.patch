@@ -1,0 +1,94 @@
+From: relay12 contributors
+Subject: [PATCH] d3d11on12: replace __if_exists with a detection trait
+
+CopyViewDimensions copies whichever dimension fields the destination view
+descriptor declares, across a family of descriptors with different shapes.
+MSVC expresses that with __if_exists(TDest::Field), a compile-time
+member-existence test GCC cannot parse at all and which has no preprocessor
+equivalent.
+
+The standard spelling is a detection trait plus `if constexpr`, both C++17.
+compat/relay_member_detect.hpp supplies RELAY_DEFINE_MEMBER_DETECTOR; view.cpp
+declares one detector per field name and tests it where __if_exists stood.
+Inside a template `if constexpr` discards the branch without instantiating it,
+which is what makes naming a member the type does not have legal -- exactly
+the property __if_exists provided.
+
+MSVC supports both constructs, so this is one code path for every compiler
+rather than an #ifdef whose GCC arm nobody exercises on Windows and whose MSVC
+arm nobody exercises here.
+
+The detector tests only the type it is asked about, matching
+__if_exists(TDest::Field). Where a destination field exists and the source
+lacks it this fails to compile, as the original did; that is a real mismatch
+rather than something to paper over.
+
+Why this carries a test. The failure mode is silent: a detector answering
+false for a field the destination does have would simply not copy it, with no
+diagnostic and a descriptor reaching the driver with a zero where a mip slice
+or array size belonged. A build cannot tell a correctly discarded branch from
+a wrongly discarded one, so tests/relay_member_detect_test.cpp mirrors the
+function's shape -- including FirstWSlice, the one field whose destination and
+source names differ -- and asserts per destination which fields arrive and
+which are left alone.
+---
+diff --git a/include/pch.hpp b/include/pch.hpp
+index bf9c37a..ad266cf 100644
+--- a/include/pch.hpp
++++ b/include/pch.hpp
+@@ -10,6 +10,7 @@
+ #include "SharedResourceHelpers.hpp"
+ #include "relay_tracelogging.hpp"
+ #include "relay_msvc_pragma.hpp"
++#include "relay_member_detect.hpp"
+ 
+ #ifndef __in
+ #define __in _In_
+diff --git a/src/view.cpp b/src/view.cpp
+index 44bb798..913c615 100644
+--- a/src/view.cpp
++++ b/src/view.cpp
+@@ -221,10 +221,28 @@ RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         DeviceBase::CsSetUnorderedAccessViews(hDevice, Start, NumViews, UAVs, pInitialCounts);
+     }
+ 
++    RELAY_DEFINE_MEMBER_DETECTOR(FirstElement)
++    RELAY_DEFINE_MEMBER_DETECTOR(NumElements)
++    RELAY_DEFINE_MEMBER_DETECTOR(ArraySize)
++    RELAY_DEFINE_MEMBER_DETECTOR(FirstArraySlice)
++    RELAY_DEFINE_MEMBER_DETECTOR(MipLevels)
++    RELAY_DEFINE_MEMBER_DETECTOR(MostDetailedMip)
++    RELAY_DEFINE_MEMBER_DETECTOR(PlaneSlice)
++    RELAY_DEFINE_MEMBER_DETECTOR(First2DArrayFace)
++    RELAY_DEFINE_MEMBER_DETECTOR(NumCubes)
++    RELAY_DEFINE_MEMBER_DETECTOR(WSize)
++    RELAY_DEFINE_MEMBER_DETECTOR(MipSlice)
++    RELAY_DEFINE_MEMBER_DETECTOR(FirstWSlice)
++    RELAY_DEFINE_MEMBER_DETECTOR(ResourceMinLODClamp)
++
+     template <typename TDest, typename TSource>
+     void CopyViewDimensions(TDest& Dest, TSource const& Source)
+     {
+-#define COPY_FIELD(Field) __if_exists(TDest::Field) { Dest.Field = Source.Field; }
++#define COPY_FIELD(Field)                                   \
++    if constexpr (relay_has_##Field<TDest>::value)          \
++    {                                                       \
++        Dest.Field = Source.Field;                          \
++    }
+         COPY_FIELD(FirstElement);
+         COPY_FIELD(NumElements);
+         COPY_FIELD(ArraySize);
+@@ -236,11 +254,11 @@ RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         COPY_FIELD(NumCubes);
+         COPY_FIELD(WSize);
+         COPY_FIELD(MipSlice);
+-        __if_exists(TDest::FirstWSlice)
++        if constexpr (relay_has_FirstWSlice<TDest>::value)
+         {
+             Dest.FirstWSlice = Source.FirstW;
+         }
+-        __if_exists(TDest::ResourceMinLODClamp)
++        if constexpr (relay_has_ResourceMinLODClamp<TDest>::value)
+         {
+             Dest.ResourceMinLODClamp = 0.0f;
+         }
