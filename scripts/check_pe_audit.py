@@ -50,6 +50,7 @@ EXPECTED_EXPORTS = {
         1: "WineD3D11On12GetABIVersion",
         2: "WineD3D11On12CreateDeviceV1",
         3: "WineD3D11On12GetInterface",
+        4: "WineD3D11On12OpenAdapterV1",
     },
 }
 

@@ -306,6 +306,8 @@ jobs:
           x86_64-w64-mingw32-g++ -shared -std=c++17 -O2 \
             -Wall -Wextra -Werror -fno-exceptions -fno-rtti \
             -fno-threadsafe-statics -fno-use-cxa-atexit \
+            -Irelay12-d3d11 -Irelay12-d3d11/ddi \
+            -Ithird_party/D3D11On12/interface \
             -o d3d11on12core.dll relay12-d3d11/d3d11on12core.cpp \
             relay12-d3d11/wine_d3d11_diag.cpp \
             relay12-d3d11/d3d11on12core.def -ld3d12 -ldxgi -luuid
@@ -319,6 +321,7 @@ jobs:
           grep -q 'WineD3D11On12GetABIVersion' <<<"$core_exports"
           grep -q 'WineD3D11On12CreateDeviceV1' <<<"$core_exports"
           grep -q 'WineD3D11On12GetInterface' <<<"$core_exports"
+          grep -q 'WineD3D11On12OpenAdapterV1' <<<"$core_exports"
           exports="$(x86_64-w64-mingw32-objdump -p d3d11shim.dll)"
           grep -q 'D3D11CreateDevice' <<<"$exports"
           grep -q 'D3D11CreateDeviceAndSwapChain' <<<"$exports"
@@ -343,6 +346,7 @@ jobs:
                   1: "WineD3D11On12GetABIVersion",
                   2: "WineD3D11On12CreateDeviceV1",
                   3: "WineD3D11On12GetInterface",
+                  4: "WineD3D11On12OpenAdapterV1",
               },
           }
           for path, wanted in expected.items():
@@ -432,10 +436,17 @@ jobs:
             x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Werror \
               -fno-exceptions -fno-rtti -fno-threadsafe-statics \
               -fno-use-cxa-atexit \
+              -Irelay12-d3d11 -Irelay12-d3d11/ddi \
+              -Ithird_party/D3D11On12/interface \
               -c -o "$source.o" "relay12-d3d11/$source.cpp"
           done
           x86_64-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
             -Irelay12-d3d11 -c -o d3d11on12coretest.o tests/d3d11on12coretest.c
+          # The adapter entry point must reject every malformed call before it
+          # loads the driver, so a bad call cannot reach it at all.
+          x86_64-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
+            -Irelay12-d3d11 -c -o d3d11on12openadapter.o \
+            tests/d3d11on12openadapter.c
           # Linking with the C driver keeps the no-C++-runtime rule honest: if
           # the core ever needs libstdc++, this link fails.
           x86_64-w64-mingw32-gcc -o d3d11on12coretest.exe \
@@ -447,6 +458,10 @@ jobs:
             exit 1
           fi
           wine d3d11on12coretest.exe
+          x86_64-w64-mingw32-gcc -o d3d11on12openadapter.exe \
+            d3d11on12openadapter.o d3d11on12core.o wine_d3d11_diag.o \
+            -ld3d12 -ldxgi -ldxguid -luuid
+          wine d3d11on12openadapter.exe
 
       - name: Run the D3D11-on-12 concurrency stress
         run: |

@@ -67,6 +67,46 @@ WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface, reserved) == 40);
 typedef HRESULT (WINAPI *WineD3D11On12GetInterfaceFn)(UINT, UINT,
         WineD3D11On12Interface *);
 
+/* What a successful OpenAdapter leaves behind.
+ *
+ * The members are pointers to incomplete types on purpose. A caller that only
+ * forwards the device function table needs no DDI declarations to do so, and
+ * this header stays compilable as C for the validation tests -- the same
+ * reason the clean-room header keeps pointer-only types incomplete.
+ *
+ * hDrvAdapter and hDrvDevice are the pDrvPrivate words of D3D10DDI_HADAPTER
+ * and D3D10DDI_HDEVICE. They are the driver's, opaque here, and must be
+ * handed back to WineD3D11On12CloseAdapterV1 rather than freed.
+ *
+ * negotiatedInterfaceVersion is what pfnGetSupportedVersions settled on, not
+ * what was requested: recording it is what lets a caller tell "the driver
+ * accepted our highest word" from "the driver chose a lower one". */
+struct WineD3D11On12AdapterDevice
+{
+    UINT size;
+    UINT negotiatedInterfaceVersion;
+    struct D3DWDDM2_6DDI_DEVICEFUNCS *deviceFuncs;
+    void *hDrvAdapter;
+    void *hDrvDevice;
+    void *reserved[3];
+};
+
+#ifndef __cplusplus
+typedef struct WineD3D11On12AdapterDevice WineD3D11On12AdapterDevice;
+#endif
+
+#ifdef __cplusplus
+WINE_D3D11ON12_ASSERT(std::is_standard_layout_v<WineD3D11On12AdapterDevice>);
+#endif
+WINE_D3D11ON12_ASSERT(sizeof(void *) != 8
+        || sizeof(WineD3D11On12AdapterDevice) == 56);
+WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12AdapterDevice, deviceFuncs) == 8);
+WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12AdapterDevice, hDrvAdapter) == 16);
+WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12AdapterDevice, hDrvDevice) == 24);
+
+typedef HRESULT (WINAPI *WineD3D11On12OpenAdapterFn)(IUnknown *,
+        IUnknown *const *, UINT, UINT, WineD3D11On12AdapterDevice *);
+
 WINE_D3D11ON12_LINKAGE UINT WINAPI WineD3D11On12GetABIVersion(void)
         WINE_D3D11ON12_NOEXCEPT;
 WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12GetInterface(UINT, UINT,
@@ -74,6 +114,19 @@ WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12GetInterface(UINT, UINT,
 WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12CreateDeviceV1(IUnknown *,
         UINT, const D3D_FEATURE_LEVEL *, UINT, IUnknown *const *, UINT, UINT,
         ID3D11Device **, ID3D11DeviceContext **, D3D_FEATURE_LEVEL *)
+        WINE_D3D11ON12_NOEXCEPT;
+/* Opens the pinned D3D11On12 driver against a caller-supplied D3D12 device
+ * and queue, negotiates the DDI interface version, and creates a DDI device.
+ *
+ * This is deliberately not WineD3D11On12CreateDeviceV1. d3d11on12.dll exports
+ * one symbol, OpenAdapter_D3D11On12, and what it yields is a device function
+ * table -- there is no ID3D11Device inside the driver to return. Building one
+ * over this table is the D3D11 runtime's job, which docs/D3D11ON12.md plans
+ * as a Wine d3d11 frontend refactor. Until that exists, CreateDeviceV1 keeps
+ * failing closed rather than fabricating a device, and this entry point is
+ * how the table is reached and proven. */
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12OpenAdapterV1(IUnknown *,
+        IUnknown *const *, UINT, UINT, WineD3D11On12AdapterDevice *)
         WINE_D3D11ON12_NOEXCEPT;
 WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11CreateDeviceV2(IDXGIAdapter *,
         D3D_DRIVER_TYPE, HMODULE, UINT, const D3D_FEATURE_LEVEL *, UINT, UINT,
