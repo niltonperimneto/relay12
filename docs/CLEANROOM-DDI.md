@@ -475,38 +475,46 @@ declaration nothing yet needs.
 | # | Group | Scope | Rationale and dependencies |
 | :--- | :--- | :--- | :--- |
 | 1 | Surface discovery | MIT tree test build against clean-room header | Turns remaining clean-room work into a measurable compiler worklist |
-| 2 | Signature promotion | Promote slots in `D3DWDDM2_6DDI_DEVICEFUNCS` | 111 of 138 distinct callback types remain; ordered by which structure group declares their parameter types, not by slot. See the gating table in `DDI-REMAINING-ROADMAP.md` |
+| 2 | Signature promotion | Promote slots in `D3DWDDM2_6DDI_DEVICEFUNCS` | 58 of 138 distinct callback types promoted covering 74 of 178 slots (including WDDM 2.6 scanout caps query, element layout, draw, pipeline states, resources, and command lists). See the gating table in `DDI-REMAINING-ROADMAP.md` |
 | 3 | DXGI DDI interop | `DXGI_DDI_BASE_CALLBACKS`, `DXGI1_6_1_DDI_BASE_FUNCTIONS` | Required by `DXGIBaseDDI` pointers in creation arguments |
 
-## Open questions
+## Resolved items & open questions
 
-- **Extent of `d3dkmthk.h` types in host signatures**: `D3D11On12`'s `pch.hpp`
-  includes `d3dkmthk.h`, but it is uncertain whether any types cross the host-driver
-  boundary. Group 1 (Surface discovery) will provide the compiler-verified answer.
-- **`D3DDDI_EXECUTIONSTATEESCAPE` documented and unblocked**: Previously
-  returning 404 on Microsoft Learn, this structure and its companion enum
+### Resolved items (formerly blocking)
+
+- **`D3DDDI_EXECUTIONSTATEESCAPE` (Resolved)**: Previously returning 404 on
+  Microsoft Learn, this structure and its companion enum
   `D3DDDI_DEVICEEXECUTION_STATE` were recovered via the official Windows Driver
   Kit DDI documentation repository (`MicrosoftDocs/windows-driver-docs-ddi`).
-  The structure is defined as:
+  Defined as:
   ```c
   typedef struct _D3DDDI_EXECUTIONSTATEESCAPE {
     D3DDDI_DEVICEEXECUTION_STATE State;
   } D3DDDI_EXECUTIONSTATEESCAPE;
   ```
-  Where `D3DDDI_DEVICEEXECUTION_STATE` enumerates `ACTIVE (1)`, `RESET (2)`,
-  `HUNG (3)`, `STOPPED (4)`, `ERROR_OUTOFMEMORY (5)`, and `ERROR_DMAFAULT (6)`.
-  This satisfies the payload required by `Device::ReportError` and clears the
-  blocker on `pfnEscapeCb` status queries using `DeviceStatusQuery`.
+  Enumerating `ACTIVE (1)`, `RESET (2)`, `HUNG (3)`, `STOPPED (4)`,
+  `ERROR_OUTOFMEMORY (5)`, and `ERROR_DMAFAULT (6)`. Clears the blocker on
+  `pfnEscapeCb` status queries using `DeviceStatusQuery`.
+- **Dedicated `D3D11DDI_HDEFERREDCONTEXT` handle type (Resolved / Excluded)**:
+  WDDM DDI reuses `D3D10DDI_HDEVICE` (`hDrvContext`). Inventing a separate
+  type would violate Rule 1 clean-room provenance.
+- **`D3D11DDI_CREATEDEVICE_FLAG_IS_XBOX` (Resolved / Excluded)**: Omitted as
+  out-of-scope; Whisky exclusively targets macOS.
+- **ThreadSanitizer (TSAN) integration (Resolved / Replaced)**: MinGW-w64 PE
+  targets have no TSAN runtime in compiler-rt or GCC. Replaced with static
+  shared-state auditing (`scripts/check_shared_state.py`) and oversubscribed
+  Win32 thread storm tests under Wine (`tests/ddi_thread_stress.c`).
+
+### Active open questions
+
+- **Extent of `d3dkmthk.h` types in host signatures**: `D3D11On12`'s `pch.hpp`
+  includes `d3dkmthk.h`. Group 1 (Surface discovery) will provide the compiler-verified answer.
 - **Whether the host should implement `pfnEscapeCb` at all**: `D3D11ON12.md`
   lists display-kernel paths as disabled for this port, so the host may answer
   the driver's device-removal probe directly rather than forwarding it to
   Wine's D3DKMT. Declaring the slot does not decide this.
-- **Value of `D3D11DDI_CREATEDEVICE_FLAG_IS_XBOX`**: Checked by the driver in
-  `IsXboxCreateFlags`, but omitted from public documentation. Left undefined as
-  the host never targets Xbox execution.
 - **Whether the pinned driver ever calls the two undeclared core-layer slots**:
   if `pfnShaderCacheGetValueCb` or `pfnQueryScanoutCapsCb` is invoked, the host
   needs their real signatures and the published set does not have them. Group 1
-  (Surface discovery) answers this the same way it answers the `d3dkmthk.h`
-  question, by compiling the MIT tree against the clean-room header. Until then
-  the placeholder type is what stops a guess from being called.
+  (Surface discovery) answers this by compiling the MIT tree against the clean-room
+  header. Until then the placeholder type is what stops a guess from being called.
