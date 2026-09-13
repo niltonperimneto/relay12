@@ -1,10 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-only
  * D3DMetal d3d11.dll router.
  *
- * Normal D3D11 creation remains owned by Apple's forwarder, renamed to
- * d3d11mt.dll at deployment time.  D3D11On12CreateDevice is routed to an
- * independently versioned implementation so an incomplete mapping layer can
- * never impersonate a working ID3D11On12Device.
+ * All three creation exports route through the independently versioned core.
+ * The core obtains D3D12 objects through the deployed D3DMetal interposer, so
+ * ordinary D3D11 and explicit D3D11On12 creation share one host and queue
+ * ownership model.
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -73,7 +73,6 @@ BOOL CALLBACK initializeBackend(PINIT_ONCE, PVOID, PVOID *) noexcept
         if (backend.createDevice && backend.createDeviceAndSwapChain)
         {
             backend.flags |= WINE_D3D11SHIM_FORWARDER_COMPLETE;
-            backend.creationResult = S_OK;
         }
         else
         {
@@ -117,7 +116,9 @@ BOOL CALLBACK initializeBackend(PINIT_ONCE, PVOID, PVOID *) noexcept
                 sizeof(backend.on12Interface), &backend.on12Interface))
                 || backend.on12Interface.size != sizeof(backend.on12Interface)
                 || backend.on12Interface.version != WINE_D3D11ON12_ABI_VERSION
-                || !backend.on12Interface.createDevice)
+                || !backend.on12Interface.createDevice
+                || !backend.on12Interface.createDirectDevice
+                || !backend.on12Interface.createDirectDeviceAndSwapChain)
         {
             /* An incompatible core is worse than an absent one: it is a
              * mismatched deployment, and it must not be called. */
@@ -131,6 +132,7 @@ BOOL CALLBACK initializeBackend(PINIT_ONCE, PVOID, PVOID *) noexcept
         else
         {
             backend.flags |= WINE_D3D11SHIM_CORE_COMPATIBLE;
+            backend.creationResult = S_OK;
             backend.on12Result = S_OK;
         }
     }
@@ -159,10 +161,11 @@ extern "C" HRESULT WINAPI shimD3D11CreateDevice(IDXGIAdapter *adapter,
         ID3D11DeviceContext **immediateContext) noexcept
 {
     initialize();
-    if (!backend.createDevice)
+    if (!backend.on12Interface.createDirectDevice)
         return backend.creationResult;
 
-    return backend.createDevice(adapter, driverType, software, flags,
+    return backend.on12Interface.createDirectDevice(adapter, driverType,
+            software, flags,
             featureLevels, featureLevelCount, sdkVersion, device, featureLevel,
             immediateContext);
 }
@@ -176,12 +179,13 @@ extern "C" HRESULT WINAPI shimD3D11CreateDeviceAndSwapChain(
         ID3D11DeviceContext **immediateContext) noexcept
 {
     initialize();
-    if (!backend.createDeviceAndSwapChain)
+    if (!backend.on12Interface.createDirectDeviceAndSwapChain)
         return backend.creationResult;
 
-    return backend.createDeviceAndSwapChain(adapter, driverType, software,
-            flags, featureLevels, featureLevelCount, sdkVersion, swapChainDesc,
-            swapChain, device, featureLevel, immediateContext);
+    return backend.on12Interface.createDirectDeviceAndSwapChain(adapter,
+            driverType, software, flags, featureLevels, featureLevelCount,
+            sdkVersion, swapChainDesc, swapChain, device, featureLevel,
+            immediateContext);
 }
 
 extern "C" HRESULT WINAPI shimD3D11On12CreateDevice(IUnknown *device12,
