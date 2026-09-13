@@ -11,11 +11,18 @@ PROHIBITED = (
     (re.compile(r"\bCComPtr\s*<"), "ATL CComPtr"),
 )
 
+INCLUDE_WITH_BACKSLASH = re.compile(
+    r"^\s*#\s*include\s*[<\"][^>\"]*\\[^>\"]*[>\"]")
+
 
 def check_source(path, text):
     errors = []
     for line_number, line in enumerate(text.splitlines(), 1):
         executable = line.split("//", 1)[0]
+        if INCLUDE_WITH_BACKSLASH.search(executable):
+            errors.append(
+                f"{path}:{line_number}: include path uses a Windows "
+                "separator")
         for pattern, dependency in PROHIBITED:
             if pattern.search(executable):
                 errors.append(
