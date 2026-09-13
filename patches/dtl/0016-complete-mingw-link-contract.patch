@@ -10,13 +10,21 @@ inline C++17 variable so its odr-use has a definition.
 diff --git a/include/D3D12TranslationLayerDependencyIncludes.h b/include/D3D12TranslationLayerDependencyIncludes.h
 --- a/include/D3D12TranslationLayerDependencyIncludes.h
 +++ b/include/D3D12TranslationLayerDependencyIncludes.h
-@@ -36,8 +36,9 @@
+@@ -36,8 +36,17 @@
  #include <directx/dxcore.h>
  #undef INITGUID
  #include <directx/d3d12compatibility.h>
 +#include <d3d11_3.h>
 +#include <dxgi1_5.h>
 +#include <dxguids/dxguids.h>
++#if !defined(_MSC_VER)
++// DirectX-Headers intentionally covers DirectX interfaces but not the DXGI
++// interfaces supplied by MinGW's Windows headers.
++WINADAPTER_IID(IDXGIFactory4,
++        0x1bc6ea02, 0xef36, 0x464f, 0xbf, 0x0c, 0x21, 0xca, 0x39, 0xe5, 0x16, 0x8a);
++WINADAPTER_IID(IDXGIAdapter3,
++        0x645967a4, 0x1392, 0x4310, 0xa7, 0x98, 0x80, 0x53, 0xce, 0x3e, 0x93, 0xfd);
++#endif
  #include <directx/d3dx12.h>
  #include "relay_d3d12_struct_return.hpp"
 -#include <d3d11_3.h>
