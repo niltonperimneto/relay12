@@ -22,13 +22,21 @@
 # define WINE_D3D11ON12_ASSERT(condition) _Static_assert(condition, #condition)
 #endif
 
-#define WINE_D3D11ON12_ABI_VERSION 1u
+#define WINE_D3D11ON12_ABI_VERSION 2u
 #define WINE_D3D11ON12_CAP_VALIDATION 0x0000000000000001ull
+#define WINE_D3D11ON12_CAP_D3DMETAL_BOOTSTRAP 0x0000000000000002ull
 
 typedef UINT (WINAPI *WineD3D11On12GetABIVersionFn)(void);
 typedef HRESULT (WINAPI *WineD3D11On12CreateDeviceFn)(IUnknown *, UINT,
         const D3D_FEATURE_LEVEL *, UINT, IUnknown *const *, UINT, UINT,
         ID3D11Device **, ID3D11DeviceContext **, D3D_FEATURE_LEVEL *);
+typedef HRESULT (WINAPI *WineD3D11CreateDeviceFn)(IDXGIAdapter *,
+        D3D_DRIVER_TYPE, HMODULE, UINT, const D3D_FEATURE_LEVEL *, UINT, UINT,
+        ID3D11Device **, D3D_FEATURE_LEVEL *, ID3D11DeviceContext **);
+typedef HRESULT (WINAPI *WineD3D11CreateDeviceAndSwapChainFn)(IDXGIAdapter *,
+        D3D_DRIVER_TYPE, HMODULE, UINT, const D3D_FEATURE_LEVEL *, UINT, UINT,
+        const DXGI_SWAP_CHAIN_DESC *, IDXGISwapChain **, ID3D11Device **,
+        D3D_FEATURE_LEVEL *, ID3D11DeviceContext **);
 
 struct WineD3D11On12Interface
 {
@@ -36,7 +44,9 @@ struct WineD3D11On12Interface
     UINT version;
     UINT64 capabilities;
     WineD3D11On12CreateDeviceFn createDevice;
-    void *reserved[8];
+    WineD3D11CreateDeviceFn createDirectDevice;
+    WineD3D11CreateDeviceAndSwapChainFn createDirectDeviceAndSwapChain;
+    void *reserved[6];
 };
 
 #ifndef __cplusplus
@@ -49,7 +59,10 @@ WINE_D3D11ON12_ASSERT(std::is_standard_layout_v<WineD3D11On12Interface>);
 WINE_D3D11ON12_ASSERT(sizeof(void *) != 8 || sizeof(WineD3D11On12Interface) == 88);
 WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface, capabilities) == 8);
 WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface, createDevice) == 16);
-WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface, reserved) == 24);
+WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface, createDirectDevice) == 24);
+WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface,
+        createDirectDeviceAndSwapChain) == 32);
+WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface, reserved) == 40);
 
 typedef HRESULT (WINAPI *WineD3D11On12GetInterfaceFn)(UINT, UINT,
         WineD3D11On12Interface *);
@@ -62,3 +75,12 @@ WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12CreateDeviceV1(IUnknown *,
         UINT, const D3D_FEATURE_LEVEL *, UINT, IUnknown *const *, UINT, UINT,
         ID3D11Device **, ID3D11DeviceContext **, D3D_FEATURE_LEVEL *)
         WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11CreateDeviceV2(IDXGIAdapter *,
+        D3D_DRIVER_TYPE, HMODULE, UINT, const D3D_FEATURE_LEVEL *, UINT, UINT,
+        ID3D11Device **, D3D_FEATURE_LEVEL *, ID3D11DeviceContext **)
+        WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11CreateDeviceAndSwapChainV2(
+        IDXGIAdapter *, D3D_DRIVER_TYPE, HMODULE, UINT,
+        const D3D_FEATURE_LEVEL *, UINT, UINT, const DXGI_SWAP_CHAIN_DESC *,
+        IDXGISwapChain **, ID3D11Device **, D3D_FEATURE_LEVEL *,
+        ID3D11DeviceContext **) WINE_D3D11ON12_NOEXCEPT;

@@ -23,11 +23,11 @@ successful local build is not evidence by itself.
 | Area | Current evidence | Exit gate |
 | --- | --- | --- |
 | Clean-room DDI | Independent layout model, C/C++ padding builds, promoted-signature negatives, 72-slot frame/readback harness | Every host-reachable callback promoted and invoked; all unsupported callbacks fail intentionally |
-| D3D12TranslationLayer source | Shared ownership removes all 15 `CComPtr`, all 3 `CComHeapPtr`, and the controlled ATL include | Prepared inventory reaches zero except explicitly retained public-SDK paths |
-| D3D12TranslationLayer compiler | Ownership and ETW contracts pass under native C++ and MinGW/Wine; the dependency edge preprocesses to completion with warnings as errors | Every translation unit compiles with C++17 and warnings as errors |
-| D3D12TranslationLayer linker | Three static archives contain the expected 37 unique translation-unit objects; standard CI now links them into D3D11On12 | Static library links reproducibly without ATL, telemetry, PIX, or MSVC runtime imports |
-| D3D11On12 source | Pinned patch series; `_com_error` and `CComPtr` removed; COM lifetime test | Prepared tree passes its portability inventory and clean-room header scan |
-| D3D11On12 compiler/linker | Portable Linux/MinGW link and export/import audit added to standard CI; self-hosted EWDK remains an optional second lane | Driver DLL compiles, links reproducibly, and passes export/import audit |
+| D3D12TranslationLayer source | Shared ownership removes all 15 `CComPtr`, all 3 `CComHeapPtr`, and the controlled ATL include; baseline verified | Prepared inventory reaches zero except explicitly retained public-SDK paths (ACHIEVED) |
+| D3D12TranslationLayer compiler | Ownership and ETW contracts pass; struct return ABI wrappers gated; all 37 TUs compile under GCC C++17 with -Werror | Every translation unit compiles with C++17 and warnings as errors (ACHIEVED) |
+| D3D12TranslationLayer linker | Three static archives contain 37 unique translation-unit objects; standard CI links them into D3D11On12 | Static library links reproducibly without ATL, telemetry, PIX, or MSVC runtime imports (ACHIEVED) |
+| D3D11On12 source | Pinned patch series (0001–0016); `_com_error`, `CComPtr`, `__if_exists`, MSVC pragmas/warnings removed; member detection tested | Prepared tree passes portability inventory and clean-room header scan (ACHIEVED) |
+| D3D11On12 compiler/linker | Portable Linux/MinGW build linked against portable DTL and audited in standard CI; EWDK as secondary lane | Driver DLL compiles, links reproducibly, and passes export/import audit (ACHIEVED) |
 | Wine host | Router and fail-closed core tests only | Real adapter/device creation, callback reachability audit, and explicit unsupported-path tests |
 | Frame correctness | DDI mock readback agrees with application test expectations | Both tests pass against the real host, with centre/corner pixels compared byte-for-byte |
 | Failure behavior | Interface, router, negative-compile, and concurrency tests | Allocation/interface/state-transition fault injection at every new boundary |
