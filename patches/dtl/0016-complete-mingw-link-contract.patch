@@ -1,0 +1,57 @@
+From: relay12 contributors
+Subject: [PATCH] dtl: complete the MinGW link contract
+
+Use DirectX-Headers' portable uuidof table instead of MinGW's unresolved
+__mingw_uuidof instantiations, adding the two compatibility interfaces that
+the table does not contain. Build the present implementation now that the
+SDK/WDK overlay supplies D3DKMT_PRESENT, and make the template sentinel an
+inline C++17 variable so its odr-use has a definition.
+---
+diff --git a/include/pch.h b/include/pch.h
+--- a/include/pch.h
++++ b/include/pch.h
+@@ -3,4 +3,19 @@
+ #pragma once
+ 
+ #include <D3D12TranslationLayerDependencyIncludes.h>
+ #include <D3D12TranslationLayerIncludes.h>
++#include <dxguids/dxguids.h>
++
++#if !defined(_MSC_VER)
++WINADAPTER_IID(ID3D12CompatibilityDevice,
++        0x8f1c0e3c, 0xfae3, 0x4a82, 0xb0, 0x98, 0xbf, 0xe1, 0x70, 0x82, 0x07, 0xff);
++WINADAPTER_IID(D3D11On12CreatorID,
++        0xedbf5678, 0x2960, 0x4e81, 0x84, 0x29, 0x99, 0xd4, 0xb2, 0x63, 0x0c, 0x4e);
++
++// MinGW's IID_PPV_ARGS uses __mingw_uuidof, whose declarations are not
++// emitted by these generated headers. DirectX-Headers publishes the same
++// stable IIDs through uuidof for non-MSVC toolchains.
++#undef IID_PPV_ARGS
++#define IID_PPV_ARGS(ppType) \
++        uuidof(ppType), reinterpret_cast<void **>(ppType)
++#endif
+diff --git a/include/ResourceBinding.hpp b/include/ResourceBinding.hpp
+--- a/include/ResourceBinding.hpp
++++ b/include/ResourceBinding.hpp
+@@ -244,8 +244,8 @@ namespace D3D12TranslationLayer
+     {
+     public:
+         typedef TDeclVector::value_type NullType;
+         typedef D3D12_CPU_DESCRIPTOR_HANDLE Descriptor;
+-        static const NullType c_AnyNull = RESOURCE_DIMENSION::UNKNOWN;
++        inline static const NullType c_AnyNull = RESOURCE_DIMENSION::UNKNOWN;
+ 
+     public:
+         CViewBoundState() noexcept(false)
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -93,5 +93,6 @@ target_link_libraries(d3d12translationlayer Microsoft::DirectX-Headers d3d12 dxg
+ 
+ target_compile_definitions(d3d12translationlayer PRIVATE DYNAMIC_LOAD_DXCORE=1)
++target_compile_definitions(d3d12translationlayer PRIVATE TRANSLATION_LAYER_SUPPORTS_D3DKMT_PRESENT=1)
+ 
+ if(USE_PIX)
+     message(FATAL_ERROR "PIX markers are not supported by the portable build")
+-- 
+2.51.0
