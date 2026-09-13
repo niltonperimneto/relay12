@@ -840,9 +840,11 @@ class SharedStateGate(unittest.TestCase):
 
     def test_a_touch_before_the_barrier_is_rejected(self):
         broken = self.shim.replace(
-            "    initialize();\n    if (!backend.createDevice)",
-            "    if (!backend.createDevice)\n        initialize();\n"
-            "    if (!backend.createDevice)")
+            "    initialize();\n"
+            "    if (!backend.on12Interface.createDirectDevice)",
+            "    if (!backend.on12Interface.createDirectDevice)\n"
+            "        initialize();\n"
+            "    if (!backend.on12Interface.createDirectDevice)")
         self.assertNotEqual(broken, self.shim)
         self.assertTrue(any("before it executes 'initOnce'" in error
                             for error in self.check(broken)))
