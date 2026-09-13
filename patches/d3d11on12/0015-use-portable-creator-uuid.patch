@@ -9,11 +9,10 @@ instantiate unavailable __mingw_uuidof specializations.
 diff --git a/include/pch.hpp b/include/pch.hpp
 --- a/include/pch.hpp
 +++ b/include/pch.hpp
-@@ -4,4 +4,23 @@
+@@ -4,5 +4,23 @@
  
  #include <D3D12TranslationLayerDependencyIncludes.h>
  #include <D3D12TranslationLayerIncludes.h>
-+#include <dxguids/dxguids.h>
 +
 +struct IDxbcConverter;
 +
