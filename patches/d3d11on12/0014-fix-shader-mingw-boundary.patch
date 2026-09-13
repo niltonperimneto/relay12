@@ -1,0 +1,91 @@
+From: relay12 contributors
+Subject: [PATCH] d3d11on12: fix the MinGW shader boundary
+
+The shader translation unit is the first consumer of the bundled DXC headers.
+GCC accepts their MSVC uuid declarations as extensions but warns that the
+attribute is ignored, which becomes fatal under the port's -Werror contract.
+Suppress that one known header diagnostic on the non-MSVC target.
+
+Replace the remaining ATL heap owner with the shared, contract-tested adopted
+allocation owner and preserve CoTaskMemFree as the exact deleter. Also route
+the DXC factory lookup through void*, matching the other GetProcAddress sites
+in this port and avoiding GCC's incompatible-function-cast diagnostic.
+---
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -31,7 +31,7 @@ if(NOT MSVC)
+     target_compile_options(d3d11on12 PRIVATE
+         -fms-extensions -Wall -Wextra -Werror
+         -Wno-missing-braces -Wno-missing-field-initializers
+-        -Wno-sign-compare -Wno-switch -Wno-reorder
++        -Wno-sign-compare -Wno-switch -Wno-reorder -Wno-attributes
+         -Wno-pessimizing-move)
+     target_link_options(d3d11on12 PRIVATE
+         -static-libgcc -static-libstdc++)
+diff --git a/src/shader.cpp b/src/shader.cpp
+--- a/src/shader.cpp
++++ b/src/shader.cpp
+@@ -33,5 +33,7 @@ namespace D3D11On12
+                         return HRESULT_FROM_WIN32(GetLastError());
+                     }
+-                    pfnDxcCreateInstance = reinterpret_cast<decltype(&::DxcCreateInstance)>(GetProcAddress(s_this.m_hDxilConv, "DxcCreateInstance"));
++                    pfnDxcCreateInstance = reinterpret_cast<decltype(&::DxcCreateInstance)>(
++                            reinterpret_cast<void *>(GetProcAddress(
++                                    s_this.m_hDxilConv, "DxcCreateInstance")));
+                     if (!pfnDxcCreateInstance)
+                     {
+@@ -294,7 +296,14 @@ namespace D3D11On12
+         }
+ 
+         auto pCache = pDevice->GetShaderCache();
+-        CComHeapPtr<void> spDxil;
++        struct CoTaskMemDeleter
++        {
++            void operator()(void *pointer) const noexcept
++            {
++                CoTaskMemFree(pointer);
++            }
++        };
++        RelayHeapPtr<void, CoTaskMemDeleter> spDxil;
+         UINT DxilSize = 0;
+         if (pCache)
+         {
+@@ -305,11 +315,11 @@ namespace D3D11On12
+                 {
+                     throw std::bad_alloc();
+                 }
+-                ThrowFailure(pCache->Load(pHash->Digest, spDxil.m_pData, &DxilSizeSizeT));
++                ThrowFailure(pCache->Load(pHash->Digest, spDxil.get(), &DxilSizeSizeT));
+                 DxilSize = (UINT)DxilSizeSizeT;
+             }
+         }
+-        if (spDxil.m_pData == nullptr)
++        if (spDxil.get() == nullptr)
+         {
+             RelayComPtr<IDxbcConverter> spConverter;
+             ThrowFailure(pfnDxcCreateInstance(CLSID_DxbcConverter, IID_PPV_ARGS(&spConverter)));
+@@ -333,5 +343,5 @@ namespace D3D11On12
+                     STDMETHOD_(void*, GetBufferPointer)() override { return pBlob; }
+                     STDMETHOD_(SIZE_T, GetBufferSize)() override { return Size; }
+-                } Blob = { spDxil.m_pData, DxilSize };
++                } Blob = { spDxil.get(), DxilSize };
+                 RelayComPtr<IDxcOperationResult> spResult;
+                 ThrowFailure(spValidator->Validate(&Blob, 0, &spResult));
+@@ -344,6 +354,6 @@ namespace D3D11On12
+ 
+             if (pCache)
+             {
+-                (void)pCache->Store(pHash->Digest, spDxil.m_pData, DxilSize);
++                (void)pCache->Store(pHash->Digest, spDxil.get(), DxilSize);
+             }
+         }
+@@ -361,5 +371,5 @@ namespace D3D11On12
+             // Pull out the DXIL validation info to figure out how many SRVs need to be bound
+             CDXBCParser DXBCParser;
+-            ThrowFailure(DXBCParser.ReadDXBCAssumingValidSize(spDxil.m_pData));
++            ThrowFailure(DXBCParser.ReadDXBCAssumingValidSize(spDxil.get()));
+ 
+ #define DXBC_FOURCC(ch0, ch1, ch2, ch3)                              \
+-- 
+2.51.0
