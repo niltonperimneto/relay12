@@ -1,0 +1,45 @@
+From: relay12 contributors
+Subject: [PATCH] d3d11on12: use the portable creator UUID
+
+Publish DirectX-Headers' portable uuidof table at the D3D11On12 precompiled
+header boundary, including the compatibility and converter interfaces absent
+from the upstream table. Use it directly instead of asking MinGW to
+instantiate unavailable __mingw_uuidof specializations.
+---
+diff --git a/include/pch.hpp b/include/pch.hpp
+--- a/include/pch.hpp
++++ b/include/pch.hpp
+@@ -4,5 +4,23 @@
+ 
+ #include <D3D12TranslationLayerDependencyIncludes.h>
+ #include <D3D12TranslationLayerIncludes.h>
++
++struct IDxbcConverter;
++
++#if !defined(_MSC_VER)
++WINADAPTER_IID(ID3D12CompatibilityDevice,
++        0x8f1c0e3c, 0xfae3, 0x4a82, 0xb0, 0x98, 0xbf, 0xe1, 0x70, 0x82, 0x07, 0xff);
++WINADAPTER_IID(D3D11On12CreatorID,
++        0xedbf5678, 0x2960, 0x4e81, 0x84, 0x29, 0x99, 0xd4, 0xb2, 0x63, 0x0c, 0x4e);
++WINADAPTER_IID(IDxbcConverter,
++        0x5f956ed5, 0x78d1, 0x4b15, 0x82, 0x47, 0xf7, 0x18, 0x76, 0x14, 0xa0, 0x41);
++
++// MinGW's IID_PPV_ARGS uses __mingw_uuidof, whose declarations are not
++// emitted by these generated headers. DirectX-Headers publishes the same
++// stable IIDs through uuidof for non-MSVC toolchains.
++#undef IID_PPV_ARGS
++#define IID_PPV_ARGS(ppType) \
++        uuidof(ppType), reinterpret_cast<void **>(ppType)
++#endif
+ 
+ #include <d3dx11on12.h>
+diff --git a/src/device.cpp b/src/device.cpp
+--- a/src/device.cpp
++++ b/src/device.cpp
+@@ -274,3 +274,3 @@ namespace D3D11On12
+ #ifdef __D3D11On12CreatorID_INTERFACE_DEFINED__
+-        args.CreatorID = __uuidof(D3D11On12CreatorID);
++        args.CreatorID = uuidof<D3D11On12CreatorID>();
+ #endif
+-- 
+2.51.0

@@ -153,6 +153,7 @@ static DWORD WINAPI stress_thread(void *parameter)
             { (IUnknown *)&shared_foreign_queue.ID3D12CommandQueue_iface };
     IUnknown *good_device = (IUnknown *)&shared_device.ID3D12Device_iface;
     unsigned int iteration;
+    unsigned int reserved_index;
 
     (void)parameter;
 
@@ -175,9 +176,22 @@ static DWORD WINAPI stress_thread(void *parameter)
                 WINE_D3D11ON12_ABI_VERSION, sizeof(iface), &iface), S_OK);
         if (iface.size != sizeof(iface)
                 || iface.version != WINE_D3D11ON12_ABI_VERSION
-                || iface.capabilities != WINE_D3D11ON12_CAP_VALIDATION
-                || iface.createDevice != WineD3D11On12CreateDeviceV1)
+                || iface.capabilities != (WINE_D3D11ON12_CAP_VALIDATION
+                        | WINE_D3D11ON12_CAP_D3DMETAL_BOOTSTRAP)
+                || iface.createDevice != WineD3D11On12CreateDeviceV1
+                || iface.createDirectDevice != WineD3D11CreateDeviceV2
+                || iface.createDirectDeviceAndSwapChain
+                        != WineD3D11CreateDeviceAndSwapChainV2)
             fail("GetInterface", "the interface table was filled wrongly");
+        for (reserved_index = 0; reserved_index < ARRAYSIZE(iface.reserved);
+                ++reserved_index)
+        {
+            if (iface.reserved[reserved_index])
+            {
+                fail("GetInterface", "a reserved interface slot was not zero");
+                break;
+            }
+        }
 
         /* Accepted all the way to the end, which is the path that reports
          * "no host implemented" and the one that exercises every acquisition

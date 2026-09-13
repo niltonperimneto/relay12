@@ -670,24 +670,7 @@ jobs:
           # catches a hand-edited offset, an unasserted field, and an
           # assertion for a field nothing derives from the specification.
           python3 scripts/gen_ddi_layout.py --check
-          python3 - <<'PY'
-          import pathlib
-
-          errors = []
-          for path in sorted(pathlib.Path("relay12-d3d11/ddi").rglob("*.h")):
-              lines = path.read_text().splitlines()
-              for number, line in enumerate(lines, start=1):
-                  if "* Group:" not in line:
-                      continue
-                  block = "\n".join(lines[number - 1:number + 3])
-                  if "* Specification:" in block and "* Retrieved:" in block:
-                      continue
-                  errors.append(f"{path}:{number}: a DDI declaration group "
-                                "needs Specification and Retrieved provenance")
-          if errors:
-              raise SystemExit("\n".join(errors))
-          print("ddi provenance gate: ok")
-          PY
+          python3 scripts/check_ddi_header.py
 
       - name: Verify reproducible source package
         run: |
