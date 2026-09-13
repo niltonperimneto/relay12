@@ -10,12 +10,17 @@ inline C++17 variable so its odr-use has a definition.
 diff --git a/include/D3D12TranslationLayerDependencyIncludes.h b/include/D3D12TranslationLayerDependencyIncludes.h
 --- a/include/D3D12TranslationLayerDependencyIncludes.h
 +++ b/include/D3D12TranslationLayerDependencyIncludes.h
-@@ -36,4 +36,5 @@
+@@ -36,7 +36,8 @@
  #include <directx/dxcore.h>
  #undef INITGUID
  #include <directx/d3d12compatibility.h>
++#include <d3d11_3.h>
++#include <dxgi1_5.h>
 +#include <dxguids/dxguids.h>
  #include <directx/d3dx12.h>
+-#include <d3d11_3.h>
+-#include <dxgi1_5.h>
+ #include <d3dkmthk.h>
 diff --git a/include/pch.h b/include/pch.h
 --- a/include/pch.h
 +++ b/include/pch.h
