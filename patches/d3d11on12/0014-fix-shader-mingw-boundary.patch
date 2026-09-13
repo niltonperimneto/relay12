@@ -35,27 +35,24 @@ diff --git a/src/shader.cpp b/src/shader.cpp
 +                                    s_this.m_hDxilConv, "DxcCreateInstance")));
                      if (!pfnDxcCreateInstance)
                      {
-@@ -294,7 +296,14 @@ namespace D3D11On12
+@@ -294,7 +296,7 @@ namespace D3D11On12
          }
  
          auto pCache = pDevice->GetShaderCache();
 -        CComHeapPtr<void> spDxil;
-+        struct CoTaskMemDeleter
-+        {
-+            void operator()(void *pointer) const noexcept
-+            {
-+                CoTaskMemFree(pointer);
-+            }
-+        };
-+        RelayHeapPtr<void, CoTaskMemDeleter> spDxil;
++        RelayComHeapPtr<void> spDxil;
          UINT DxilSize = 0;
          if (pCache)
          {
-@@ -305,11 +315,11 @@ namespace D3D11On12
+@@ -305,12 +307,14 @@ namespace D3D11On12
+-                if (!spDxil.AllocateBytes(DxilSizeSizeT))
++                void *cachedDxil = CoTaskMemAlloc(DxilSizeSizeT);
++                if (!cachedDxil)
                  {
                      throw std::bad_alloc();
                  }
 -                ThrowFailure(pCache->Load(pHash->Digest, spDxil.m_pData, &DxilSizeSizeT));
++                spDxil.Attach(cachedDxil);
 +                ThrowFailure(pCache->Load(pHash->Digest, spDxil.get(), &DxilSizeSizeT));
                  DxilSize = (UINT)DxilSizeSizeT;
              }
@@ -65,14 +62,14 @@ diff --git a/src/shader.cpp b/src/shader.cpp
          {
              RelayComPtr<IDxbcConverter> spConverter;
              ThrowFailure(pfnDxcCreateInstance(CLSID_DxbcConverter, IID_PPV_ARGS(&spConverter)));
-@@ -333,5 +343,5 @@ namespace D3D11On12
+@@ -333,5 +337,5 @@ namespace D3D11On12
                      STDMETHOD_(void*, GetBufferPointer)() override { return pBlob; }
                      STDMETHOD_(SIZE_T, GetBufferSize)() override { return Size; }
 -                } Blob = { spDxil.m_pData, DxilSize };
 +                } Blob = { spDxil.get(), DxilSize };
                  RelayComPtr<IDxcOperationResult> spResult;
                  ThrowFailure(spValidator->Validate(&Blob, 0, &spResult));
-@@ -344,6 +354,6 @@ namespace D3D11On12
+@@ -344,6 +348,6 @@ namespace D3D11On12
  
              if (pCache)
              {
@@ -80,7 +77,7 @@ diff --git a/src/shader.cpp b/src/shader.cpp
 +                (void)pCache->Store(pHash->Digest, spDxil.get(), DxilSize);
              }
          }
-@@ -361,5 +371,5 @@ namespace D3D11On12
+@@ -361,5 +365,5 @@ namespace D3D11On12
              // Pull out the DXIL validation info to figure out how many SRVs need to be bound
              CDXBCParser DXBCParser;
 -            ThrowFailure(DXBCParser.ReadDXBCAssumingValidSize(spDxil.m_pData));
