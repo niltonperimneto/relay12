@@ -9,6 +9,7 @@ import re
 PROHIBITED = (
     (re.compile(r"\b_com_error\b"), "MSVC _com_error"),
     (re.compile(r"\bCComPtr\s*<"), "ATL CComPtr"),
+    (re.compile(r"\bCComHeapPtr\s*<"), "ATL CComHeapPtr"),
 )
 
 INCLUDE_WITH_BACKSLASH = re.compile(
