@@ -72,6 +72,11 @@ class D3D11On12PortGate(unittest.TestCase):
             "bad.hpp", "CComPtr<IUnknown> pointer;")
         self.assertTrue(any("ATL CComPtr" in error for error in errors))
 
+    def test_backslash_include_is_rejected(self):
+        errors = check_d3d11on12_port.check_source(
+            "bad.cpp", "#include <dxc\\dxcapi.h>")
+        self.assertTrue(any("Windows separator" in error for error in errors))
+
     def test_comment_only_mentions_do_not_trip_the_gate(self):
         source = "// CComPtr<IUnknown> was removed\nint value; // _com_error"
         self.assertEqual(check_d3d11on12_port.check_source("notes.cpp", source), [])
