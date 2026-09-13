@@ -1,0 +1,20 @@
+From: relay12 contributors
+Subject: [PATCH] d3d11on12: use the Windows DLL name
+
+CMake gives shared libraries a lib prefix on Unix hosts even when they target
+Windows through a manually selected cross toolchain. Suppress that host-side
+convention so the build emits the deployment and export-audit contract name,
+d3d11on12.dll.
+---
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -10,5 +10,6 @@ file(GLOB_RECURSE EXTERNAL_INC ../external/*.h ../external/*.hpp)
+ 
+ add_library(d3d11on12 SHARED ${SRC} ${INC} ${INL} ${EXTERNAL_INC} d3d11on12.rc d3d11on12.def)
++set_target_properties(d3d11on12 PROPERTIES PREFIX "")
+ 
+ if (CMAKE_VERSION VERSION_GREATER 3.16)
+ 	target_precompile_headers(d3d11on12 PRIVATE ../include/pch.hpp)
+-- 
+2.51.0
