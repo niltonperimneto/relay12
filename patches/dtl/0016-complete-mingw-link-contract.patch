@@ -10,7 +10,7 @@ inline C++17 variable so its odr-use has a definition.
 diff --git a/include/D3D12TranslationLayerDependencyIncludes.h b/include/D3D12TranslationLayerDependencyIncludes.h
 --- a/include/D3D12TranslationLayerDependencyIncludes.h
 +++ b/include/D3D12TranslationLayerDependencyIncludes.h
-@@ -36,8 +36,17 @@
+@@ -36,8 +36,19 @@
  #include <directx/dxcore.h>
  #undef INITGUID
  #include <directx/d3d12compatibility.h>
@@ -20,6 +20,8 @@ diff --git a/include/D3D12TranslationLayerDependencyIncludes.h b/include/D3D12Tr
 +#if !defined(_MSC_VER)
 +// DirectX-Headers intentionally covers DirectX interfaces but not the DXGI
 +// interfaces supplied by MinGW's Windows headers.
++template <> constexpr GUID uuidof<IDXGIFactory>()
++{ return {0x7b7166ec, 0x21c7, 0x44ae, {0xb2, 0x1a, 0xc9, 0xae, 0x32, 0x1a, 0xe3, 0x69}}; }
 +template <> constexpr GUID uuidof<IDXGIFactory4>()
 +{ return {0x1bc6ea02, 0xef36, 0x464f, {0xbf, 0x0c, 0x21, 0xca, 0x39, 0xe5, 0x16, 0x8a}}; }
 +template <> constexpr GUID uuidof<IDXGIAdapter3>()
