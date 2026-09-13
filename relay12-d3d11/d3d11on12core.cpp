@@ -455,7 +455,9 @@ extern "C" HRESULT WINAPI WineD3D11CreateDeviceAndSwapChainV2(
     if (FAILED(hr))
         return hr;
 
-    hr = factory.get()->CreateSwapChain(device.get(), swapChainDesc, swapChain);
+    DXGI_SWAP_CHAIN_DESC mutableSwapChainDesc = *swapChainDesc;
+    hr = factory.get()->CreateSwapChain(device.get(), &mutableSwapChainDesc,
+            swapChain);
     if (FAILED(hr) || !*swapChain)
     {
         if (SUCCEEDED(hr))
