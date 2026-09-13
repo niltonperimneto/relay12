@@ -27,6 +27,13 @@ public:
 
     Interface *get() const noexcept { return pointer_; }
 
+    Interface *detach() noexcept
+    {
+        Interface *result = pointer_;
+        pointer_ = nullptr;
+        return result;
+    }
+
     /* Releasing first is what keeps a second acquisition through the same
      * holder from dropping the first reference on the floor.  No call site
      * reuses a holder today, and this is here so that the holder is not the
@@ -147,6 +154,36 @@ volatile LONG reportedIdentity;
 volatile LONG reportedNodeCount;
 volatile LONG reportedUntranslatedFlags;
 volatile LONG reportedNoHost;
+
+using D3D12CreateDeviceFn = HRESULT (WINAPI *)(IUnknown *, D3D_FEATURE_LEVEL,
+        REFIID, void **);
+
+INIT_ONCE d3d12InitOnce = INIT_ONCE_STATIC_INIT;
+/* shared-state: published once through d3d12InitOnce */
+HMODULE d3d12Module;
+D3D12CreateDeviceFn d3d12CreateDevice;
+
+BOOL CALLBACK initializeD3D12(PINIT_ONCE, PVOID, PVOID *) noexcept
+{
+    d3d12Module = LoadLibraryW(L"d3d12.dll");
+    if (d3d12Module)
+    {
+        const FARPROC address = GetProcAddress(d3d12Module,
+                "D3D12CreateDevice");
+        static_assert(sizeof(d3d12CreateDevice) == sizeof(address),
+                "Win32 function pointers must have equal size");
+        __builtin_memcpy(&d3d12CreateDevice, &address,
+                sizeof(d3d12CreateDevice));
+    }
+    return TRUE;
+}
+
+void clearDirectOutputs(ID3D11Device **device,
+        D3D_FEATURE_LEVEL *featureLevel,
+        ID3D11DeviceContext **context) noexcept
+{
+    clearOutputs(device, context, featureLevel);
+}
 }
 
 extern "C" UINT WINAPI WineD3D11On12GetABIVersion() noexcept
@@ -167,8 +204,12 @@ extern "C" HRESULT WINAPI WineD3D11On12GetInterface(UINT requestedVersion,
     if (requestedVersion != WINE_D3D11ON12_ABI_VERSION)
         return E_NOINTERFACE;
 
-    interfaceOut->capabilities = WINE_D3D11ON12_CAP_VALIDATION;
+    interfaceOut->capabilities = WINE_D3D11ON12_CAP_VALIDATION
+            | WINE_D3D11ON12_CAP_D3DMETAL_BOOTSTRAP;
     interfaceOut->createDevice = WineD3D11On12CreateDeviceV1;
+    interfaceOut->createDirectDevice = WineD3D11CreateDeviceV2;
+    interfaceOut->createDirectDeviceAndSwapChain =
+            WineD3D11CreateDeviceAndSwapChainV2;
     return S_OK;
 }
 
@@ -299,4 +340,139 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateDeviceV1(IUnknown *deviceObject,
             "runtime/DDI host is implemented in this milestone; returning "
             "DXGI_ERROR_UNSUPPORTED instead of a fabricated device.\n");
     return DXGI_ERROR_UNSUPPORTED;
+}
+
+extern "C" HRESULT WINAPI WineD3D11CreateDeviceV2(IDXGIAdapter *adapter,
+        D3D_DRIVER_TYPE driverType, HMODULE software, UINT flags,
+        const D3D_FEATURE_LEVEL *featureLevels, UINT featureLevelCount,
+        UINT sdkVersion, ID3D11Device **device11,
+        D3D_FEATURE_LEVEL *chosenFeatureLevel,
+        ID3D11DeviceContext **context11) noexcept
+{
+    clearDirectOutputs(device11, chosenFeatureLevel, context11);
+
+    if (sdkVersion != D3D11_SDK_VERSION)
+        return E_INVALIDARG;
+    if ((featureLevels == nullptr) != (featureLevelCount == 0))
+        return E_INVALIDARG;
+    if (adapter)
+    {
+        if (driverType != D3D_DRIVER_TYPE_UNKNOWN || software)
+            return E_INVALIDARG;
+    }
+    else if (driverType != D3D_DRIVER_TYPE_HARDWARE || software)
+    {
+        return DXGI_ERROR_UNSUPPORTED;
+    }
+
+    InitOnceExecuteOnce(&d3d12InitOnce, initializeD3D12, nullptr, nullptr);
+    if (!d3d12CreateDevice)
+        return DXGI_ERROR_UNSUPPORTED;
+
+    static const D3D_FEATURE_LEVEL defaults[] = {
+        D3D_FEATURE_LEVEL_11_0,
+        D3D_FEATURE_LEVEL_10_1,
+        D3D_FEATURE_LEVEL_10_0,
+    };
+    const D3D_FEATURE_LEVEL *levels = featureLevels;
+    UINT levelCount = featureLevelCount;
+    if (!levels)
+    {
+        levels = defaults;
+        levelCount = ARRAYSIZE(defaults);
+    }
+
+    ComRef<ID3D12Device> device12;
+    HRESULT hr = DXGI_ERROR_UNSUPPORTED;
+    for (UINT index = 0; index < levelCount; ++index)
+    {
+        hr = strictResult(d3d12CreateDevice(adapter, levels[index],
+                IID_ID3D12Device,
+                reinterpret_cast<void **>(device12.put())), device12);
+        if (SUCCEEDED(hr))
+            break;
+    }
+    if (FAILED(hr))
+        return hr;
+
+    D3D12_COMMAND_QUEUE_DESC queueDesc = {};
+    queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    queueDesc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+    queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+    queueDesc.NodeMask = 0;
+
+    ComRef<ID3D12CommandQueue> queue;
+    hr = strictResult(device12.get()->CreateCommandQueue(&queueDesc,
+            IID_ID3D12CommandQueue,
+            reinterpret_cast<void **>(queue.put())), queue);
+    if (FAILED(hr))
+        return hr;
+
+    IUnknown *queues[] = { queue.get() };
+    return WineD3D11On12CreateDeviceV1(device12.get(), flags, levels,
+            levelCount, queues, ARRAYSIZE(queues), 0, device11, context11,
+            chosenFeatureLevel);
+}
+
+extern "C" HRESULT WINAPI WineD3D11CreateDeviceAndSwapChainV2(
+        IDXGIAdapter *adapter, D3D_DRIVER_TYPE driverType, HMODULE software,
+        UINT flags, const D3D_FEATURE_LEVEL *featureLevels,
+        UINT featureLevelCount, UINT sdkVersion,
+        const DXGI_SWAP_CHAIN_DESC *swapChainDesc, IDXGISwapChain **swapChain,
+        ID3D11Device **device11, D3D_FEATURE_LEVEL *chosenFeatureLevel,
+        ID3D11DeviceContext **context11) noexcept
+{
+    if (swapChain)
+        *swapChain = nullptr;
+    clearDirectOutputs(device11, chosenFeatureLevel, context11);
+    if (!swapChainDesc || !swapChain)
+        return E_INVALIDARG;
+
+    ComRef<ID3D11Device> device;
+    ComRef<ID3D11DeviceContext> context;
+    D3D_FEATURE_LEVEL selected = static_cast<D3D_FEATURE_LEVEL>(0);
+    HRESULT hr = WineD3D11CreateDeviceV2(adapter, driverType, software, flags,
+            featureLevels, featureLevelCount, sdkVersion, device.put(),
+            &selected, context.put());
+    if (FAILED(hr))
+        return hr;
+
+    ComRef<IDXGIDevice> dxgiDevice;
+    hr = strictResult(device.get()->QueryInterface(IID_IDXGIDevice,
+            reinterpret_cast<void **>(dxgiDevice.put())), dxgiDevice);
+    if (FAILED(hr))
+        return hr;
+
+    ComRef<IDXGIAdapter> owningAdapter;
+    hr = strictResult(dxgiDevice.get()->GetAdapter(owningAdapter.put()),
+            owningAdapter);
+    if (FAILED(hr))
+        return hr;
+
+    ComRef<IDXGIFactory> factory;
+    hr = strictResult(owningAdapter.get()->GetParent(IID_IDXGIFactory,
+            reinterpret_cast<void **>(factory.put())), factory);
+    if (FAILED(hr))
+        return hr;
+
+    hr = factory.get()->CreateSwapChain(device.get(), swapChainDesc, swapChain);
+    if (FAILED(hr) || !*swapChain)
+    {
+        if (SUCCEEDED(hr))
+            hr = E_NOINTERFACE;
+        if (*swapChain)
+        {
+            (*swapChain)->Release();
+            *swapChain = nullptr;
+        }
+        return hr;
+    }
+
+    if (chosenFeatureLevel)
+        *chosenFeatureLevel = selected;
+    if (device11)
+        *device11 = device.detach();
+    if (context11)
+        *context11 = context.detach();
+    return S_OK;
 }
