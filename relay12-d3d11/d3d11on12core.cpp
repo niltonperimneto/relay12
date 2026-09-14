@@ -636,13 +636,26 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateDeviceV1(IUnknown *deviceObject,
             return FAILED(hr) ? hr : E_INVALIDARG;
     }
 
-    /* Still no ID3D11Device, and deliberately so.  The driver exports one
-     * symbol and it yields a DDI device function table, not a runtime object;
-     * WineD3D11On12OpenAdapterV1 below is how that table is reached.  Building
-     * ID3D11Device over it is the D3D11 runtime's work, planned in
-     * docs/D3D11ON12.md as a Wine d3d11 frontend refactor.  Never return
-     * success until genuine ID3D11Device and context objects are backed by the
-     * supplied device and queue. */
+    /* Exercise the real adapter/device construction path here rather than
+     * leaving the public entry point disconnected from it.  The lifetime is
+     * closed again before returning because the Wine frontend cannot own the
+     * token yet.  Once that frontend supplies a controlling ID3D11Device, the
+     * same token moves into its backend_private member instead.
+     *
+     * Failure remains DXGI_ERROR_UNSUPPORTED at this public boundary.  The
+     * detailed adapter diagnostic has already been emitted, and exposing its
+     * private HRESULT here would make availability depend on deployment
+     * details instead of the documented D3D11 fallback result. */
+    WineD3D11On12AdapterDevice adapterDevice = {};
+    adapterDevice.size = sizeof(adapterDevice);
+    hr = WineD3D11On12OpenAdapterV1(deviceObject, queueObjects, queueCount,
+            nodeMask, &adapterDevice);
+    if (SUCCEEDED(hr))
+        WineD3D11On12CloseAdapterDeviceV1(&adapterDevice);
+
+    /* Still no ID3D11Device, and deliberately so.  Never return success until
+     * genuine device and context objects own the DDI lifetime and all methods
+     * they expose have truthful backing behavior. */
     wineD3D11DiagReportOnce(&reportedNoHost,
             "d3d11on12core: device and queue accepted, but no D3D11 "
             "runtime/DDI host is implemented in this milestone; returning "
