@@ -28,6 +28,7 @@
 #define WINE_D3D11ON12_CAP_DEVICE_LIFECYCLE 0x0000000000000004ull
 #define WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_FLUSH 0x0000000000000008ull
 #define WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_DRAW 0x0000000000000010ull
+#define WINE_D3D11ON12_CAP_WRAPPED_RESOURCE_VALIDATION 0x0000000000000020ull
 
 typedef UINT (WINAPI *WineD3D11On12GetABIVersionFn)(void);
 typedef HRESULT (WINAPI *WineD3D11On12CreateDeviceFn)(IUnknown *, UINT,
@@ -48,6 +49,8 @@ typedef HRESULT (WINAPI *WineD3D11On12FlushAdapterDeviceFn)(
         struct WineD3D11On12AdapterDevice *, UINT, UINT, BOOL *);
 typedef HRESULT (WINAPI *WineD3D11On12DrawAdapterDeviceFn)(
         struct WineD3D11On12AdapterDevice *, UINT, UINT);
+typedef HRESULT (WINAPI *WineD3D11On12ValidateWrappedResourceFn)(
+        struct WineD3D11On12AdapterDevice *, IUnknown *);
 
 struct WineD3D11On12Interface
 {
@@ -60,7 +63,8 @@ struct WineD3D11On12Interface
     WineD3D11On12CloseAdapterDeviceFn closeAdapterDevice;
     WineD3D11On12FlushAdapterDeviceFn flushAdapterDevice;
     WineD3D11On12DrawAdapterDeviceFn drawAdapterDevice;
-    void *reserved[3];
+    WineD3D11On12ValidateWrappedResourceFn validateWrappedResource;
+    void *reserved[2];
 };
 
 #ifndef __cplusplus
@@ -82,7 +86,9 @@ WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface,
         flushAdapterDevice) == 48);
 WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface,
         drawAdapterDevice) == 56);
-WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface, reserved) == 64);
+WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface,
+        validateWrappedResource) == 64);
+WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface, reserved) == 72);
 
 typedef HRESULT (WINAPI *WineD3D11On12GetInterfaceFn)(UINT, UINT,
         WineD3D11On12Interface *);
@@ -157,6 +163,9 @@ WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12FlushAdapterDeviceV1(
         WINE_D3D11ON12_NOEXCEPT;
 WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12DrawAdapterDeviceV1(
         WineD3D11On12AdapterDevice *, UINT, UINT)
+        WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12ValidateWrappedResourceV1(
+        WineD3D11On12AdapterDevice *, IUnknown *)
         WINE_D3D11ON12_NOEXCEPT;
 WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11CreateDeviceV2(IDXGIAdapter *,
         D3D_DRIVER_TYPE, HMODULE, UINT, const D3D_FEATURE_LEVEL *, UINT, UINT,
