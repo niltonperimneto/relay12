@@ -158,6 +158,9 @@ static void test_get_interface(void)
     if (!(iface.capabilities & WINE_D3D11ON12_CAP_WRAPPED_RESOURCE_VALIDATION))
         fail("get interface publishes the current version",
                 "the wrapped-resource validation capability bit is missing");
+    if (!(iface.capabilities & WINE_D3D11ON12_CAP_INDEXED_INSTANCED_DRAW))
+        fail("get interface publishes the current version",
+                "the indexed/instanced draw capability bit is missing");
     if (iface.createDevice != WineD3D11On12CreateDeviceV1)
         fail("get interface publishes the current version",
                 "createDevice does not point at the V1 entry point");
@@ -174,6 +177,9 @@ static void test_get_interface(void)
             != WineD3D11On12ValidateWrappedResourceV1)
         fail("get interface publishes the current version",
                 "validateWrappedResource does not point at the V1 entry point");
+    if (iface.dispatchDraw != WineD3D11On12DispatchDrawV1)
+        fail("get interface publishes the current version",
+                "dispatchDraw does not point at the V1 entry point");
 }
 
 static void test_argument_validation(void)

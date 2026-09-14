@@ -12,6 +12,9 @@ static LONG destroy_calls;
 static LONG close_calls;
 static LONG flush_calls;
 static LONG draw_calls;
+static LONG indexed_draw_calls;
+static LONG instanced_draw_calls;
+static LONG indexed_instanced_draw_calls;
 static unsigned char adapter_private;
 
 static HRESULT mock_get_versions(D3D10DDI_HADAPTER adapter, UINT32 *count,
@@ -60,6 +63,30 @@ static void mock_draw(D3D10DDI_HDEVICE device, UINT vertex_count,
     InterlockedIncrement(&draw_calls);
 }
 
+static void mock_draw_indexed(D3D10DDI_HDEVICE device, UINT index_count,
+        UINT start_index, INT base_vertex)
+{
+    (void)device; (void)index_count; (void)start_index; (void)base_vertex;
+    InterlockedIncrement(&indexed_draw_calls);
+}
+
+static void mock_draw_instanced(D3D10DDI_HDEVICE device, UINT vertex_count,
+        UINT instance_count, UINT start_vertex, UINT start_instance)
+{
+    (void)device; (void)vertex_count; (void)instance_count;
+    (void)start_vertex; (void)start_instance;
+    InterlockedIncrement(&instanced_draw_calls);
+}
+
+static void mock_draw_indexed_instanced(D3D10DDI_HDEVICE device,
+        UINT index_count, UINT instance_count, UINT start_index,
+        INT base_vertex, UINT start_instance)
+{
+    (void)device; (void)index_count; (void)instance_count; (void)start_index;
+    (void)base_vertex; (void)start_instance;
+    InterlockedIncrement(&indexed_instanced_draw_calls);
+}
+
 static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
         D3D10DDIARG_CREATEDEVICE *args)
 {
@@ -69,6 +96,10 @@ static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
     args->pWDDM2_6DeviceFuncs->pfnDestroyDevice = mock_destroy_device;
     args->pWDDM2_6DeviceFuncs->pfnFlush = mock_flush;
     args->pWDDM2_6DeviceFuncs->pfnDraw = mock_draw;
+    args->pWDDM2_6DeviceFuncs->pfnDrawIndexed = mock_draw_indexed;
+    args->pWDDM2_6DeviceFuncs->pfnDrawInstanced = mock_draw_instanced;
+    args->pWDDM2_6DeviceFuncs->pfnDrawIndexedInstanced =
+            mock_draw_indexed_instanced;
     InterlockedIncrement(&create_calls);
     return S_OK;
 }
@@ -81,6 +112,14 @@ __declspec(dllexport) LONG WINAPI WineD3D11On12MockDriverGetFlushCount(void)
 __declspec(dllexport) LONG WINAPI WineD3D11On12MockDriverGetDrawCount(void)
 {
     return draw_calls;
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetExtendedDrawCounts(
+        LONG *indexed, LONG *instanced, LONG *indexed_instanced)
+{
+    if (indexed) *indexed = indexed_draw_calls;
+    if (instanced) *instanced = instanced_draw_calls;
+    if (indexed_instanced) *indexed_instanced = indexed_instanced_draw_calls;
 }
 
 static HRESULT mock_close_adapter(D3D10DDI_HADAPTER adapter)
