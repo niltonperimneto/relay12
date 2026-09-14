@@ -183,6 +183,7 @@ jobs:
             echo "applying $(basename "$p")"
             git -C winecx apply --verbose "$p"
           done
+          python3 scripts/check_wine_d3d11_backend.py winecx
 
       # gcc, not llvm-mingw. measured 2026-08-04 by module bisection: with a
       # kernelbase.dll built by llvm-mingw, steam never completes its CM login,

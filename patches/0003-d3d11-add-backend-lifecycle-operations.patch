@@ -1,0 +1,141 @@
+diff --git a/dlls/d3d11/d3d11_private.h b/dlls/d3d11/d3d11_private.h
+index 76fe2f12..21204753 100644
+--- a/dlls/d3d11/d3d11_private.h
++++ b/dlls/d3d11/d3d11_private.h
+@@ -564,6 +564,17 @@ struct d3d11_device_context
+     struct wined3d_private_store private_store;
+ };
+ 
++/* Backend-owned lifetime operations shared by the public D3D11 device and
++ * immediate context. WineD3D remains the default backend. */
++struct d3d11_backend_ops
++{
++    void (*destroy_device)(struct d3d_device *device);
++    D3D_FEATURE_LEVEL (*get_feature_level)(struct d3d_device *device);
++    UINT (*get_creation_flags)(struct d3d_device *device);
++    HRESULT (*get_device_removed_reason)(struct d3d_device *device);
++    void (*flush)(struct d3d11_device_context *context);
++};
++
+ /* ID3D11Device, ID3D10Device1 */
+ struct d3d_device
+ {
+@@ -576,6 +587,9 @@ struct d3d_device
+     IUnknown *outer_unk;
+     LONG refcount;
+ 
++    const struct d3d11_backend_ops *backend_ops;
++    void *backend_private;
++
+     BOOL d3d11_only;
+ 
+     struct d3d_device_context_state *state;
+diff --git a/dlls/d3d11/device.c b/dlls/d3d11/device.c
+index e1a84669..592f4ac6 100644
+--- a/dlls/d3d11/device.c
++++ b/dlls/d3d11/device.c
+@@ -21,6 +21,43 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(d3d11);
+ 
++static void wined3d_backend_destroy_device(struct d3d_device *device)
++{
++    if (device->wined3d_device)
++        wined3d_device_decref(device->wined3d_device);
++}
++
++static D3D_FEATURE_LEVEL wined3d_backend_get_feature_level(struct d3d_device *device)
++{
++    return device->state->feature_level;
++}
++
++static UINT wined3d_backend_get_creation_flags(struct d3d_device *device)
++{
++    (void)device;
++    return 0;
++}
++
++static HRESULT wined3d_backend_get_device_removed_reason(struct d3d_device *device)
++{
++    (void)device;
++    return S_OK;
++}
++
++static void wined3d_backend_flush(struct d3d11_device_context *context)
++{
++    wined3d_device_context_flush(context->wined3d_context);
++}
++
++static const struct d3d11_backend_ops wined3d_backend_ops =
++{
++    wined3d_backend_destroy_device,
++    wined3d_backend_get_feature_level,
++    wined3d_backend_get_creation_flags,
++    wined3d_backend_get_device_removed_reason,
++    wined3d_backend_flush,
++};
++
+ static BOOL d3d_array_reserve(void **elements, SIZE_T *capacity, SIZE_T count, SIZE_T size)
+ {
+     SIZE_T max_capacity, new_capacity;
+@@ -2675,7 +2712,7 @@ static void STDMETHODCALLTYPE d3d11_device_context_Flush(ID3D11DeviceContext4 *i
+ 
+     TRACE("iface %p.\n", iface);
+ 
+-    wined3d_device_context_flush(context->wined3d_context);
++    context->device->backend_ops->flush(context);
+ }
+ 
+ static D3D11_DEVICE_CONTEXT_TYPE STDMETHODCALLTYPE d3d11_device_context_GetType(ID3D11DeviceContext4 *iface)
+@@ -5074,21 +5111,25 @@ static D3D_FEATURE_LEVEL STDMETHODCALLTYPE d3d11_device_GetFeatureLevel(ID3D11De
+ 
+     TRACE("iface %p.\n", iface);
+ 
+-    return device->state->feature_level;
++    return device->backend_ops->get_feature_level(device);
+ }
+ 
+ static UINT STDMETHODCALLTYPE d3d11_device_GetCreationFlags(ID3D11Device5 *iface)
+ {
+-    FIXME("iface %p stub!\n", iface);
++    struct d3d_device *device = impl_from_ID3D11Device5(iface);
+ 
+-    return 0;
++    TRACE("iface %p.\n", iface);
++
++    return device->backend_ops->get_creation_flags(device);
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE d3d11_device_GetDeviceRemovedReason(ID3D11Device5 *iface)
+ {
+-    WARN("iface %p stub!\n", iface);
++    struct d3d_device *device = impl_from_ID3D11Device5(iface);
+ 
+-    return S_OK;
++    TRACE("iface %p.\n", iface);
++
++    return device->backend_ops->get_device_removed_reason(device);
+ }
+ 
+ static void STDMETHODCALLTYPE d3d11_device_GetImmediateContext(ID3D11Device5 *iface,
+@@ -5584,10 +5625,7 @@ static ULONG STDMETHODCALLTYPE d3d_device_inner_Release(IUnknown *iface)
+         }
+         free(device->context_states);
+         d3d11_device_context_cleanup(&device->immediate_context);
+-        if (device->wined3d_device)
+-        {
+-            wined3d_device_decref(device->wined3d_device);
+-        }
++        device->backend_ops->destroy_device(device);
+         wine_rb_destroy(&device->sampler_states, NULL, NULL);
+         wine_rb_destroy(&device->rasterizer_states, NULL, NULL);
+         wine_rb_destroy(&device->depthstencil_states, NULL, NULL);
+@@ -8164,6 +8202,8 @@ void d3d_device_init(struct d3d_device *device, void *outer_unknown)
+     device->IWineDXGIDeviceParent_iface.lpVtbl = &d3d_dxgi_device_parent_vtbl;
+     device->device_parent.ops = &d3d_wined3d_device_parent_ops;
+     device->refcount = 1;
++    device->backend_ops = &wined3d_backend_ops;
++    device->backend_private = NULL;
+     /* COM aggregation always takes place */
+     device->outer_unk = outer_unknown;
+     device->d3d11_only = FALSE;
