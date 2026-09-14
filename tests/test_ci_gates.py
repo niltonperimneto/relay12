@@ -67,6 +67,14 @@ class WineD3D11BackendGate(unittest.TestCase):
         source.mkdir(parents=True)
         (source / "d3d11_private.h").write_text(header)
         (source / "device.c").write_text(device)
+        (root / "configure.ac").write_text(
+            "WINE_CONFIG_MAKEFILE(dlls/d3d11on12host)")
+        host = root / "dlls" / "d3d11on12host"
+        host.mkdir()
+        (host / "Makefile.in").write_text(
+            "MODULE    = d3d11on12host.dll")
+        (host / "d3d11on12host.spec").write_text(
+            "@ stdcall D3D11On12CreateDevice()")
         self.addCleanup(temporary.cleanup)
         return root
 
@@ -83,6 +91,14 @@ class WineD3D11BackendGate(unittest.TestCase):
             check_wine_d3d11_backend.REQUIRED_HEADER), "\n".join(markers))
         errors = check_wine_d3d11_backend.check_tree(root)
         self.assertTrue(any("backend_ops->flush" in error for error in errors))
+
+    def test_missing_separate_host_module_is_rejected(self):
+        root = self.make_tree("\n".join(
+            check_wine_d3d11_backend.REQUIRED_HEADER), "\n".join(
+            check_wine_d3d11_backend.REQUIRED_DEVICE))
+        (root / "dlls/d3d11on12host/Makefile.in").unlink()
+        errors = check_wine_d3d11_backend.check_tree(root)
+        self.assertTrue(any("Makefile.in is missing" in error for error in errors))
 
 
 class D3D11On12PortGate(unittest.TestCase):

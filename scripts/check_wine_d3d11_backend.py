@@ -37,6 +37,9 @@ def check_tree(root):
     root = pathlib.Path(root)
     header = (root / "dlls/d3d11/d3d11_private.h").read_text()
     device = (root / "dlls/d3d11/device.c").read_text()
+    configure = (root / "configure.ac").read_text()
+    host_makefile = root / "dlls/d3d11on12host/Makefile.in"
+    host_spec = root / "dlls/d3d11on12host/d3d11on12host.spec"
     errors = []
 
     for marker in REQUIRED_HEADER:
@@ -45,6 +48,17 @@ def check_tree(root):
     for marker in REQUIRED_DEVICE:
         if marker not in device:
             errors.append(f"device.c is missing: {marker}")
+
+    if "WINE_CONFIG_MAKEFILE(dlls/d3d11on12host)" not in configure:
+        errors.append("configure.ac does not configure d3d11on12host")
+    if not host_makefile.is_file():
+        errors.append("d3d11on12host/Makefile.in is missing")
+    elif "MODULE    = d3d11on12host.dll" not in host_makefile.read_text():
+        errors.append("d3d11on12host has the wrong module name")
+    if not host_spec.is_file():
+        errors.append("d3d11on12host/d3d11on12host.spec is missing")
+    elif "D3D11On12CreateDevice" not in host_spec.read_text():
+        errors.append("d3d11on12host does not export D3D11On12CreateDevice")
 
     return errors
 
