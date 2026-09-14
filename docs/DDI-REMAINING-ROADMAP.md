@@ -99,7 +99,8 @@ Below is the structured roadmap of what is yet to be done.
 ## 3. Core DDI Function Implementations
 
 **3.1. Removing Placeholders**
-* **Status:** Ongoing — 57 of 138 PFN typedefs promoted, covering 73 of 178 slots
+* **Status:** Ongoing — 58 of 138 PFN typedefs promoted, covering 74 of 178 slots
+* **Done:** the device lifecycle family — `pfnCalcPrivateDeviceSize` and `pfnDestroyDevice`. These complete the entry and exit points for the device state, unblocked by the `D3D10DDIARG_CALCPRIVATEDEVICESIZE` full structure.
 * **Done:** the command-list family — `pfnAbandonCommandList`,
   `pfnCommandListExecute`,
   `pfnDestroyCommandList`, `pfnRecycleCommandList`, and

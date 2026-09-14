@@ -20,7 +20,11 @@ Layout and per-slot callability are necessary and not sufficient. Every driver h
 * **`tests/d3d11ddi_triangle.c`:** drives the promoted device function table through the MVP frame — create, bind, clear, draw, copy to staging, map, verify, unmap, tear down — with recording stubs, then asserts the recorded call sequence against a written-out expected order and checks that each binding received the handle the matching creation produced. The clear stub fills a backing image, draw replaces its centre texel, and readback requires the centre to carry the drawn red and a corner the cleared blue, matching the application-level test. Objects get distinct driver private blocks, allocated by the test the way the runtime allocates them, which is what makes the identity checks discriminating rather than vacuous. Compiled in C and C++ and run under Wine, like the layout harness.
 * **What it does not claim:** nothing renders. There is no host behind the table. The application-level counterpart that would prove pixels is `tests/e2e_d3d11_triangle.cpp`, built but not run by the manual `integration-test.yml` job; when a host exists the two must agree.
 
-## 1b. Portability Debt as a Tested Input
+## 1b. Fail-Closed Driver Initialization Tests
+Real driver interactions start with the adapter and device, requiring strict argument handling before the boundary to the translation layer is even entered.
+* **`tests/d3d11on12openadapter.c` & `tests/d3d11on12coretest.c`:** These suites validate the DDI adapter entry point (`WineD3D11On12OpenAdapterV1`), explicitly checking that malformed calls (e.g., null out-structures, size mismatching version handshakes, or invalid interface combinations) are rejected and fail-closed *before* reaching the actual D3D11On12 driver module. This proves defensive design.
+
+## 1c. Portability Debt as a Tested Input
 
 `scripts/inventory_dtl_portability.py` inventories the pinned
 D3D12TranslationLayer tree by category, occurrence count, and file. Its golden
