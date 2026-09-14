@@ -11,6 +11,11 @@ REQUIRED_HEADER = (
     "void (*flush)(struct d3d11_device_context *context);",
     "const struct d3d11_backend_ops *backend_ops;",
     "void *backend_private;",
+    "ID3D11On12Device1 ID3D11On12Device1_iface;",
+    "HRESULT (*create_wrapped_resource)(struct d3d_device *device,",
+    "void (*release_wrapped_resources)(struct d3d_device *device,",
+    "void (*acquire_wrapped_resources)(struct d3d_device *device,",
+    "HRESULT (*get_d3d12_device)(struct d3d_device *device, REFIID iid,",
 )
 
 REQUIRED_DEVICE = (
@@ -21,6 +26,10 @@ REQUIRED_DEVICE = (
     "device->backend_ops->get_device_removed_reason(device)",
     "device->backend_ops->destroy_device(device);",
     "device->backend_ops = &wined3d_backend_ops;",
+    "static const struct ID3D11On12Device1Vtbl d3d11_on12_device_vtbl",
+    "return IUnknown_QueryInterface(device->outer_unk, iid, out);",
+    "*out = &device->ID3D11On12Device1_iface;",
+    "device->ID3D11On12Device1_iface.lpVtbl = &d3d11_on12_device_vtbl;",
 )
 
 
