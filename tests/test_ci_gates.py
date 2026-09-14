@@ -67,6 +67,8 @@ class WineD3D11BackendGate(unittest.TestCase):
         source.mkdir(parents=True)
         (source / "d3d11_private.h").write_text(header)
         (source / "device.c").write_text(device)
+        (source / "d3d11_main.c").write_text("\n".join(
+            check_wine_d3d11_backend.REQUIRED_MAIN))
         (root / "configure.ac").write_text(
             "WINE_CONFIG_MAKEFILE(dlls/d3d11on12host)")
         host = root / "dlls" / "d3d11on12host"

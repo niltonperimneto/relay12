@@ -36,11 +36,19 @@ REQUIRED_DEVICE = (
     "if (device->standalone_allocation)",
 )
 
+REQUIRED_MAIN = (
+    "static const struct d3d11_backend_ops d3d11_on12_backend_ops",
+    "WineD3D11On12OpenAdapterV1",
+    "d3d_device_create_backend(&d3d11_on12_backend_ops,",
+    "IUnknown_Release(&d3d_device->IUnknown_inner);",
+)
+
 
 def check_tree(root):
     root = pathlib.Path(root)
     header = (root / "dlls/d3d11/d3d11_private.h").read_text()
     device = (root / "dlls/d3d11/device.c").read_text()
+    main = (root / "dlls/d3d11/d3d11_main.c").read_text()
     configure = (root / "configure.ac").read_text()
     host_makefile = root / "dlls/d3d11on12host/Makefile.in"
     host_spec = root / "dlls/d3d11on12host/d3d11on12host.spec"
@@ -52,6 +60,9 @@ def check_tree(root):
     for marker in REQUIRED_DEVICE:
         if marker not in device:
             errors.append(f"device.c is missing: {marker}")
+    for marker in REQUIRED_MAIN:
+        if marker not in main:
+            errors.append(f"d3d11_main.c is missing: {marker}")
 
     if "WINE_CONFIG_MAKEFILE(dlls/d3d11on12host)" not in configure:
         errors.append("configure.ac does not configure d3d11on12host")
