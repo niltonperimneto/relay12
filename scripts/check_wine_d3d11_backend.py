@@ -34,6 +34,7 @@ REQUIRED_DEVICE = (
     "struct d3d_device *d3d_device_create_backend(",
     "d3d_device_init(device, &device->IUnknown_inner);",
     "if (device->standalone_allocation)",
+    "device->d3d11_only = TRUE;\n    return device;\n}",
 )
 
 REQUIRED_MAIN = (
