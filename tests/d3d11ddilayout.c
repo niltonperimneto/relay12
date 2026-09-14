@@ -325,6 +325,20 @@ static HRESULT stub_retrieve_sub_object(D3D10DDI_HDEVICE hDevice,
     return 0;
 }
 
+/* CalcPrivateDeviceSize receives the interface, runtime version and flags
+ * that will be used for the subsequent CreateDevice call. */
+static void check_calc_private_device_size(void)
+{
+    D3D10DDIARG_CALCPRIVATEDEVICESIZE args;
+
+    memset(&args, 0, sizeof(args));
+    CHECK_FIELD(args, D3D10DDIARG_CALCPRIVATEDEVICESIZE, Interface);
+    CHECK_FIELD(args, D3D10DDIARG_CALCPRIVATEDEVICESIZE, Version);
+    CHECK_FIELD(args, D3D10DDIARG_CALCPRIVATEDEVICESIZE, Flags);
+    check_size("D3D10DDIARG_CALCPRIVATEDEVICESIZE", 12,
+            (unsigned long)sizeof(args));
+}
+
 /* The runtime allocates the CreateDevice arguments, so this walk is against
  * the storage the host will really hand the driver. */
 static void check_create_device(void)
@@ -1000,6 +1014,12 @@ static VOID stub_destroy_resource(D3D10DDI_HDEVICE hDevice,
     ++command_list_calls;
 }
 
+static VOID stub_destroy_device(D3D10DDI_HDEVICE hDevice)
+{
+    (void)hDevice;
+    ++command_list_calls;
+}
+
 #define STATE_CALC_STUB(name, descriptor) \
 static SIZE_T stub_calc_private_##name##_size(D3D10DDI_HDEVICE hDevice, \
         const descriptor *state) \
@@ -1653,6 +1673,7 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     funcs->pfnCreateResource = stub_create_resource;
     funcs->pfnOpenResource = stub_open_resource;
     funcs->pfnDestroyResource = stub_destroy_resource;
+    funcs->pfnDestroyDevice = stub_destroy_device;
     funcs->pfnCalcPrivateBlendStateSize = stub_calc_private_blend_state_size;
     funcs->pfnCreateBlendState = stub_create_blend_state;
     funcs->pfnDestroyBlendState = stub_destroy_blend_state;
@@ -1760,6 +1781,8 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
                     (D3D10DDI_HRESOURCE){0}, (D3D10DDI_HRTRESOURCE){0}));
     CHECK_STACK("PFND3D10DDI_DESTROYRESOURCE",
             funcs->pfnDestroyResource(device, (D3D10DDI_HRESOURCE){0}));
+    CHECK_STACK("PFND3D10DDI_DESTROYDEVICE",
+            funcs->pfnDestroyDevice(device));
     CHECK_STACK("PFND3D11_1DDI_CALCPRIVATEBLENDSTATESIZE",
             (void)funcs->pfnCalcPrivateBlendStateSize(device, NULL));
     CHECK_STACK("PFND3D11_1DDI_CREATEBLENDSTATE",
@@ -1903,14 +1926,14 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
         }
     }
 
-    if (command_list_calls == 73 && handle_count == 1)
+    if (command_list_calls == 74 && handle_count == 1)
     {
         printf("[ ok ] the promoted command-list, deferred-context, resource, state, view, shader, "
                 "and binding/draw slots are callable as declared\n");
     }
     else
     {
-        printf("[fail] %d of 73 promoted command/deferred/resource/state/"
+        printf("[fail] %d of 74 promoted command/deferred/resource/state/"
                 "view/shader/draw/scanout slots "
                 "reached their implementation\n", command_list_calls);
         ++failures;
@@ -2133,6 +2156,7 @@ int main(void)
     check_adapter_funcs();
     check_open_adapter();
     check_device_handles();
+    check_calc_private_device_size();
     check_create_device();
     check_command_list_handle();
     check_deferred_context_arguments();

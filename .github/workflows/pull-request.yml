@@ -72,6 +72,10 @@ jobs:
           # this names the call and its wrapper instead of surfacing as a
           # cross-compile error, and it covers the MSVC branch too.
           python3 scripts/check_dtl_struct_return.py "$worktree"
+          # The core transcribes the driver's adapter arguments rather than
+          # including a header that needs the licensed overlay. A copy passed
+          # by address to separately compiled code cannot be allowed to drift.
+          python3 scripts/check_adapter_args.py
           # Linux filename semantics are part of the port contract. A local
           # build on a case-insensitive filesystem cannot establish this.
           python3 scripts/check_dtl_include_case.py "$worktree"
@@ -447,6 +451,10 @@ jobs:
           x86_64-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
             -Irelay12-d3d11 -c -o d3d11on12openadapter.o \
             tests/d3d11on12openadapter.c
+          x86_64-w64-mingw32-gcc -shared -std=gnu11 -O2 \
+            -Wall -Wextra -Werror -Irelay12-d3d11/ddi \
+            -o d3d11on12.dll tests/d3d11on12mockdriver.c \
+            -ldxgi
           # Linking with the C driver keeps the no-C++-runtime rule honest: if
           # the core ever needs libstdc++, this link fails.
           x86_64-w64-mingw32-gcc -o d3d11on12coretest.exe \
@@ -461,7 +469,7 @@ jobs:
           x86_64-w64-mingw32-gcc -o d3d11on12openadapter.exe \
             d3d11on12openadapter.o d3d11on12core.o wine_d3d11_diag.o \
             -ld3d12 -ldxgi -ldxguid -luuid
-          wine d3d11on12openadapter.exe
+          WINEDLLOVERRIDES=d3d11on12=n wine d3d11on12openadapter.exe
 
       - name: Run the D3D11-on-12 concurrency stress
         run: |

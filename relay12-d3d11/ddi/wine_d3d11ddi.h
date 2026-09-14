@@ -286,7 +286,6 @@ WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_HRTRESOURCE, handle, 8);
  * field nobody has derived from a specification yet.  Each completes in place
  * when its own group lands, under its own provenance block.
  */
-typedef struct D3D10DDIARG_CALCPRIVATEDEVICESIZE D3D10DDIARG_CALCPRIVATEDEVICESIZE;
 typedef struct D3D10_2DDIARG_GETCAPS D3D10_2DDIARG_GETCAPS;
 typedef struct _D3DDDI_ADAPTERCALLBACKS D3DDDI_ADAPTERCALLBACKS;
 typedef struct D3D11_1_DDI_BLEND_DESC D3D11_1_DDI_BLEND_DESC;
@@ -305,6 +304,36 @@ typedef struct D3DWDDM2_6DDI_DEVICEFUNCS D3DWDDM2_6DDI_DEVICEFUNCS;
 typedef struct D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS;
 typedef struct DXGI_DDI_BASE_CALLBACKS DXGI_DDI_BASE_CALLBACKS;
 typedef struct DXGI1_6_1_DDI_BASE_FUNCTIONS DXGI1_6_1_DDI_BASE_FUNCTIONS;
+
+/*
+ * Group: private device-size calculation arguments
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_calcprivatedevicesize
+ * Retrieved: 2026-09-13
+ *
+ * Cross-validated against the public Microsoft documentation source:
+ *   https://github.com/MicrosoftDocs/windows-driver-docs-ddi/blob/staging/wdk-ddi-src/content/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_calcprivatedevicesize.md
+ *
+ * Both public surfaces publish the same three UINT members in the same order.
+ * They are the complete input to CalcPrivateDeviceSize: the negotiated DDI
+ * interface, the runtime build/revision, and the device-creation flags that
+ * will subsequently be passed to CreateDevice.
+ */
+typedef struct D3D10DDIARG_CALCPRIVATEDEVICESIZE
+{
+    UINT Interface;
+    UINT Version;
+    UINT Flags;
+} D3D10DDIARG_CALCPRIVATEDEVICESIZE;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDIARG_CALCPRIVATEDEVICESIZE);
+WINE_DDI_ASSERT_SIZE(D3D10DDIARG_CALCPRIVATEDEVICESIZE, 12);
+WINE_DDI_ASSERT_ALIGN(D3D10DDIARG_CALCPRIVATEDEVICESIZE, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CALCPRIVATEDEVICESIZE, Interface, 0);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDIARG_CALCPRIVATEDEVICESIZE, Interface, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CALCPRIVATEDEVICESIZE, Version, 4);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDIARG_CALCPRIVATEDEVICESIZE, Version, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CALCPRIVATEDEVICESIZE, Flags, 8);
+WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDIARG_CALCPRIVATEDEVICESIZE, Flags, 4);
 
 /*
  * Group: adapter function tables and OpenAdapter arguments
@@ -2475,7 +2504,16 @@ typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CHECKFORMATSUPPORT;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM1_3DDI_CHECKMULTISAMPLEQUALITYLEVELS;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CHECKCOUNTERINFO;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CHECKCOUNTER;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DESTROYDEVICE;
+/*
+ * Group: Device destruction
+ * Specification: https://learn.microsoft.com/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_destroydevice
+ * Retrieved: 2026-09-13
+ *
+ * Cross-validated against the public Microsoft documentation source:
+ *   https://github.com/MicrosoftDocs/windows-driver-docs-ddi/blob/staging/wdk-ddi-src/content/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_destroydevice.md
+ * Both publish a void callback taking one D3D10DDI_HDEVICE value.
+ */
+typedef void (*PFND3D10DDI_DESTROYDEVICE)(D3D10DDI_HDEVICE);
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETTEXTFILTERSIZE;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESETPRIMITIVEID;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETVERTEXPIPELINEOUTPUT;

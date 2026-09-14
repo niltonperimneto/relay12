@@ -152,6 +152,9 @@ static void test_get_interface(void)
     if (iface.createDevice != WineD3D11On12CreateDeviceV1)
         fail("get interface publishes the current version",
                 "createDevice does not point at the V1 entry point");
+    if (iface.closeAdapterDevice != WineD3D11On12CloseAdapterDeviceV1)
+        fail("get interface publishes the current version",
+                "closeAdapterDevice does not point at the V1 entry point");
 }
 
 static void test_argument_validation(void)

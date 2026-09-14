@@ -79,7 +79,8 @@ def namespace_scope_definitions(text):
         # `return x;` and `using x = ...;` are not definitions, and neither is
         # a typedef or a forward declaration of a function.
         if declaration.split()[0] in {"return", "using", "typedef", "extern",
-                                      "namespace", "template", "friend"}:
+                                      "namespace", "template", "friend",
+                                      "struct", "class", "union", "enum"}:
             continue
         found.append((number, declaration, match.group("name")))
     return found
