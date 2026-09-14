@@ -2,7 +2,7 @@ diff --git a/dlls/d3d11/d3d11_main.c b/dlls/d3d11/d3d11_main.c
 index 75986318..1b2e3a92 100644
 --- a/dlls/d3d11/d3d11_main.c
 +++ b/dlls/d3d11/d3d11_main.c
-@@ -378,12 +378,250 @@ cleanup:
+@@ -378,12 +378,253 @@ cleanup:
      return hr;
  }
  
@@ -203,8 +203,11 @@ index 75986318..1b2e3a92 100644
 +        return hr;
 +    }
 +
-+    if (FAILED(hr = IUnknown_QueryInterface(device, &IID_ID3D12Device,
-+            (void **)&backend->device12)))
++    hr = IUnknown_QueryInterface(device, &IID_ID3D12Device,
++            (void **)&backend->device12);
++    if (SUCCEEDED(hr) && !backend->device12)
++        hr = E_NOINTERFACE;
++    if (FAILED(hr))
 +    {
 +        backend->core.close_adapter_device(&backend->adapter);
 +        FreeLibrary(backend->core_module);
@@ -253,7 +256,7 @@ index 75986318..1b2e3a92 100644
      FIXME("device %p, flags %#x, feature_levels %p, feature_level_count %u, "
              "queues %p, queue_count %u, node_mask 0x%08x, "
              "d3d11_device %p, d3d11_immediate_context %p, obtained_feature_level %p stub!\n",
-@@ -391,4 +629,5 @@ HRESULT WINAPI D3D11On12CreateDevice(IUnknown *device, UINT flags,
+@@ -391,4 +632,5 @@ HRESULT WINAPI D3D11On12CreateDevice(IUnknown *device, UINT flags,
              node_mask, d3d11_device, d3d11_immediate_context, obtained_feature_level);
  
      return E_NOTIMPL;
