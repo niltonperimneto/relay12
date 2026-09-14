@@ -118,7 +118,8 @@ BOOL CALLBACK initializeBackend(PINIT_ONCE, PVOID, PVOID *) noexcept
                 || backend.on12Interface.version != WINE_D3D11ON12_ABI_VERSION
                 || !backend.on12Interface.createDevice
                 || !backend.on12Interface.createDirectDevice
-                || !backend.on12Interface.createDirectDeviceAndSwapChain)
+                || !backend.on12Interface.createDirectDeviceAndSwapChain
+                || !backend.on12Interface.closeAdapterDevice)
         {
             /* An incompatible core is worse than an absent one: it is a
              * mismatched deployment, and it must not be called. */

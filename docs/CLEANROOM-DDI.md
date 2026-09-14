@@ -241,6 +241,7 @@ misinterpretation; `--check` defends against structural *drift* across 178+ slot
 | Group | Key structures and contents | Total bytes |
 | :--- | :--- | :--- |
 | Object handles | `D3D10DDI_HADAPTER`, `HRTADAPTER`, `HRESOURCE`, `HRTRESOURCE` | 8 each |
+| Private device sizing | `D3D10DDIARG_CALCPRIVATEDEVICESIZE` | 12 |
 | Adapter tables | `D3D10DDI_ADAPTERFUNCS`, `D3D10_2DDI_ADAPTERFUNCS`, `D3D10DDIARG_OPENADAPTER`, 6 `PFN` typedefs | 24 / 40 / 40 |
 | Version arithmetic | `D3D11_DDI_MAJOR_VERSION`, composition and extraction macros | n/a |
 | Device creation | `D3D10DDI_HDEVICE`, `HRTDEVICE`, `HRTCORELAYER`, `PFND3D10DDI_RETRIEVESUBOBJECT`, `DXGI_DDI_BASE_ARGS`, `D3D10DDIARG_CREATEDEVICE`, flag constants | 8 each / 16 / 88 |
