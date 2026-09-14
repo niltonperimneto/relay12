@@ -22,9 +22,10 @@
 # define WINE_D3D11ON12_ASSERT(condition) _Static_assert(condition, #condition)
 #endif
 
-#define WINE_D3D11ON12_ABI_VERSION 2u
+#define WINE_D3D11ON12_ABI_VERSION 3u
 #define WINE_D3D11ON12_CAP_VALIDATION 0x0000000000000001ull
 #define WINE_D3D11ON12_CAP_D3DMETAL_BOOTSTRAP 0x0000000000000002ull
+#define WINE_D3D11ON12_CAP_DEVICE_LIFECYCLE 0x0000000000000004ull
 
 typedef UINT (WINAPI *WineD3D11On12GetABIVersionFn)(void);
 typedef HRESULT (WINAPI *WineD3D11On12CreateDeviceFn)(IUnknown *, UINT,
@@ -38,6 +39,10 @@ typedef HRESULT (WINAPI *WineD3D11CreateDeviceAndSwapChainFn)(IDXGIAdapter *,
         const DXGI_SWAP_CHAIN_DESC *, IDXGISwapChain **, ID3D11Device **,
         D3D_FEATURE_LEVEL *, ID3D11DeviceContext **);
 
+struct WineD3D11On12AdapterDevice;
+typedef HRESULT (WINAPI *WineD3D11On12CloseAdapterDeviceFn)(
+        struct WineD3D11On12AdapterDevice *);
+
 struct WineD3D11On12Interface
 {
     UINT size;
@@ -46,7 +51,8 @@ struct WineD3D11On12Interface
     WineD3D11On12CreateDeviceFn createDevice;
     WineD3D11CreateDeviceFn createDirectDevice;
     WineD3D11CreateDeviceAndSwapChainFn createDirectDeviceAndSwapChain;
-    void *reserved[6];
+    WineD3D11On12CloseAdapterDeviceFn closeAdapterDevice;
+    void *reserved[5];
 };
 
 #ifndef __cplusplus
@@ -62,7 +68,9 @@ WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface, createDevice) == 16);
 WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface, createDirectDevice) == 24);
 WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface,
         createDirectDeviceAndSwapChain) == 32);
-WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface, reserved) == 40);
+WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface,
+        closeAdapterDevice) == 40);
+WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface, reserved) == 48);
 
 typedef HRESULT (WINAPI *WineD3D11On12GetInterfaceFn)(UINT, UINT,
         WineD3D11On12Interface *);
@@ -75,8 +83,8 @@ typedef HRESULT (WINAPI *WineD3D11On12GetInterfaceFn)(UINT, UINT,
  * reason the clean-room header keeps pointer-only types incomplete.
  *
  * hDrvAdapter and hDrvDevice are the pDrvPrivate words of D3D10DDI_HADAPTER
- * and D3D10DDI_HDEVICE. They are the driver's, opaque here, and must be
- * handed back to WineD3D11On12CloseAdapterV1 rather than freed.
+ * and D3D10DDI_HDEVICE. runtimeState is the core's ownership token. None may
+ * be freed by the caller; pass the complete structure to closeAdapterDevice.
  *
  * negotiatedInterfaceVersion is what pfnGetSupportedVersions settled on, not
  * what was requested: recording it is what lets a caller tell "the driver
@@ -88,7 +96,8 @@ struct WineD3D11On12AdapterDevice
     struct D3DWDDM2_6DDI_DEVICEFUNCS *deviceFuncs;
     void *hDrvAdapter;
     void *hDrvDevice;
-    void *reserved[3];
+    void *runtimeState;
+    void *reserved[2];
 };
 
 #ifndef __cplusplus
@@ -103,6 +112,7 @@ WINE_D3D11ON12_ASSERT(sizeof(void *) != 8
 WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12AdapterDevice, deviceFuncs) == 8);
 WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12AdapterDevice, hDrvAdapter) == 16);
 WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12AdapterDevice, hDrvDevice) == 24);
+WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12AdapterDevice, runtimeState) == 32);
 
 typedef HRESULT (WINAPI *WineD3D11On12OpenAdapterFn)(IUnknown *,
         IUnknown *const *, UINT, UINT, WineD3D11On12AdapterDevice *);
@@ -128,6 +138,8 @@ WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12CreateDeviceV1(IUnknown *,
 WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12OpenAdapterV1(IUnknown *,
         IUnknown *const *, UINT, UINT, WineD3D11On12AdapterDevice *)
         WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12CloseAdapterDeviceV1(
+        WineD3D11On12AdapterDevice *) WINE_D3D11ON12_NOEXCEPT;
 WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11CreateDeviceV2(IDXGIAdapter *,
         D3D_DRIVER_TYPE, HMODULE, UINT, const D3D_FEATURE_LEVEL *, UINT, UINT,
         ID3D11Device **, D3D_FEATURE_LEVEL *, ID3D11DeviceContext **)

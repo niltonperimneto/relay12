@@ -545,6 +545,19 @@ CREATERENDERTARGETVIEW = Struct(
 )
 
 
+# Group: private device-size calculation arguments
+# Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_calcprivatedevicesize
+# Retrieved: 2026-09-13
+
+CALCPRIVATEDEVICESIZE = Struct(
+    "D3D10DDIARG_CALCPRIVATEDEVICESIZE",
+    [
+        Field("Interface", "UINT", *UINT),
+        Field("Version", "UINT", *UINT),
+        Field("Flags", "UINT", *UINT),
+    ],
+)
+
 # Group: adapter function tables and OpenAdapter arguments
 # Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_openadapter
 # Retrieved: 2026-09-06
@@ -1116,6 +1129,7 @@ DEVICEFUNCS = Struct(
 # command-list handle group and no argument structure.  See the group note in
 # the header for why the rest of the family cannot follow yet.
 PROMOTED_SLOTS = {
+    "PFND3D10DDI_DESTROYDEVICE",
     "PFND3D10DDI_RESOURCEMAP",
     "PFND3D10DDI_RESOURCEUNMAP",
     "PFND3D10DDI_RESOURCECOPY",
@@ -1197,6 +1211,7 @@ if len({type_name for _, type_name in DEVICEFUNC_SLOTS}) != 138:
 
 GROUPS = HANDLES + [
     SHADERCACHE_HASH,
+    CALCPRIVATEDEVICESIZE,
     ADAPTERFUNCS,
     ADAPTERFUNCS_2,
     OPENADAPTER,
