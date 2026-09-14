@@ -56,11 +56,32 @@ static void initialize_out(WineD3D11On12AdapterDevice *out)
 
 int main(void)
 {
+    typedef void (WINAPI *get_counts_fn)(LONG *, LONG *, LONG *, LONG *);
     WineD3D11On12AdapterDevice out;
     struct mock_device device;
     struct mock_queue queue;
     IUnknown *queue_objects[1];
     HRESULT hr;
+    HMODULE mock_driver;
+    get_counts_fn get_counts;
+    LONG opened, created, destroyed, closed;
+
+    hr = WineD3D11On12CloseAdapterDeviceV1(NULL);
+    check(hr == E_INVALIDARG, "close rejects a null out-structure");
+
+    initialize_out(&out);
+    out.size = sizeof(out) - 1;
+    hr = WineD3D11On12CloseAdapterDeviceV1(&out);
+    check(hr == E_INVALIDARG, "close rejects a mismatched structure size");
+
+    initialize_out(&out);
+    out.runtimeState = NULL;
+    hr = WineD3D11On12CloseAdapterDeviceV1(&out);
+    check(hr == S_OK, "closing an empty lifecycle is idempotent");
+    check(out.negotiatedInterfaceVersion == 0 && out.deviceFuncs == NULL
+            && out.hDrvAdapter == NULL && out.hDrvDevice == NULL
+            && out.runtimeState == NULL,
+          "closing an empty lifecycle clears every output");
 
     /* The shared initialisers, so this suite cannot disagree with the core
      * validation tests about what a well-formed mock looks like. */
@@ -118,6 +139,50 @@ int main(void)
           "a refused call leaves no device function table behind");
     check(out.negotiatedInterfaceVersion == 0,
           "a refused call reports no negotiated version");
+
+    /* The native mock driver exercises the successful dynamic boundary and
+     * records the exact lifecycle order/count without requiring a GPU. */
+    mock_driver = LoadLibraryW(L"d3d11on12.dll");
+    get_counts = mock_driver ? (get_counts_fn)(void *)GetProcAddress(
+            mock_driver, "WineD3D11On12MockDriverGetCounts") : NULL;
+    check(get_counts != NULL, "the lifecycle mock driver is loaded");
+    if (get_counts)
+    {
+        device.support_device1 = 1;
+        initialize_out(&out);
+        hr = WineD3D11On12OpenAdapterV1(
+                (IUnknown *)&device.ID3D12Device_iface,
+                queue_objects, 1, 0, &out);
+        check(hr == S_OK, "a complete driver lifecycle opens successfully");
+        check(out.runtimeState != NULL && out.deviceFuncs != NULL
+                && out.hDrvAdapter != NULL && out.hDrvDevice != NULL,
+              "a successful open publishes owned DDI state");
+        check(device.refcount == 2 && queue.refcount == 2,
+              "the lifecycle retains its D3D12 device and queue");
+
+        get_counts(&opened, &created, &destroyed, &closed);
+        check(opened == 1 && created == 1 && destroyed == 0 && closed == 0,
+              "creation invokes only the open and create callbacks");
+
+        hr = WineD3D11On12CloseAdapterDeviceV1(&out);
+        check(hr == S_OK, "the complete driver lifecycle closes successfully");
+        get_counts(&opened, &created, &destroyed, &closed);
+        check(destroyed == 1 && closed == 1,
+              "close destroys the device and then closes its adapter once");
+        check(device.refcount == 1 && queue.refcount == 1,
+              "close releases the retained D3D12 device and queue");
+        check(out.runtimeState == NULL && out.deviceFuncs == NULL
+                && out.hDrvAdapter == NULL && out.hDrvDevice == NULL,
+              "close clears every owned DDI output");
+
+        hr = WineD3D11On12CloseAdapterDeviceV1(&out);
+        check(hr == S_OK, "a repeated close is idempotent");
+        get_counts(&opened, &created, &destroyed, &closed);
+        check(destroyed == 1 && closed == 1,
+              "a repeated close invokes no driver callback");
+    }
+    if (mock_driver)
+        FreeLibrary(mock_driver);
 
     if (failures)
     {
