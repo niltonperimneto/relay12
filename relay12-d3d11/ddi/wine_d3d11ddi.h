@@ -2380,12 +2380,12 @@ typedef VOID (*PFND3D10DDI_DESTROYSHADER)(
  * view.  It takes them; nothing promoted can make one.  See the binding-types
  * group above for why the handles are declared anyway.
  *
- * Two slots the frame would otherwise use are deliberately not here.
- * PFND3DWDDM2_0DDI_FLUSH has no published page -- the WDDM 2.0-named URL is a
- * 404 -- and the base PFND3D10DDI_FLUSH page describes a one-parameter list
- * that cannot be attributed to the WDDM 2.0-named typedef the table actually
- * holds, so it stays a placeholder.  PFND3D10DDI_SETSCISSORRECTS would need
- * D3D10_DDI_RECT, and the frame does not require a scissor.
+ * PFND3DWDDM2_0DDI_FLUSH is cross-checked against Microsoft's public,
+ * MIT-licensed D3D11On12 Device::Flush declaration and implementation.  The
+ * published D3D10DDI_DEVICEFUNCS page establishes the table slot, while that
+ * source establishes the WDDM 2.0 extension's ContextType and FlushFlags
+ * parameters. PFND3D10DDI_SETSCISSORRECTS remains a placeholder because it
+ * would need D3D10_DDI_RECT, and the frame does not require a scissor.
  */
 typedef SIZE_T (*PFND3D10DDI_CALCPRIVATEELEMENTLAYOUTSIZE)(
         D3D10DDI_HDEVICE hDevice,
@@ -2451,6 +2451,13 @@ typedef VOID (*PFND3D10DDI_DRAW)(
         UINT VertexCount,
         UINT StartVertexLocation);
 
+/* Microsoft D3D11On12, include/device.hpp and src/context.cpp, pinned in
+ * third_party/D3D11On12: Device::Flush(D3D10DDI_HDEVICE, UINT, UINT). */
+typedef BOOL (*PFND3DWDDM2_0DDI_FLUSH)(
+        D3D10DDI_HDEVICE hDevice,
+        UINT ContextType,
+        UINT FlushFlags);
+
 /* BlendFactor names an argument the specification leaves unnamed. */
 typedef VOID (*PFND3D10DDI_SETBLENDSTATE)(
         D3D10DDI_HDEVICE hDevice,
@@ -2486,7 +2493,6 @@ typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETSCISSORRECTS;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CLEARDEPTHSTENCILVIEW;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETPREDICATION;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_QUERYGETDATA;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_FLUSH;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_GENMIPS;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCERESOLVESUBRESOURCE;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCEISSTAGINGBUSY;

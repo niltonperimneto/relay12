@@ -57,6 +57,7 @@ static void initialize_out(WineD3D11On12AdapterDevice *out)
 int main(void)
 {
     typedef void (WINAPI *get_counts_fn)(LONG *, LONG *, LONG *, LONG *);
+    typedef LONG (WINAPI *get_flush_count_fn)(void);
     WineD3D11On12AdapterDevice out;
     struct mock_device device;
     struct mock_queue queue;
@@ -64,6 +65,7 @@ int main(void)
     HRESULT hr;
     HMODULE mock_driver;
     get_counts_fn get_counts;
+    get_flush_count_fn get_flush_count;
     LONG opened, created, destroyed, closed;
 
     hr = WineD3D11On12CloseAdapterDeviceV1(NULL);
@@ -145,8 +147,11 @@ int main(void)
     mock_driver = LoadLibraryW(L"d3d11on12.dll");
     get_counts = mock_driver ? (get_counts_fn)(void *)GetProcAddress(
             mock_driver, "WineD3D11On12MockDriverGetCounts") : NULL;
+    get_flush_count = mock_driver ? (get_flush_count_fn)(void *)GetProcAddress(
+            mock_driver, "WineD3D11On12MockDriverGetFlushCount") : NULL;
     check(get_counts != NULL, "the lifecycle mock driver is loaded");
-    if (get_counts)
+    check(get_flush_count != NULL, "the flush counter is exported");
+    if (get_counts && get_flush_count)
     {
         device.support_device1 = 1;
         initialize_out(&out);
@@ -164,11 +169,26 @@ int main(void)
         check(opened == 1 && created == 1 && destroyed == 0 && closed == 0,
               "creation invokes only the open and create callbacks");
 
+        {
+            BOOL submitted = FALSE;
+            hr = WineD3D11On12FlushAdapterDeviceV1(&out, 0, 0, &submitted);
+            check(hr == S_OK && submitted,
+                  "flush dispatches through the live DDI device");
+            check(get_flush_count() == 1,
+                  "flush invokes the driver callback exactly once");
+        }
+
         hr = WineD3D11On12CloseAdapterDeviceV1(&out);
         check(hr == S_OK, "the complete driver lifecycle closes successfully");
         get_counts(&opened, &created, &destroyed, &closed);
         check(destroyed == 1 && closed == 1,
               "close destroys the device and then closes its adapter once");
+        {
+            BOOL submitted = TRUE;
+            hr = WineD3D11On12FlushAdapterDeviceV1(&out, 0, 0, &submitted);
+            check(hr == DXGI_ERROR_UNSUPPORTED && !submitted,
+                  "flush fails closed after lifecycle teardown");
+        }
         check(device.refcount == 1 && queue.refcount == 1,
               "close releases the retained D3D12 device and queue");
         check(out.runtimeState == NULL && out.deviceFuncs == NULL

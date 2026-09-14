@@ -41,6 +41,7 @@ REQUIRED_MAIN = (
     "WineD3D11On12OpenAdapterV1",
     "d3d_device_create_backend(&d3d11_on12_backend_ops,",
     "IUnknown_Release(&d3d_device->IUnknown_inner);",
+    "backend->core.flush_adapter_device(&backend->adapter, 0, 0,",
 )
 
 
