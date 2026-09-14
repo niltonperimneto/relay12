@@ -586,12 +586,14 @@ extern "C" HRESULT WINAPI WineD3D11On12GetInterface(UINT requestedVersion,
 
     interfaceOut->capabilities = WINE_D3D11ON12_CAP_VALIDATION
             | WINE_D3D11ON12_CAP_D3DMETAL_BOOTSTRAP
-            | WINE_D3D11ON12_CAP_DEVICE_LIFECYCLE;
+            | WINE_D3D11ON12_CAP_DEVICE_LIFECYCLE
+            | WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_FLUSH;
     interfaceOut->createDevice = WineD3D11On12CreateDeviceV1;
     interfaceOut->createDirectDevice = WineD3D11CreateDeviceV2;
     interfaceOut->createDirectDeviceAndSwapChain =
             WineD3D11CreateDeviceAndSwapChainV2;
     interfaceOut->closeAdapterDevice = WineD3D11On12CloseAdapterDeviceV1;
+    interfaceOut->flushAdapterDevice = WineD3D11On12FlushAdapterDeviceV1;
     return S_OK;
 }
 
@@ -817,6 +819,26 @@ extern "C" HRESULT WINAPI WineD3D11On12CloseAdapterDeviceV1(
     ZeroMemory(adapterDevice->reserved, sizeof(adapterDevice->reserved));
 
     destroyAdapterState(state);
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12FlushAdapterDeviceV1(
+        WineD3D11On12AdapterDevice *adapterDevice, UINT contextType,
+        UINT flushFlags, BOOL *submitted) noexcept
+{
+    if (submitted)
+        *submitted = FALSE;
+    if (!adapterDevice || adapterDevice->size != sizeof(*adapterDevice)
+            || !submitted)
+        return E_INVALIDARG;
+
+    AdapterState *state = static_cast<AdapterState *>(
+            adapterDevice->runtimeState);
+    if (!state || !state->deviceCreated || !state->deviceFuncs.pfnFlush)
+        return DXGI_ERROR_UNSUPPORTED;
+
+    *submitted = state->deviceFuncs.pfnFlush(state->hDevice, contextType,
+            flushFlags);
     return S_OK;
 }
 

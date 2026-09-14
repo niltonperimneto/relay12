@@ -10,6 +10,7 @@ static LONG open_calls;
 static LONG create_calls;
 static LONG destroy_calls;
 static LONG close_calls;
+static LONG flush_calls;
 static unsigned char adapter_private;
 
 static HRESULT mock_get_versions(D3D10DDI_HADAPTER adapter, UINT32 *count,
@@ -39,6 +40,16 @@ static void mock_destroy_device(D3D10DDI_HDEVICE device)
     InterlockedIncrement(&destroy_calls);
 }
 
+static BOOL mock_flush(D3D10DDI_HDEVICE device, UINT context_type,
+        UINT flush_flags)
+{
+    (void)device;
+    (void)context_type;
+    (void)flush_flags;
+    InterlockedIncrement(&flush_calls);
+    return TRUE;
+}
+
 static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
         D3D10DDIARG_CREATEDEVICE *args)
 {
@@ -46,8 +57,14 @@ static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
     if (!args || !args->pWDDM2_6DeviceFuncs)
         return E_INVALIDARG;
     args->pWDDM2_6DeviceFuncs->pfnDestroyDevice = mock_destroy_device;
+    args->pWDDM2_6DeviceFuncs->pfnFlush = mock_flush;
     InterlockedIncrement(&create_calls);
     return S_OK;
+}
+
+__declspec(dllexport) LONG WINAPI WineD3D11On12MockDriverGetFlushCount(void)
+{
+    return flush_calls;
 }
 
 static HRESULT mock_close_adapter(D3D10DDI_HADAPTER adapter)

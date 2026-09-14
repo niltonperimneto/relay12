@@ -149,12 +149,18 @@ static void test_get_interface(void)
     if (!(iface.capabilities & WINE_D3D11ON12_CAP_VALIDATION))
         fail("get interface publishes the current version",
                 "the validation capability bit is missing");
+    if (!(iface.capabilities & WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_FLUSH))
+        fail("get interface publishes the current version",
+                "the immediate-context flush capability bit is missing");
     if (iface.createDevice != WineD3D11On12CreateDeviceV1)
         fail("get interface publishes the current version",
                 "createDevice does not point at the V1 entry point");
     if (iface.closeAdapterDevice != WineD3D11On12CloseAdapterDeviceV1)
         fail("get interface publishes the current version",
                 "closeAdapterDevice does not point at the V1 entry point");
+    if (iface.flushAdapterDevice != WineD3D11On12FlushAdapterDeviceV1)
+        fail("get interface publishes the current version",
+                "flushAdapterDevice does not point at the V1 entry point");
 }
 
 static void test_argument_validation(void)
