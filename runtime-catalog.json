@@ -2,11 +2,11 @@
   "catalogVersion": 1,
   "runtimes": [
     {
-      "identifier": "relay12-canary-4.6.106",
-      "version": "4.6.106",
+      "identifier": "relay12-canary-4.6.129",
+      "version": "4.6.129",
       "channel": "canary",
-      "archiveURL": "https://github.com/niltonperimneto/relay12/releases/download/runtime-canary-v4.6.106/Libraries.tar.gz",
-      "sha256": "bed93eae4723479ca03b4fcdd3bf9fa8d1e9500cd079da72f2e99c661c144289",
+      "archiveURL": "https://github.com/niltonperimneto/relay12/releases/download/runtime-canary-v4.6.129/Libraries.tar.gz",
+      "sha256": "c442ac4e7f05ca603346a929bd35a9a2fe9ee2b24f3b80ac9df1715f34729ac9",
       "minimumMacOS": "26.0",
       "wineVersion": "11.16",
       "capabilities": {
@@ -23,7 +23,7 @@
         "wined3d": true,
         "wow64": true
       },
-      "publishedAt": "2026-09-12T19:22:53Z"
+      "publishedAt": "2026-09-14T07:14:57Z"
     }
   ]
 }
