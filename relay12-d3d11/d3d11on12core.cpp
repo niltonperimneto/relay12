@@ -589,7 +589,8 @@ extern "C" HRESULT WINAPI WineD3D11On12GetInterface(UINT requestedVersion,
             | WINE_D3D11ON12_CAP_DEVICE_LIFECYCLE
             | WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_FLUSH
             | WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_DRAW
-            | WINE_D3D11ON12_CAP_WRAPPED_RESOURCE_VALIDATION;
+            | WINE_D3D11ON12_CAP_WRAPPED_RESOURCE_VALIDATION
+            | WINE_D3D11ON12_CAP_INDEXED_INSTANCED_DRAW;
     interfaceOut->createDevice = WineD3D11On12CreateDeviceV1;
     interfaceOut->createDirectDevice = WineD3D11CreateDeviceV2;
     interfaceOut->createDirectDeviceAndSwapChain =
@@ -599,6 +600,7 @@ extern "C" HRESULT WINAPI WineD3D11On12GetInterface(UINT requestedVersion,
     interfaceOut->drawAdapterDevice = WineD3D11On12DrawAdapterDeviceV1;
     interfaceOut->validateWrappedResource =
             WineD3D11On12ValidateWrappedResourceV1;
+    interfaceOut->dispatchDraw = WineD3D11On12DispatchDrawV1;
     return S_OK;
 }
 
@@ -895,6 +897,46 @@ extern "C" HRESULT WINAPI WineD3D11On12ValidateWrappedResourceV1(
     if (FAILED(hr))
         return hr;
     return identical ? S_OK : E_INVALIDARG;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12DispatchDrawV1(
+        WineD3D11On12AdapterDevice *adapterDevice, UINT kind, UINT count0,
+        UINT count1, UINT start0, INT baseVertex, UINT startInstance) noexcept
+{
+    if (!adapterDevice || adapterDevice->size != sizeof(*adapterDevice))
+        return E_INVALIDARG;
+
+    AdapterState *state = static_cast<AdapterState *>(
+            adapterDevice->runtimeState);
+    if (!state || !state->deviceCreated)
+        return DXGI_ERROR_UNSUPPORTED;
+
+    switch (kind)
+    {
+        case WINE_D3D11ON12_DRAW_INDEXED:
+            if (!state->deviceFuncs.pfnDrawIndexed)
+                return DXGI_ERROR_UNSUPPORTED;
+            state->deviceFuncs.pfnDrawIndexed(state->hDevice, count0, start0,
+                    baseVertex);
+            return S_OK;
+
+        case WINE_D3D11ON12_DRAW_INSTANCED:
+            if (!state->deviceFuncs.pfnDrawInstanced)
+                return DXGI_ERROR_UNSUPPORTED;
+            state->deviceFuncs.pfnDrawInstanced(state->hDevice, count0,
+                    count1, start0, startInstance);
+            return S_OK;
+
+        case WINE_D3D11ON12_DRAW_INDEXED_INSTANCED:
+            if (!state->deviceFuncs.pfnDrawIndexedInstanced)
+                return DXGI_ERROR_UNSUPPORTED;
+            state->deviceFuncs.pfnDrawIndexedInstanced(state->hDevice,
+                    count0, count1, start0, baseVertex, startInstance);
+            return S_OK;
+
+        default:
+            return E_INVALIDARG;
+    }
 }
 
 extern "C" HRESULT WINAPI WineD3D11CreateDeviceV2(IDXGIAdapter *adapter,

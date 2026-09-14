@@ -58,6 +58,7 @@ int main(void)
 {
     typedef void (WINAPI *get_counts_fn)(LONG *, LONG *, LONG *, LONG *);
     typedef LONG (WINAPI *get_flush_count_fn)(void);
+    typedef void (WINAPI *get_extended_draw_counts_fn)(LONG *, LONG *, LONG *);
     WineD3D11On12AdapterDevice out;
     struct mock_device device;
     struct mock_queue queue;
@@ -67,7 +68,9 @@ int main(void)
     get_counts_fn get_counts;
     get_flush_count_fn get_flush_count;
     get_flush_count_fn get_draw_count;
+    get_extended_draw_counts_fn get_extended_draw_counts;
     LONG opened, created, destroyed, closed;
+    LONG indexed, instanced, indexed_instanced;
 
     hr = WineD3D11On12CloseAdapterDeviceV1(NULL);
     check(hr == E_INVALIDARG, "close rejects a null out-structure");
@@ -152,10 +155,16 @@ int main(void)
             mock_driver, "WineD3D11On12MockDriverGetFlushCount") : NULL;
     get_draw_count = mock_driver ? (get_flush_count_fn)(void *)GetProcAddress(
             mock_driver, "WineD3D11On12MockDriverGetDrawCount") : NULL;
+    get_extended_draw_counts = mock_driver
+            ? (get_extended_draw_counts_fn)(void *)GetProcAddress(mock_driver,
+                    "WineD3D11On12MockDriverGetExtendedDrawCounts") : NULL;
     check(get_counts != NULL, "the lifecycle mock driver is loaded");
     check(get_flush_count != NULL, "the flush counter is exported");
     check(get_draw_count != NULL, "the draw counter is exported");
-    if (get_counts && get_flush_count && get_draw_count)
+    check(get_extended_draw_counts != NULL,
+          "the extended draw counters are exported");
+    if (get_counts && get_flush_count && get_draw_count
+            && get_extended_draw_counts)
     {
         device.support_device1 = 1;
         initialize_out(&out);
@@ -184,6 +193,18 @@ int main(void)
         hr = WineD3D11On12DrawAdapterDeviceV1(&out, 3, 0);
         check(hr == S_OK && get_draw_count() == 1,
               "draw dispatches through the live DDI device exactly once");
+        hr = WineD3D11On12DispatchDrawV1(&out,
+                WINE_D3D11ON12_DRAW_INDEXED, 6, 0, 2, -1, 0);
+        check(hr == S_OK, "indexed draw dispatch succeeds");
+        hr = WineD3D11On12DispatchDrawV1(&out,
+                WINE_D3D11ON12_DRAW_INSTANCED, 3, 4, 1, 0, 2);
+        check(hr == S_OK, "instanced draw dispatch succeeds");
+        hr = WineD3D11On12DispatchDrawV1(&out,
+                WINE_D3D11ON12_DRAW_INDEXED_INSTANCED, 6, 4, 2, -1, 2);
+        check(hr == S_OK, "indexed instanced draw dispatch succeeds");
+        get_extended_draw_counts(&indexed, &instanced, &indexed_instanced);
+        check(indexed == 1 && instanced == 1 && indexed_instanced == 1,
+              "each extended draw reaches its exact DDI callback once");
 
         hr = WineD3D11On12CloseAdapterDeviceV1(&out);
         check(hr == S_OK, "the complete driver lifecycle closes successfully");

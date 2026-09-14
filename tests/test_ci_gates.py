@@ -923,22 +923,18 @@ class LayoutModel(unittest.TestCase):
                             for error in errors), errors)
 
     def test_an_unrecorded_promotion_is_caught(self):
-        # Any slot that is still a placeholder will do; this one is named
-        # because the instanced draws are gated on nothing this header has
-        # authored, so it will stay a placeholder for a while yet.  When it is
+        # Any slot that is still a placeholder will do. When it is
         # promoted, repoint this at another placeholder rather than deleting
         # it -- assertNotEqual below is what stops the substitution silently
         # becoming a no-op and the gate going untested.
         broken = self.header.replace(
-            "typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DRAWINSTANCED;",
-            "typedef VOID (*PFND3D10DDI_DRAWINSTANCED)("
-            "D3D10DDI_HDEVICE hDevice, UINT VertexCountPerInstance, "
-            "UINT InstanceCount, UINT StartVertexLocation, "
-            "UINT StartInstanceLocation);")
+            "typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DRAWAUTO;",
+            "typedef VOID (*PFND3D10DDI_DRAWAUTO)("
+            "D3D10DDI_HDEVICE hDevice);")
         self.assertNotEqual(broken, self.header)
         errors = self.check(broken)
         self.assertTrue(
-            any("PFND3D10DDI_DRAWINSTANCED" in error for error in errors),
+            any("PFND3D10DDI_DRAWAUTO" in error for error in errors),
             errors)
 
     def test_the_declared_and_published_arms_agree(self):

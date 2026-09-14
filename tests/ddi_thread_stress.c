@@ -181,7 +181,8 @@ static DWORD WINAPI stress_thread(void *parameter)
                         | WINE_D3D11ON12_CAP_DEVICE_LIFECYCLE
                         | WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_FLUSH
                         | WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_DRAW
-                        | WINE_D3D11ON12_CAP_WRAPPED_RESOURCE_VALIDATION)
+                        | WINE_D3D11ON12_CAP_WRAPPED_RESOURCE_VALIDATION
+                        | WINE_D3D11ON12_CAP_INDEXED_INSTANCED_DRAW)
                 || iface.createDevice != WineD3D11On12CreateDeviceV1
                 || iface.createDirectDevice != WineD3D11CreateDeviceV2
                 || iface.createDirectDeviceAndSwapChain
@@ -193,7 +194,8 @@ static DWORD WINAPI stress_thread(void *parameter)
                 || iface.drawAdapterDevice
                         != WineD3D11On12DrawAdapterDeviceV1
                 || iface.validateWrappedResource
-                        != WineD3D11On12ValidateWrappedResourceV1)
+                        != WineD3D11On12ValidateWrappedResourceV1
+                || iface.dispatchDraw != WineD3D11On12DispatchDrawV1)
             fail("GetInterface", "the interface table was filled wrongly");
         for (reserved_index = 0; reserved_index < ARRAYSIZE(iface.reserved);
                 ++reserved_index)
