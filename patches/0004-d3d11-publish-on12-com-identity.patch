@@ -50,10 +50,18 @@ index 592f4ac6..431e8a0e 100644
  };
  
  static BOOL d3d_array_reserve(void **elements, SIZE_T *capacity, SIZE_T count, SIZE_T size)
-@@ -4071,6 +4075,86 @@ static ULONG STDMETHODCALLTYPE d3d11_device_Release(ID3D11Device5 *iface)
+@@ -4071,6 +4075,94 @@ static ULONG STDMETHODCALLTYPE d3d11_device_Release(ID3D11Device5 *iface)
      return IUnknown_Release(device->outer_unk);
  }
  
++/* d3d11on12.idl generates the interface declarations but Wine's UUID library
++ * does not publish these IIDs. Keep the identity values private to the one
++ * module that consumes them instead of adding a new global UUID dependency. */
++static const GUID d3d11_on12_device_iid =
++        {0x85611e73, 0x70a9, 0x490e, {0x96, 0x14, 0xa9, 0xe3, 0x02, 0x77, 0x79, 0x04}};
++static const GUID d3d11_on12_device1_iid =
++        {0xbdb64df4, 0xea2f, 0x4c70, {0xb8, 0x61, 0xaa, 0xab, 0x12, 0x58, 0xbb, 0x5d}};
++
 +static inline struct d3d_device *impl_from_ID3D11On12Device1(
 +        ID3D11On12Device1 *iface)
 +{
@@ -142,8 +150,8 @@ index 592f4ac6..431e8a0e 100644
          *out = &device->ID3D10Multithread_iface;
      }
 +    else if (device->backend_ops->create_wrapped_resource
-+            && (IsEqualGUID(riid, &IID_ID3D11On12Device1)
-+            || IsEqualGUID(riid, &IID_ID3D11On12Device)))
++            && (IsEqualGUID(riid, &d3d11_on12_device1_iid)
++            || IsEqualGUID(riid, &d3d11_on12_device_iid)))
 +    {
 +        *out = &device->ID3D11On12Device1_iface;
 +    }
