@@ -156,6 +156,7 @@ jobs:
             git -C winecx apply --check "$patch"
             git -C winecx apply "$patch"
           done
+          python3 scripts/check_wine_d3d11_backend.py winecx
           # The diagnostics resolve __wine_dbg_output at run time so the router
           # and the core keep importing only kernel32 and msvcrt.  It is a
           # Wine-internal, unversioned export, so a Wine bump that drops it

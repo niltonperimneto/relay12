@@ -28,6 +28,7 @@ sys.path.insert(0, str(REPOSITORY / "scripts"))
 
 import check_ddi_header  # noqa: E402
 import check_d3d11on12_port  # noqa: E402
+import check_wine_d3d11_backend  # noqa: E402
 import check_interface_acquisition  # noqa: E402
 import check_pe_audit  # noqa: E402
 import check_shared_state  # noqa: E402
@@ -56,6 +57,32 @@ def written(text, suffix=".h"):
     with handle:
         handle.write(text)
     return pathlib.Path(handle.name)
+
+
+class WineD3D11BackendGate(unittest.TestCase):
+    def make_tree(self, header, device):
+        temporary = tempfile.TemporaryDirectory()
+        root = pathlib.Path(temporary.name)
+        source = root / "dlls" / "d3d11"
+        source.mkdir(parents=True)
+        (source / "d3d11_private.h").write_text(header)
+        (source / "device.c").write_text(device)
+        self.addCleanup(temporary.cleanup)
+        return root
+
+    def test_complete_lifecycle_seam_passes(self):
+        root = self.make_tree("\n".join(
+            check_wine_d3d11_backend.REQUIRED_HEADER), "\n".join(
+            check_wine_d3d11_backend.REQUIRED_DEVICE))
+        self.assertEqual(check_wine_d3d11_backend.check_tree(root), [])
+
+    def test_direct_flush_regression_is_rejected(self):
+        markers = list(check_wine_d3d11_backend.REQUIRED_DEVICE)
+        markers.remove("context->device->backend_ops->flush(context);")
+        root = self.make_tree("\n".join(
+            check_wine_d3d11_backend.REQUIRED_HEADER), "\n".join(markers))
+        errors = check_wine_d3d11_backend.check_tree(root)
+        self.assertTrue(any("backend_ops->flush" in error for error in errors))
 
 
 class D3D11On12PortGate(unittest.TestCase):
