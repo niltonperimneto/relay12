@@ -588,7 +588,8 @@ extern "C" HRESULT WINAPI WineD3D11On12GetInterface(UINT requestedVersion,
             | WINE_D3D11ON12_CAP_D3DMETAL_BOOTSTRAP
             | WINE_D3D11ON12_CAP_DEVICE_LIFECYCLE
             | WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_FLUSH
-            | WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_DRAW;
+            | WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_DRAW
+            | WINE_D3D11ON12_CAP_WRAPPED_RESOURCE_VALIDATION;
     interfaceOut->createDevice = WineD3D11On12CreateDeviceV1;
     interfaceOut->createDirectDevice = WineD3D11CreateDeviceV2;
     interfaceOut->createDirectDeviceAndSwapChain =
@@ -596,6 +597,8 @@ extern "C" HRESULT WINAPI WineD3D11On12GetInterface(UINT requestedVersion,
     interfaceOut->closeAdapterDevice = WineD3D11On12CloseAdapterDeviceV1;
     interfaceOut->flushAdapterDevice = WineD3D11On12FlushAdapterDeviceV1;
     interfaceOut->drawAdapterDevice = WineD3D11On12DrawAdapterDeviceV1;
+    interfaceOut->validateWrappedResource =
+            WineD3D11On12ValidateWrappedResourceV1;
     return S_OK;
 }
 
@@ -859,6 +862,39 @@ extern "C" HRESULT WINAPI WineD3D11On12DrawAdapterDeviceV1(
     state->deviceFuncs.pfnDraw(state->hDevice, vertexCount,
             startVertexLocation);
     return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12ValidateWrappedResourceV1(
+        WineD3D11On12AdapterDevice *adapterDevice,
+        IUnknown *resourceObject) noexcept
+{
+    if (!adapterDevice || adapterDevice->size != sizeof(*adapterDevice)
+            || !resourceObject)
+        return E_INVALIDARG;
+
+    AdapterState *state = static_cast<AdapterState *>(
+            adapterDevice->runtimeState);
+    if (!state || !state->deviceCreated || !state->device12)
+        return DXGI_ERROR_UNSUPPORTED;
+
+    ComRef<ID3D12Resource> resource;
+    HRESULT hr = strictResult(resourceObject->QueryInterface(IID_ID3D12Resource,
+            reinterpret_cast<void **>(resource.put())), resource);
+    if (FAILED(hr))
+        return hr;
+
+    ComRef<ID3D12Device> resourceDevice;
+    hr = strictResult(resource.get()->GetDevice(IID_ID3D12Device,
+            reinterpret_cast<void **>(resourceDevice.put())), resourceDevice);
+    if (FAILED(hr))
+        return hr;
+
+    bool identical = false;
+    hr = comObjectsIdentical(state->device12, resourceDevice.get(),
+            &identical);
+    if (FAILED(hr))
+        return hr;
+    return identical ? S_OK : E_INVALIDARG;
 }
 
 extern "C" HRESULT WINAPI WineD3D11CreateDeviceV2(IDXGIAdapter *adapter,
