@@ -26,7 +26,59 @@
  * it supplies both, and wineD3D11DdiSelectVersion is reused rather than this
  * file reimplementing the supported-version arithmetic. */
 #include "wine_d3d11ddi_negotiate.h"
-#include "D3D11On12DDI.h"
+
+/* The adapter-arguments subset of interface/D3D11On12DDI.h, transcribed under
+ * its MIT licence rather than included.
+ *
+ * Including the header outright does not work from here. Its
+ * ID3D11On12DDIDevice declarations name D3DKMT_PRESENT, D3DKMT_HANDLE and
+ * D3D11DDIARG_CREATEGEOMETRYSHADERWITHSTREAMOUTPUT -- WDK and DDI types the
+ * clean-room header has not authored, and which this host never uses. The
+ * driver compiles it with the licensed overlay on its include path; the core
+ * must not have that path, so it takes the four declarations it actually
+ * needs.
+ *
+ * scripts/check_adapter_args.py compares these to the pinned header on every
+ * run. The structure is passed by address to separately compiled code, so a
+ * field added upstream would not fail to compile here -- the driver would
+ * read past the end of a structure this side believes it filled, and nothing
+ * else in the build would notice. */
+namespace D3D11On12
+{
+struct PrivateCallbacks
+{
+    D3D11_RESOURCE_FLAGS (CALLBACK *GetResourceFlags)(D3D10DDI_HRESOURCE,
+            bool *pbAcquireableOnWrite);
+    bool (CALLBACK *NotifySharedResourceCreation)(HANDLE, IUnknown *);
+};
+
+struct Present11On12CBArgs;
+
+struct PrivateCallbacks2
+{
+    HRESULT (CALLBACK *Present11On12CB)(HANDLE, Present11On12CBArgs *);
+};
+
+constexpr UINT c_CurrentD3D11On12InterfaceVersion = 7;
+
+struct SOpenAdapterArgs
+{
+    ID3D12Device1 *pDevice;
+    ID3D12CommandQueue *p3DCommandQueue;
+    IUnknown *pAdapter;
+    UINT NodeIndex;
+    PrivateCallbacks Callbacks;
+    bool bDisableGPUTimeout;
+
+    bool bSupportDisplayableTextures;
+    bool bSupportDeferredContexts;
+
+    UINT D3D11On12InterfaceVersion = c_CurrentD3D11On12InterfaceVersion;
+
+    PrivateCallbacks2 *Callbacks2;
+    bool bSupportPrepatchedShaders;
+};
+}
 
 namespace
 {
@@ -311,8 +363,28 @@ struct AdapterState
     PFND3D10DDI_RETRIEVESUBOBJECT retrieveSubObject;
     D3D10DDI_HADAPTER hAdapter;
     D3D10DDI_HDEVICE hDevice;
+    ID3D12Device1 *device12;
+    ID3D12CommandQueue *queue;
+    bool adapterOpened;
+    bool deviceCreated;
     unsigned char privateDevice[1];
 };
+
+void destroyAdapterState(AdapterState *state) noexcept
+{
+    if (!state)
+        return;
+
+    if (state->deviceCreated && state->deviceFuncs.pfnDestroyDevice)
+        state->deviceFuncs.pfnDestroyDevice(state->hDevice);
+    if (state->adapterOpened && state->adapterFuncs.pfnCloseAdapter)
+        state->adapterFuncs.pfnCloseAdapter(state->hAdapter);
+    if (state->queue)
+        state->queue->Release();
+    if (state->device12)
+        state->device12->Release();
+    HeapFree(GetProcessHeap(), 0, state);
+}
 
 /* Negotiate the device interface version, then create the DDI device.
  *
@@ -357,8 +429,16 @@ HRESULT createDriverDevice(AdapterState **statePtr,
     createDevice.pWDDM2_6UMCallbacks = &state->coreCallbacks;
     createDevice.ppfnRetrieveSubObject = &state->retrieveSubObject;
 
+    /* Its own argument structure, not the create-device one: the sizing call
+     * is told which interface and version the device will be created with,
+     * and nothing else. */
+    D3D10DDIARG_CALCPRIVATEDEVICESIZE sizeArgs = {};
+    sizeArgs.Interface = createDevice.Interface;
+    sizeArgs.Version = createDevice.Version;
+    sizeArgs.Flags = createDevice.Flags;
+
     const SIZE_T privateSize = state->adapterFuncs.pfnCalcPrivateDeviceSize(
-            state->hAdapter, &createDevice);
+            state->hAdapter, &sizeArgs);
     if (!privateSize)
         return E_FAIL;
 
@@ -389,11 +469,15 @@ HRESULT createDriverDevice(AdapterState **statePtr,
                 "d3d11on12core: the driver rejected CreateDevice.\n");
         return hr;
     }
+    if (!state->deviceFuncs.pfnDestroyDevice)
+        return DXGI_ERROR_UNSUPPORTED;
+    state->deviceCreated = true;
 
     out->negotiatedInterfaceVersion = selectedInterface;
     out->deviceFuncs = &state->deviceFuncs;
     out->hDrvAdapter = state->hAdapter.pDrvPrivate;
     out->hDrvDevice = state->hDevice.pDrvPrivate;
+    out->runtimeState = state;
     return S_OK;
 }
 
@@ -501,11 +585,13 @@ extern "C" HRESULT WINAPI WineD3D11On12GetInterface(UINT requestedVersion,
         return E_NOINTERFACE;
 
     interfaceOut->capabilities = WINE_D3D11ON12_CAP_VALIDATION
-            | WINE_D3D11ON12_CAP_D3DMETAL_BOOTSTRAP;
+            | WINE_D3D11ON12_CAP_D3DMETAL_BOOTSTRAP
+            | WINE_D3D11ON12_CAP_DEVICE_LIFECYCLE;
     interfaceOut->createDevice = WineD3D11On12CreateDeviceV1;
     interfaceOut->createDirectDevice = WineD3D11CreateDeviceV2;
     interfaceOut->createDirectDeviceAndSwapChain =
             WineD3D11CreateDeviceAndSwapChainV2;
+    interfaceOut->closeAdapterDevice = WineD3D11On12CloseAdapterDeviceV1;
     return S_OK;
 }
 
@@ -575,6 +661,7 @@ extern "C" HRESULT WINAPI WineD3D11On12OpenAdapterV1(IUnknown *deviceObject,
     out->deviceFuncs = nullptr;
     out->hDrvAdapter = nullptr;
     out->hDrvDevice = nullptr;
+    out->runtimeState = nullptr;
 
     ComRef<ID3D12Device> device12;
     ComRef<ID3D12CommandQueue> queue;
@@ -674,16 +761,49 @@ extern "C" HRESULT WINAPI WineD3D11On12OpenAdapterV1(IUnknown *deviceObject,
         return hr;
     }
     state->hAdapter = openAdapter.hAdapter;
+    state->adapterOpened = true;
+
+    /* An adapter without its required destruction callback cannot
+     * participate in the owned lifecycle promised by ABI v3. */
+    if (!state->adapterFuncs.pfnCloseAdapter)
+    {
+        destroyAdapterState(state);
+        return DXGI_ERROR_UNSUPPORTED;
+    }
+
+    /* The driver's adapter also retains these today, but the host's lifetime
+     * must not depend on that implementation detail. */
+    device12_1.get()->AddRef();
+    state->device12 = device12_1.get();
+    queue.get()->AddRef();
+    state->queue = queue.get();
 
     hr = createDriverDevice(&state, out);
     if (FAILED(hr))
     {
-        if (state->adapterFuncs.pfnCloseAdapter)
-            state->adapterFuncs.pfnCloseAdapter(state->hAdapter);
-        HeapFree(GetProcessHeap(), 0, state);
+        destroyAdapterState(state);
         return hr;
     }
 
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12CloseAdapterDeviceV1(
+        WineD3D11On12AdapterDevice *adapterDevice) noexcept
+{
+    if (!adapterDevice || adapterDevice->size != sizeof(*adapterDevice))
+        return E_INVALIDARG;
+
+    AdapterState *state = static_cast<AdapterState *>(
+            adapterDevice->runtimeState);
+    adapterDevice->negotiatedInterfaceVersion = 0;
+    adapterDevice->deviceFuncs = nullptr;
+    adapterDevice->hDrvAdapter = nullptr;
+    adapterDevice->hDrvDevice = nullptr;
+    adapterDevice->runtimeState = nullptr;
+    ZeroMemory(adapterDevice->reserved, sizeof(adapterDevice->reserved));
+
+    destroyAdapterState(state);
     return S_OK;
 }
 
