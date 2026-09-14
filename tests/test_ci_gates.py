@@ -34,6 +34,7 @@ import check_shared_state  # noqa: E402
 import gen_ddi_layout  # noqa: E402
 import check_dtl_struct_return  # noqa: E402
 import check_dtl_include_case  # noqa: E402
+import check_adapter_args  # noqa: E402
 import check_cleanroom_isolation  # noqa: E402
 import inventory_dtl_portability  # noqa: E402
 
@@ -85,6 +86,139 @@ class D3D11On12PortGate(unittest.TestCase):
     def test_comment_only_mentions_do_not_trip_the_gate(self):
         source = "// CComPtr<IUnknown> was removed\nint value; // _com_error"
         self.assertEqual(check_d3d11on12_port.check_source("notes.cpp", source), [])
+
+
+
+DRIVER_ADAPTER_ARGS = """\
+struct PrivateCallbacks
+{
+    D3D11_RESOURCE_FLAGS (CALLBACK *GetResourceFlags)(_In_ D3D10DDI_HRESOURCE, _Out_ bool *pbAcquireableOnWrite);
+    bool (CALLBACK *NotifySharedResourceCreation)(_In_ HANDLE, _In_ IUnknown*);
+};
+
+struct PrivateCallbacks2
+{
+    HRESULT(CALLBACK* Present11On12CB)(_In_ HANDLE, _In_ Present11On12CBArgs*);
+};
+
+constexpr UINT c_CurrentD3D11On12InterfaceVersion = 7;
+
+struct SOpenAdapterArgs
+{
+    ID3D12Device1* pDevice;
+    UINT NodeIndex;
+    PrivateCallbacks Callbacks;
+    // Velocity features
+    bool bSupportDeferredContexts;
+    UINT D3D11On12InterfaceVersion = c_CurrentD3D11On12InterfaceVersion;
+    PrivateCallbacks2* Callbacks2;
+};
+"""
+
+# The same declarations as a GPL transcription would spell them: no SAL, a
+# different pointer style, wrapped differently, and the forward declaration
+# the core needs because it does not include the driver's header.
+CORE_ADAPTER_ARGS = """\
+struct PrivateCallbacks
+{
+    D3D11_RESOURCE_FLAGS (CALLBACK *GetResourceFlags)(D3D10DDI_HRESOURCE,
+            bool *pbAcquireableOnWrite);
+    bool (CALLBACK *NotifySharedResourceCreation)(HANDLE, IUnknown *);
+};
+
+struct Present11On12CBArgs;
+
+struct PrivateCallbacks2
+{
+    HRESULT (CALLBACK *Present11On12CB)(HANDLE, Present11On12CBArgs *);
+};
+
+constexpr UINT c_CurrentD3D11On12InterfaceVersion = 7;
+
+struct SOpenAdapterArgs
+{
+    ID3D12Device1 *pDevice;
+    UINT NodeIndex;
+    PrivateCallbacks Callbacks;
+    bool bSupportDeferredContexts;
+    UINT D3D11On12InterfaceVersion = c_CurrentD3D11On12InterfaceVersion;
+    PrivateCallbacks2 *Callbacks2;
+};
+"""
+
+
+class AdapterArgsTranscription(unittest.TestCase):
+    """The copy in the core is compared to the pinned driver on every run.
+
+    It is passed by address to separately compiled code, so a field added
+    upstream would not fail to compile here -- the driver would read past the
+    end of a structure this side believes it filled.
+    """
+
+    def test_a_faithful_transcription_passes_despite_spelling(self):
+        self.assertEqual(
+            check_adapter_args.check(DRIVER_ADAPTER_ARGS, CORE_ADAPTER_ARGS),
+            [])
+
+    def test_the_committed_transcription_matches_the_pinned_driver(self):
+        driver = (REPOSITORY / "third_party" / "D3D11On12" / "interface"
+                  / "D3D11On12DDI.h")
+        core = REPOSITORY / "relay12-d3d11" / "d3d11on12core.cpp"
+        if not driver.exists():
+            self.skipTest("the pinned driver submodule is not checked out")
+        self.assertEqual(
+            check_adapter_args.check(driver.read_text(errors="replace"),
+                                     core.read_text(errors="replace")),
+            [])
+
+    def test_a_field_added_upstream_is_rejected(self):
+        """The failure this gate exists for: the driver grows a member and
+        the core keeps passing the shorter structure."""
+        grown = DRIVER_ADAPTER_ARGS.replace(
+            "    PrivateCallbacks2* Callbacks2;",
+            "    PrivateCallbacks2* Callbacks2;\n"
+            "    bool bSupportPrepatchedShaders;")
+        self.assertNotEqual(grown, DRIVER_ADAPTER_ARGS)
+        errors = check_adapter_args.check(grown, CORE_ADAPTER_ARGS)
+        self.assertTrue(any("SOpenAdapterArgs" in error for error in errors),
+                        errors)
+
+    def test_a_reordered_field_is_rejected(self):
+        """Names alone would not catch this; order is what decides offsets."""
+        swapped = CORE_ADAPTER_ARGS.replace(
+            "    ID3D12Device1 *pDevice;\n    UINT NodeIndex;",
+            "    UINT NodeIndex;\n    ID3D12Device1 *pDevice;")
+        self.assertNotEqual(swapped, CORE_ADAPTER_ARGS)
+        errors = check_adapter_args.check(DRIVER_ADAPTER_ARGS, swapped)
+        self.assertTrue(any("SOpenAdapterArgs" in error for error in errors),
+                        errors)
+
+    def test_a_retyped_field_is_rejected(self):
+        retyped = CORE_ADAPTER_ARGS.replace("    UINT NodeIndex;",
+                                            "    UINT64 NodeIndex;")
+        self.assertNotEqual(retyped, CORE_ADAPTER_ARGS)
+        errors = check_adapter_args.check(DRIVER_ADAPTER_ARGS, retyped)
+        self.assertTrue(any("NodeIndex" in error for error in errors), errors)
+
+    def test_a_changed_interface_version_is_rejected(self):
+        """Version 7 is where the driver starts dereferencing Callbacks2, so
+        a bump is a crash risk rather than a number."""
+        bumped = DRIVER_ADAPTER_ARGS.replace(
+            "c_CurrentD3D11On12InterfaceVersion = 7",
+            "c_CurrentD3D11On12InterfaceVersion = 8")
+        self.assertNotEqual(bumped, DRIVER_ADAPTER_ARGS)
+        errors = check_adapter_args.check(bumped, CORE_ADAPTER_ARGS)
+        self.assertTrue(any("InterfaceVersion" in error for error in errors),
+                        errors)
+
+    def test_a_driver_bump_that_removes_the_struct_is_rejected(self):
+        """Silence is not agreement: if the gate cannot find what it compares,
+        it must say so rather than pass."""
+        gone = DRIVER_ADAPTER_ARGS.replace("struct SOpenAdapterArgs",
+                                           "struct SOpenAdapterArgsRenamed")
+        errors = check_adapter_args.check(gone, CORE_ADAPTER_ARGS)
+        self.assertTrue(any("not found in the pinned driver" in error
+                            for error in errors), errors)
 
 
 class DtlPortabilityInventory(unittest.TestCase):
@@ -806,6 +940,19 @@ class SharedStateGate(unittest.TestCase):
             ["resolveSinks", "wineD3D11DiagReport", "wineD3D11DiagReportOnce"])
         self.assertIn("initialize",
                       check_shared_state.function_bodies(self.shim))
+
+    def test_forward_type_declarations_are_not_shared_state(self):
+        source = """namespace Example
+{
+struct StructTag;
+class ClassTag;
+union UnionTag;
+enum EnumTag;
+}
+"""
+        self.assertEqual(
+            check_shared_state.namespace_scope_definitions(source), [])
+        self.assertEqual(self.check(source), [])
 
     def test_the_gate_follows_a_wrapped_InitOnceExecuteOnce(self):
         """The router wraps the call in initialize() and every entry point

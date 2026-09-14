@@ -45,6 +45,7 @@ struct mock_device
      * legitimate, and zero, which is a payload naming no node at all. */
     UINT node_count;
     unsigned int node_count_calls;
+    int support_device1;
 };
 
 static inline struct mock_device *impl_from_device(ID3D12Device *iface)
@@ -65,7 +66,9 @@ static inline HRESULT STDMETHODCALLTYPE mock_device_QueryInterface(ID3D12Device 
         return S_OK;
     }
     if (IsEqualGUID(riid, &IID_IUnknown)
-            || IsEqualGUID(riid, &IID_ID3D12Device))
+            || IsEqualGUID(riid, &IID_ID3D12Device)
+            || (device->support_device1
+                    && IsEqualGUID(riid, &IID_ID3D12Device1)))
     {
         /* One controlling identity: every accepted interface returns the same
          * pointer, which is what the core's identity comparison relies on. */
