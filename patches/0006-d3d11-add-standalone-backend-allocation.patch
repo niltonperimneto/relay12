@@ -38,7 +38,7 @@ diff --git a/dlls/d3d11/device.c b/dlls/d3d11/device.c
      /* COM aggregation always takes place */
      device->outer_unk = outer_unknown;
      device->d3d11_only = FALSE;
-@@ -8318,3 +8321,36 @@ void d3d_device_init(struct d3d_device *device, void *outer_unknown)
+@@ -8318,3 +8321,37 @@ void d3d_device_init(struct d3d_device *device, void *outer_unknown)
      wine_rb_init(&device->rasterizer_states, d3d_rasterizer_state_compare);
      wine_rb_init(&device->sampler_states, d3d_sampler_state_compare);
  }
