@@ -1,0 +1,160 @@
+diff --git a/dlls/d3d11/d3d11_private.h b/dlls/d3d11/d3d11_private.h
+index 21204753..90377d06 100644
+--- a/dlls/d3d11/d3d11_private.h
++++ b/dlls/d3d11/d3d11_private.h
+@@ -31,6 +31,7 @@
+ 
+ #include "dxgi1_6.h"
+ #include "d3d11_4.h"
++#include "d3d11on12.h"
+ #ifdef D3D11_INIT_GUID
+ #include "initguid.h"
+ #endif
+@@ -573,6 +574,16 @@ struct d3d11_backend_ops
+     UINT (*get_creation_flags)(struct d3d_device *device);
+     HRESULT (*get_device_removed_reason)(struct d3d_device *device);
+     void (*flush)(struct d3d11_device_context *context);
++    HRESULT (*create_wrapped_resource)(struct d3d_device *device,
++            IUnknown *resource12, const D3D11_RESOURCE_FLAGS *flags,
++            D3D12_RESOURCE_STATES input_state,
++            D3D12_RESOURCE_STATES output_state, REFIID iid, void **resource11);
++    void (*release_wrapped_resources)(struct d3d_device *device,
++            ID3D11Resource *const *resources, UINT count);
++    void (*acquire_wrapped_resources)(struct d3d_device *device,
++            ID3D11Resource *const *resources, UINT count);
++    HRESULT (*get_d3d12_device)(struct d3d_device *device, REFIID iid,
++            ID3D12Device **device12);
+ };
+ 
+ /* ID3D11Device, ID3D10Device1 */
+@@ -582,6 +593,7 @@ struct d3d_device
+ {
+     IUnknown IUnknown_inner;
+     ID3D11Device5 ID3D11Device5_iface;
++    ID3D11On12Device1 ID3D11On12Device1_iface;
+     ID3D10Device1 ID3D10Device1_iface;
+     ID3D10Multithread ID3D10Multithread_iface;
+     IWineDXGIDeviceParent IWineDXGIDeviceParent_iface;
+diff --git a/dlls/d3d11/device.c b/dlls/d3d11/device.c
+index 592f4ac6..431e8a0e 100644
+--- a/dlls/d3d11/device.c
++++ b/dlls/d3d11/device.c
+@@ -57,6 +57,10 @@ static const struct d3d11_backend_ops wined3d_backend_ops =
+     wined3d_backend_get_creation_flags,
+     wined3d_backend_get_device_removed_reason,
+     wined3d_backend_flush,
++    NULL,
++    NULL,
++    NULL,
++    NULL,
+ };
+ 
+ static BOOL d3d_array_reserve(void **elements, SIZE_T *capacity, SIZE_T count, SIZE_T size)
+@@ -4071,6 +4075,86 @@ static ULONG STDMETHODCALLTYPE d3d11_device_Release(ID3D11Device5 *iface)
+     return IUnknown_Release(device->outer_unk);
+ }
+ 
++static inline struct d3d_device *impl_from_ID3D11On12Device1(
++        ID3D11On12Device1 *iface)
++{
++    return CONTAINING_RECORD(iface, struct d3d_device,
++            ID3D11On12Device1_iface);
++}
++
++static HRESULT STDMETHODCALLTYPE d3d11_on12_device_QueryInterface(
++        ID3D11On12Device1 *iface, REFIID iid, void **out)
++{
++    struct d3d_device *device = impl_from_ID3D11On12Device1(iface);
++    return IUnknown_QueryInterface(device->outer_unk, iid, out);
++}
++
++static ULONG STDMETHODCALLTYPE d3d11_on12_device_AddRef(
++        ID3D11On12Device1 *iface)
++{
++    struct d3d_device *device = impl_from_ID3D11On12Device1(iface);
++    return IUnknown_AddRef(device->outer_unk);
++}
++
++static ULONG STDMETHODCALLTYPE d3d11_on12_device_Release(
++        ID3D11On12Device1 *iface)
++{
++    struct d3d_device *device = impl_from_ID3D11On12Device1(iface);
++    return IUnknown_Release(device->outer_unk);
++}
++
++static HRESULT STDMETHODCALLTYPE d3d11_on12_device_CreateWrappedResource(
++        ID3D11On12Device1 *iface, IUnknown *resource12,
++        const D3D11_RESOURCE_FLAGS *flags, D3D12_RESOURCE_STATES input_state,
++        D3D12_RESOURCE_STATES output_state, REFIID iid, void **resource11)
++{
++    struct d3d_device *device = impl_from_ID3D11On12Device1(iface);
++
++    if (!resource11)
++        return E_INVALIDARG;
++    *resource11 = NULL;
++    return device->backend_ops->create_wrapped_resource(device, resource12,
++            flags, input_state, output_state, iid, resource11);
++}
++
++static void STDMETHODCALLTYPE d3d11_on12_device_ReleaseWrappedResources(
++        ID3D11On12Device1 *iface, ID3D11Resource *const *resources,
++        UINT count)
++{
++    struct d3d_device *device = impl_from_ID3D11On12Device1(iface);
++    device->backend_ops->release_wrapped_resources(device, resources, count);
++}
++
++static void STDMETHODCALLTYPE d3d11_on12_device_AcquireWrappedResources(
++        ID3D11On12Device1 *iface, ID3D11Resource *const *resources,
++        UINT count)
++{
++    struct d3d_device *device = impl_from_ID3D11On12Device1(iface);
++    device->backend_ops->acquire_wrapped_resources(device, resources, count);
++}
++
++static HRESULT STDMETHODCALLTYPE d3d11_on12_device_GetD3D12Device(
++        ID3D11On12Device1 *iface, REFIID iid, ID3D12Device **device12)
++{
++    struct d3d_device *device = impl_from_ID3D11On12Device1(iface);
++
++    if (!device12)
++        return E_INVALIDARG;
++    *device12 = NULL;
++    return device->backend_ops->get_d3d12_device(device, iid, device12);
++}
++
++static const struct ID3D11On12Device1Vtbl d3d11_on12_device_vtbl =
++{
++    d3d11_on12_device_QueryInterface,
++    d3d11_on12_device_AddRef,
++    d3d11_on12_device_Release,
++    d3d11_on12_device_CreateWrappedResource,
++    d3d11_on12_device_ReleaseWrappedResources,
++    d3d11_on12_device_AcquireWrappedResources,
++    d3d11_on12_device_GetD3D12Device,
++};
++
+ static HRESULT STDMETHODCALLTYPE d3d11_device_CreateBuffer(ID3D11Device5 *iface, const D3D11_BUFFER_DESC *desc,
+         const D3D11_SUBRESOURCE_DATA *data, ID3D11Buffer **buffer)
+ {
+@@ -5625,6 +5709,12 @@ static HRESULT STDMETHODCALLTYPE d3d_device_inner_QueryInterface(IUnknown *iface,
+     {
+         *out = &device->ID3D10Multithread_iface;
+     }
++    else if (device->backend_ops->create_wrapped_resource
++            && (IsEqualGUID(riid, &IID_ID3D11On12Device1)
++            || IsEqualGUID(riid, &IID_ID3D11On12Device)))
++    {
++        *out = &device->ID3D11On12Device1_iface;
++    }
+     else if (IsEqualGUID(riid, &IID_IWineDXGIDeviceParent))
+     {
+         *out = &device->IWineDXGIDeviceParent_iface;
+@@ -8201,6 +8291,7 @@ void d3d_device_init(struct d3d_device *device, void *outer_unknown)
+ {
+     device->IUnknown_inner.lpVtbl = &d3d_device_inner_unknown_vtbl;
+     device->ID3D11Device5_iface.lpVtbl = &d3d11_device_vtbl;
++    device->ID3D11On12Device1_iface.lpVtbl = &d3d11_on12_device_vtbl;
+     device->ID3D10Device1_iface.lpVtbl = &d3d10_device1_vtbl;
+     device->ID3D10Multithread_iface.lpVtbl = &d3d10_multithread_vtbl;
+     device->ID3D11VideoDevice1_iface.lpVtbl = &d3d11_video_device1_vtbl;
