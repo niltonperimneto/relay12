@@ -10,6 +10,9 @@ REQUIRED_HEADER = (
     "void (*destroy_device)(struct d3d_device *device);",
     "void (*flush)(struct d3d11_device_context *context);",
     "void (*draw)(struct d3d11_device_context *context, UINT vertex_count,",
+    "void (*draw_indexed)(struct d3d11_device_context *context,",
+    "void (*draw_instanced)(struct d3d11_device_context *context,",
+    "void (*draw_indexed_instanced)(struct d3d11_device_context *context,",
     "const struct d3d11_backend_ops *backend_ops;",
     "void *backend_private;",
     "BOOL standalone_allocation;",
@@ -24,6 +27,9 @@ REQUIRED_DEVICE = (
     "static const struct d3d11_backend_ops wined3d_backend_ops",
     "context->device->backend_ops->flush(context);",
     "context->device->backend_ops->draw(context, vertex_count,",
+    "context->device->backend_ops->draw_indexed(context, index_count,",
+    "context->device->backend_ops->draw_instanced(context,",
+    "context->device->backend_ops->draw_indexed_instanced(context,",
     "device->backend_ops->get_feature_level(device)",
     "device->backend_ops->get_creation_flags(device)",
     "device->backend_ops->get_device_removed_reason(device)",
@@ -46,6 +52,7 @@ REQUIRED_MAIN = (
     "IUnknown_Release(&d3d_device->IUnknown_inner);",
     "backend->core.flush_adapter_device(&backend->adapter, 0, 0,",
     "backend->core.draw_adapter_device(&backend->adapter,",
+    "backend->core.dispatch_draw(&backend->adapter, kind, count0,",
 )
 
 
