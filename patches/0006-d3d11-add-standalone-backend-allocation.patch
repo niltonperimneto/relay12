@@ -1,0 +1,78 @@
+diff --git a/dlls/d3d11/d3d11_private.h b/dlls/d3d11/d3d11_private.h
+--- a/dlls/d3d11/d3d11_private.h
++++ b/dlls/d3d11/d3d11_private.h
+@@ -600,6 +600,7 @@ struct d3d_device
+ 
+     const struct d3d11_backend_ops *backend_ops;
+     void *backend_private;
++    BOOL standalone_allocation;
+ 
+     BOOL d3d11_only;
+ 
+@@ -645,6 +646,8 @@ static inline struct d3d_device *impl_from_ID3D10Device(ID3D10Device1 *iface)
+ }
+ 
+ void d3d_device_init(struct d3d_device *device, void *outer_unknown);
++struct d3d_device *d3d_device_create_backend(
++        const struct d3d11_backend_ops *backend_ops, void *backend_private);
+ 
+ struct d3d_video_decoder
+ {
+diff --git a/dlls/d3d11/device.c b/dlls/d3d11/device.c
+--- a/dlls/d3d11/device.c
++++ b/dlls/d3d11/device.c
+@@ -5727,6 +5727,8 @@ static ULONG STDMETHODCALLTYPE d3d_device_inner_Release(IUnknown *iface)
+         wine_rb_destroy(&device->rasterizer_states, NULL, NULL);
+         wine_rb_destroy(&device->depthstencil_states, NULL, NULL);
+         wine_rb_destroy(&device->blend_states, NULL, NULL);
++        if (device->standalone_allocation)
++            free(device);
+     }
+ 
+     return refcount;
+@@ -8303,6 +8305,7 @@ void d3d_device_init(struct d3d_device *device, void *outer_unknown)
+     device->refcount = 1;
+     device->backend_ops = &wined3d_backend_ops;
+     device->backend_private = NULL;
++    device->standalone_allocation = FALSE;
+     /* COM aggregation always takes place */
+     device->outer_unk = outer_unknown;
+     device->d3d11_only = FALSE;
+@@ -8318,3 +8321,36 @@ void d3d_device_init(struct d3d_device *device, void *outer_unknown)
+     wine_rb_init(&device->rasterizer_states, d3d_rasterizer_state_compare);
+     wine_rb_init(&device->sampler_states, d3d_sampler_state_compare);
+ }
++
++/* Allocate the controlling object without asking DXGI to create WineD3D.
++ *
++ * The object is deliberately returned as its private implementation type.
++ * Only the On12 factory may publish a COM interface after it has installed
++ * the remaining device and context dispatch operations. Returning an
++ * ID3D11Device here would make this allocation helper a partial-success path.
++ */
++struct d3d_device *d3d_device_create_backend(
++        const struct d3d11_backend_ops *backend_ops, void *backend_private)
++{
++    struct d3d_device *device;
++
++    if (!backend_ops || !backend_ops->destroy_device
++            || !backend_ops->get_feature_level
++            || !backend_ops->get_creation_flags
++            || !backend_ops->get_device_removed_reason
++            || !backend_ops->flush
++            || !backend_ops->create_wrapped_resource
++            || !backend_ops->release_wrapped_resources
++            || !backend_ops->acquire_wrapped_resources
++            || !backend_ops->get_d3d12_device)
++        return NULL;
++
++    if (!(device = calloc(1, sizeof(*device))))
++        return NULL;
++
++    d3d_device_init(device, &device->IUnknown_inner);
++    device->backend_ops = backend_ops;
++    device->backend_private = backend_private;
++    device->standalone_allocation = TRUE;
++    device->d3d11_only = TRUE;
++    return device;
++}
