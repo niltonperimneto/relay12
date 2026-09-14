@@ -1,0 +1,261 @@
+diff --git a/dlls/d3d11/d3d11_main.c b/dlls/d3d11/d3d11_main.c
+index 75986318..1b2e3a92 100644
+--- a/dlls/d3d11/d3d11_main.c
++++ b/dlls/d3d11/d3d11_main.c
+@@ -378,12 +378,250 @@ cleanup:
+     return hr;
+ }
+ 
++#ifdef WINE_D3D11ON12_HOST
++#define WINE_D3D11ON12_ABI_VERSION 3u
++
++struct wine_d3d11on12_adapter_device
++{
++    UINT size;
++    UINT negotiated_interface_version;
++    void *device_funcs;
++    void *driver_adapter;
++    void *driver_device;
++    void *runtime_state;
++    void *reserved[2];
++};
++
++typedef HRESULT (WINAPI *wine_d3d11on12_open_adapter_fn)(IUnknown *,
++        IUnknown *const *, UINT, UINT, struct wine_d3d11on12_adapter_device *);
++typedef HRESULT (WINAPI *wine_d3d11on12_close_adapter_fn)(
++        struct wine_d3d11on12_adapter_device *);
++
++struct wine_d3d11on12_core_interface
++{
++    UINT size;
++    UINT version;
++    UINT64 capabilities;
++    void *create_device;
++    void *create_direct_device;
++    void *create_direct_device_and_swapchain;
++    wine_d3d11on12_close_adapter_fn close_adapter_device;
++    void *reserved[5];
++};
++
++typedef HRESULT (WINAPI *wine_d3d11on12_get_interface_fn)(UINT, UINT,
++        struct wine_d3d11on12_core_interface *);
++
++struct d3d11_on12_backend
++{
++    HMODULE core_module;
++    struct wine_d3d11on12_core_interface core;
++    struct wine_d3d11on12_adapter_device adapter;
++    ID3D12Device *device12;
++    D3D_FEATURE_LEVEL feature_level;
++    UINT creation_flags;
++};
++
++static void d3d11_on12_backend_destroy(struct d3d_device *device)
++{
++    struct d3d11_on12_backend *backend = device->backend_private;
++
++    if (!backend)
++        return;
++    if (backend->adapter.runtime_state && backend->core.close_adapter_device)
++        backend->core.close_adapter_device(&backend->adapter);
++    if (backend->device12)
++        ID3D12Device_Release(backend->device12);
++    if (backend->core_module)
++        FreeLibrary(backend->core_module);
++    free(backend);
++}
++
++static D3D_FEATURE_LEVEL d3d11_on12_backend_get_feature_level(
++        struct d3d_device *device)
++{
++    struct d3d11_on12_backend *backend = device->backend_private;
++    return backend->feature_level;
++}
++
++static UINT d3d11_on12_backend_get_creation_flags(struct d3d_device *device)
++{
++    struct d3d11_on12_backend *backend = device->backend_private;
++    return backend->creation_flags;
++}
++
++static HRESULT d3d11_on12_backend_get_removed_reason(struct d3d_device *device)
++{
++    struct d3d11_on12_backend *backend = device->backend_private;
++    return ID3D12Device_GetDeviceRemovedReason(backend->device12);
++}
++
++static void d3d11_on12_backend_flush(struct d3d11_device_context *context)
++{
++    /* The object is not published until immediate-context DDI dispatch is
++     * complete, so this cannot yet be reached by an application. */
++    (void)context;
++}
++
++static HRESULT d3d11_on12_backend_create_wrapped_resource(
++        struct d3d_device *device, IUnknown *resource12,
++        const D3D11_RESOURCE_FLAGS *flags, D3D12_RESOURCE_STATES input_state,
++        D3D12_RESOURCE_STATES output_state, REFIID iid, void **resource11)
++{
++    (void)device;
++    (void)resource12;
++    (void)flags;
++    (void)input_state;
++    (void)output_state;
++    (void)iid;
++    (void)resource11;
++    return DXGI_ERROR_UNSUPPORTED;
++}
++
++static void d3d11_on12_backend_release_wrapped_resources(
++        struct d3d_device *device, ID3D11Resource *const *resources, UINT count)
++{
++    (void)device;
++    (void)resources;
++    (void)count;
++}
++
++static void d3d11_on12_backend_acquire_wrapped_resources(
++        struct d3d_device *device, ID3D11Resource *const *resources, UINT count)
++{
++    (void)device;
++    (void)resources;
++    (void)count;
++}
++
++static HRESULT d3d11_on12_backend_get_d3d12_device(struct d3d_device *device,
++        REFIID iid, ID3D12Device **device12)
++{
++    struct d3d11_on12_backend *backend = device->backend_private;
++    return ID3D12Device_QueryInterface(backend->device12, iid,
++            (void **)device12);
++}
++
++static const struct d3d11_backend_ops d3d11_on12_backend_ops =
++{
++    d3d11_on12_backend_destroy,
++    d3d11_on12_backend_get_feature_level,
++    d3d11_on12_backend_get_creation_flags,
++    d3d11_on12_backend_get_removed_reason,
++    d3d11_on12_backend_flush,
++    d3d11_on12_backend_create_wrapped_resource,
++    d3d11_on12_backend_release_wrapped_resources,
++    d3d11_on12_backend_acquire_wrapped_resources,
++    d3d11_on12_backend_get_d3d12_device,
++};
++
++static HRESULT d3d11_on12_create_unpublished_backend(IUnknown *device,
++        UINT flags, const D3D_FEATURE_LEVEL *feature_levels,
++        UINT feature_level_count, IUnknown *const *queues, UINT queue_count,
++        UINT node_mask)
++{
++    struct wine_d3d11on12_core_interface core = {0};
++    struct d3d11_on12_backend *backend;
++    struct d3d_device *d3d_device;
++    wine_d3d11on12_get_interface_fn get_interface;
++    wine_d3d11on12_open_adapter_fn open_adapter;
++    FARPROC address;
++    HRESULT hr = E_FAIL;
++
++    if (!device || !queues || queue_count != 1 || !queues[0]
++            || (feature_levels == NULL) != (feature_level_count == 0))
++        return E_INVALIDARG;
++
++    if (!(backend = calloc(1, sizeof(*backend))))
++        return E_OUTOFMEMORY;
++    if (!(backend->core_module = LoadLibraryW(L"d3d11on12core.dll")))
++    {
++        free(backend);
++        return DXGI_ERROR_UNSUPPORTED;
++    }
++
++    address = GetProcAddress(backend->core_module,
++            "WineD3D11On12GetInterface");
++    memcpy(&get_interface, &address, sizeof(get_interface));
++    core.size = sizeof(core);
++    if (!get_interface || FAILED(hr = get_interface(
++            WINE_D3D11ON12_ABI_VERSION, sizeof(core), &core))
++            || core.size != sizeof(core)
++            || core.version != WINE_D3D11ON12_ABI_VERSION
++            || !core.close_adapter_device)
++    {
++        FreeLibrary(backend->core_module);
++        free(backend);
++        return get_interface && FAILED(hr) ? hr : DXGI_ERROR_UNSUPPORTED;
++    }
++    backend->core = core;
++
++    address = GetProcAddress(backend->core_module,
++            "WineD3D11On12OpenAdapterV1");
++    memcpy(&open_adapter, &address, sizeof(open_adapter));
++    if (!open_adapter)
++    {
++        FreeLibrary(backend->core_module);
++        free(backend);
++        return DXGI_ERROR_UNSUPPORTED;
++    }
++
++    backend->adapter.size = sizeof(backend->adapter);
++    if (FAILED(hr = open_adapter(device, queues, queue_count, node_mask,
++            &backend->adapter)))
++    {
++        FreeLibrary(backend->core_module);
++        free(backend);
++        return hr;
++    }
++
++    if (FAILED(hr = IUnknown_QueryInterface(device, &IID_ID3D12Device,
++            (void **)&backend->device12)))
++    {
++        backend->core.close_adapter_device(&backend->adapter);
++        FreeLibrary(backend->core_module);
++        free(backend);
++        return hr;
++    }
++    backend->feature_level = feature_level_count ? feature_levels[0]
++            : D3D_FEATURE_LEVEL_11_0;
++    backend->creation_flags = flags;
++
++    if (!(d3d_device = d3d_device_create_backend(&d3d11_on12_backend_ops,
++            backend)))
++    {
++        backend->core.close_adapter_device(&backend->adapter);
++        ID3D12Device_Release(backend->device12);
++        FreeLibrary(backend->core_module);
++        free(backend);
++        return E_OUTOFMEMORY;
++    }
++
++    /* Prove that the token is owned by the controlling object and destroyed
++     * through its final Release. Publication comes in a later patch. */
++    IUnknown_Release(&d3d_device->IUnknown_inner);
++    return DXGI_ERROR_UNSUPPORTED;
++}
++#endif
++
+ HRESULT WINAPI D3D11On12CreateDevice(IUnknown *device, UINT flags,
+         const D3D_FEATURE_LEVEL *feature_levels, UINT feature_level_count,
+         IUnknown * const *queues, UINT queue_count, UINT node_mask,
+         ID3D11Device **d3d11_device, ID3D11DeviceContext **d3d11_immediate_context,
+         D3D_FEATURE_LEVEL *obtained_feature_level)
+ {
++#ifdef WINE_D3D11ON12_HOST
++    if (d3d11_device)
++        *d3d11_device = NULL;
++    if (d3d11_immediate_context)
++        *d3d11_immediate_context = NULL;
++    if (obtained_feature_level)
++        *obtained_feature_level = 0;
++
++    return d3d11_on12_create_unpublished_backend(device, flags,
++            feature_levels, feature_level_count, queues, queue_count,
++            node_mask);
++#else
+     FIXME("device %p, flags %#x, feature_levels %p, feature_level_count %u, "
+             "queues %p, queue_count %u, node_mask 0x%08x, "
+             "d3d11_device %p, d3d11_immediate_context %p, obtained_feature_level %p stub!\n",
+@@ -391,4 +629,5 @@ HRESULT WINAPI D3D11On12CreateDevice(IUnknown *device, UINT flags,
+             node_mask, d3d11_device, d3d11_immediate_context, obtained_feature_level);
+ 
+     return E_NOTIMPL;
++#endif
+ }
