@@ -17,6 +17,9 @@ static LONG instanced_draw_calls;
 static LONG indexed_instanced_draw_calls;
 static LONG topology_calls;
 static INT last_topology;
+static LONG resource_create_calls;
+static LONG resource_destroy_calls;
+static int bad_resource_description;
 static unsigned char adapter_private;
 
 static HRESULT mock_get_versions(D3D10DDI_HADAPTER adapter, UINT32 *count,
@@ -97,6 +100,40 @@ static void mock_ia_set_topology(D3D10DDI_HDEVICE device,
     InterlockedIncrement(&topology_calls);
 }
 
+static SIZE_T mock_calc_private_resource_size(D3D10DDI_HDEVICE device,
+        const D3D11DDIARG_CREATERESOURCE *description)
+{
+    (void)device;
+    if (!description || !description->pMipInfoList
+            || description->ResourceDimension != D3D10DDIRESOURCE_BUFFER)
+        bad_resource_description = 1;
+    return 32;
+}
+
+static void mock_create_resource(D3D10DDI_HDEVICE device,
+        const D3D11DDIARG_CREATERESOURCE *description,
+        D3D10DDI_HRESOURCE resource, D3D10DDI_HRTRESOURCE runtime_resource)
+{
+    (void)device;
+    if (!description || !description->pMipInfoList
+            || description->pMipInfoList->TexelWidth != 256
+            || description->pMipInfoList->TexelHeight != 1
+            || description->pMipInfoList->TexelDepth != 1
+            || description->ResourceDimension != D3D10DDIRESOURCE_BUFFER
+            || !resource.pDrvPrivate || !runtime_resource.handle)
+        bad_resource_description = 1;
+    InterlockedIncrement(&resource_create_calls);
+}
+
+static void mock_destroy_resource(D3D10DDI_HDEVICE device,
+        D3D10DDI_HRESOURCE resource)
+{
+    (void)device;
+    if (!resource.pDrvPrivate)
+        bad_resource_description = 1;
+    InterlockedIncrement(&resource_destroy_calls);
+}
+
 static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
         D3D10DDIARG_CREATEDEVICE *args)
 {
@@ -111,6 +148,10 @@ static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
     args->pWDDM2_6DeviceFuncs->pfnDrawIndexedInstanced =
             mock_draw_indexed_instanced;
     args->pWDDM2_6DeviceFuncs->pfnIaSetTopology = mock_ia_set_topology;
+    args->pWDDM2_6DeviceFuncs->pfnCalcPrivateResourceSize =
+            mock_calc_private_resource_size;
+    args->pWDDM2_6DeviceFuncs->pfnCreateResource = mock_create_resource;
+    args->pWDDM2_6DeviceFuncs->pfnDestroyResource = mock_destroy_resource;
     InterlockedIncrement(&create_calls);
     return S_OK;
 }
@@ -139,6 +180,14 @@ __declspec(dllexport) LONG WINAPI WineD3D11On12MockDriverGetTopology(
     if (topology)
         *topology = last_topology;
     return topology_calls;
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetResourceCounts(
+        LONG *created, LONG *destroyed, int *bad_description)
+{
+    if (created) *created = resource_create_calls;
+    if (destroyed) *destroyed = resource_destroy_calls;
+    if (bad_description) *bad_description = bad_resource_description;
 }
 
 static HRESULT mock_close_adapter(D3D10DDI_HADAPTER adapter)
