@@ -61,6 +61,8 @@ int main(void)
     typedef void (WINAPI *get_extended_draw_counts_fn)(LONG *, LONG *, LONG *);
     typedef LONG (WINAPI *get_topology_fn)(INT *);
     typedef void (WINAPI *get_resource_counts_fn)(LONG *, LONG *, int *);
+    typedef void (WINAPI *get_ia_bindings_fn)(LONG *, LONG *, void **, UINT *,
+            UINT *, void **, DXGI_FORMAT *, UINT *);
     WineD3D11On12AdapterDevice out;
     struct mock_device device;
     struct mock_queue queue;
@@ -73,6 +75,7 @@ int main(void)
     get_extended_draw_counts_fn get_extended_draw_counts;
     get_topology_fn get_topology;
     get_resource_counts_fn get_resource_counts;
+    get_ia_bindings_fn get_ia_bindings;
     LONG opened, created, destroyed, closed;
     LONG indexed, instanced, indexed_instanced;
     INT topology;
@@ -80,6 +83,13 @@ int main(void)
     int bad_resource_description;
     D3D11_BUFFER_DESC buffer_desc;
     WineD3D11On12Buffer buffer_handle;
+    WineD3D11On12Buffer index_buffer_handle;
+    WineD3D11On12Buffer *buffers[1];
+    UINT stride = 24, offset = 8;
+    LONG vertex_bind_calls, index_bind_calls;
+    void *bound_vertex, *bound_index;
+    UINT bound_stride, bound_vertex_offset, bound_index_offset;
+    DXGI_FORMAT bound_index_format;
 
     hr = WineD3D11On12CloseAdapterDeviceV1(NULL);
     check(hr == E_INVALIDARG, "close rejects a null out-structure");
@@ -172,6 +182,9 @@ int main(void)
     get_resource_counts = mock_driver
             ? (get_resource_counts_fn)(void *)GetProcAddress(mock_driver,
                     "WineD3D11On12MockDriverGetResourceCounts") : NULL;
+    get_ia_bindings = mock_driver
+            ? (get_ia_bindings_fn)(void *)GetProcAddress(mock_driver,
+                    "WineD3D11On12MockDriverGetIABufferBindings") : NULL;
     check(get_counts != NULL, "the lifecycle mock driver is loaded");
     check(get_flush_count != NULL, "the flush counter is exported");
     check(get_draw_count != NULL, "the draw counter is exported");
@@ -179,9 +192,10 @@ int main(void)
           "the extended draw counters are exported");
     check(get_topology != NULL, "the input-assembler topology counter is exported");
     check(get_resource_counts != NULL, "the resource counters are exported");
+    check(get_ia_bindings != NULL, "the IA buffer binding recorder is exported");
     if (get_counts && get_flush_count && get_draw_count
             && get_extended_draw_counts && get_topology
-            && get_resource_counts)
+            && get_resource_counts && get_ia_bindings)
     {
         device.support_device1 = 1;
         initialize_out(&out);
@@ -242,6 +256,20 @@ int main(void)
         check(resource_created == 1 && resource_destroyed == 0
                 && !bad_resource_description,
               "buffer creation reaches the exact DDI descriptor once");
+        buffers[0] = &buffer_handle;
+        hr = WineD3D11On12SetVertexBuffersV1(&out, 0, 1, buffers,
+                &stride, &offset);
+        check(hr == S_OK, "a live vertex buffer binds through the IA DDI");
+        get_ia_bindings(&vertex_bind_calls, &index_bind_calls, &bound_vertex,
+                &bound_stride, &bound_vertex_offset, &bound_index,
+                &bound_index_format, &bound_index_offset);
+        check(vertex_bind_calls == 1 && bound_vertex == buffer_handle.hDrvResource
+                && bound_stride == stride && bound_vertex_offset == offset,
+              "vertex binding preserves handle, stride, and offset");
+        hr = WineD3D11On12SetIndexBufferV1(&out, &buffer_handle,
+                DXGI_FORMAT_R16_UINT, 0);
+        check(hr == E_INVALIDARG,
+              "a vertex-only buffer cannot be rebound as an index buffer");
         hr = WineD3D11On12DestroyBufferV1(&buffer_handle);
         check(hr == S_OK && !buffer_handle.hDrvResource
                 && !buffer_handle.runtimeState,
@@ -250,6 +278,33 @@ int main(void)
                 &bad_resource_description);
         check(resource_created == 1 && resource_destroyed == 1,
               "buffer destruction reaches the DDI callback once");
+        hr = WineD3D11On12SetVertexBuffersV1(&out, 0, 1, buffers,
+                &stride, &offset);
+        check(hr == E_INVALIDARG,
+              "a destroyed vertex buffer is rejected before DDI dispatch");
+
+        memset(&buffer_desc, 0, sizeof(buffer_desc));
+        buffer_desc.ByteWidth = 256;
+        buffer_desc.Usage = D3D11_USAGE_DEFAULT;
+        buffer_desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+        memset(&index_buffer_handle, 0, sizeof(index_buffer_handle));
+        index_buffer_handle.size = sizeof(index_buffer_handle);
+        hr = WineD3D11On12CreateBufferV1(&out, &buffer_desc, NULL,
+                &index_buffer_handle);
+        check(hr == S_OK, "an index buffer receives an owned DDI handle");
+        hr = WineD3D11On12SetIndexBufferV1(&out, &index_buffer_handle,
+                DXGI_FORMAT_R16_UINT, 12);
+        check(hr == S_OK, "a live index buffer binds through the IA DDI");
+        get_ia_bindings(&vertex_bind_calls, &index_bind_calls, &bound_vertex,
+                &bound_stride, &bound_vertex_offset, &bound_index,
+                &bound_index_format, &bound_index_offset);
+        check(index_bind_calls == 1
+                && bound_index == index_buffer_handle.hDrvResource
+                && bound_index_format == DXGI_FORMAT_R16_UINT
+                && bound_index_offset == 12,
+              "index binding preserves handle, format, and offset");
+        hr = WineD3D11On12DestroyBufferV1(&index_buffer_handle);
+        check(hr == S_OK, "the bound index buffer can be destroyed safely");
 
         buffer_handle.size = sizeof(buffer_handle);
         hr = WineD3D11On12CreateBufferV1(&out, &buffer_desc, NULL,
@@ -262,7 +317,7 @@ int main(void)
               "device teardown invalidates every surviving buffer handle");
         get_resource_counts(&resource_created, &resource_destroyed,
                 &bad_resource_description);
-        check(resource_created == 2 && resource_destroyed == 2,
+        check(resource_created == 3 && resource_destroyed == 3,
               "device teardown destroys each surviving DDI resource");
         get_counts(&opened, &created, &destroyed, &closed);
         check(destroyed == 1 && closed == 1,

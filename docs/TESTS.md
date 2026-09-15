@@ -52,3 +52,30 @@ Complex driver implementations might use an unprotected increment but forget the
 ---
 **Summary for Contributors (Human & Automated):**
 When authoring code for this repository, your output will be subjected to deliberate heap corruption, stack-pointer monitoring, multi-threaded hammering, and AST layout extraction. Code defensively, zero-initialize all structs, explicitly type all calling conventions, and check all `HRESULT` return paths.
+
+## 6. Integration-First Test Strategy
+
+The portable suite is a structural and diagnostic gate, not proof that a game
+renders through D3DMetal. Development therefore uses a deliberately uneven
+split: roughly 20% focused hardening and 80% implementation toward the first
+real frame.
+
+Before extending a newly introduced lifetime boundary, add focused coverage
+for partial creation, `pfnSetErrorCb`, double destruction, adapter teardown,
+stale and cross-device handles, and concurrent create/bind/destroy activity.
+Do not delay the rendering path to build exhaustive mocks: mocks cannot prove
+barrier, residency, command submission, shader, or presentation correctness.
+
+The runtime checkpoints, in order, are:
+
+1. A deterministic triangle on a macOS self-hosted runner using the real
+   D3DMetal device and queue, with pixel readback or a screenshot hash.
+2. A timed PEAK smoke run whose log must select `Direct3D 12.0`, must not fall
+   back to D3D11, and must show wrapped-resource activity and a presented
+   frame without device removal, crash, or initialization timeout.
+3. A soak run that records memory growth, synchronization stalls, and device
+   removal over repeated frames.
+
+The EWDK linked-driver build is also a required release gate. If runner or
+toolchain availability causes that job to skip, the portable lane may guide
+continued development but does not qualify a canary runtime for game testing.

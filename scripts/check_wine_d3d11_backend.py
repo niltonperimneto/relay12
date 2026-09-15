@@ -14,6 +14,10 @@ REQUIRED_HEADER = (
     "void (*draw_instanced)(struct d3d11_device_context *context,",
     "void (*draw_indexed_instanced)(struct d3d11_device_context *context,",
     "void (*set_primitive_topology)(struct d3d11_device_context *context,",
+    "HRESULT (*create_buffer)(struct d3d_device *device,",
+    "void (*destroy_buffer)(struct d3d_device *device,",
+    "void (*set_vertex_buffers)(struct d3d11_device_context *context,",
+    "void (*set_index_buffer)(struct d3d11_device_context *context,",
     "const struct d3d11_backend_ops *backend_ops;",
     "void *backend_private;",
     "BOOL standalone_allocation;",
@@ -32,6 +36,8 @@ REQUIRED_DEVICE = (
     "context->device->backend_ops->draw_instanced(context,",
     "context->device->backend_ops->draw_indexed_instanced(context,",
     "context->device->backend_ops->set_primitive_topology(context, topology);",
+    "context->device->backend_ops->set_vertex_buffers(context, start_slot,",
+    "context->device->backend_ops->set_index_buffer(context, buffer, format,",
     "device->backend_ops->get_feature_level(device)",
     "device->backend_ops->get_creation_flags(device)",
     "device->backend_ops->get_device_removed_reason(device)",
@@ -47,6 +53,13 @@ REQUIRED_DEVICE = (
     "device->d3d11_only = TRUE;\n    return device;\n}",
 )
 
+REQUIRED_BUFFER = (
+    "device->backend_ops->get_feature_level(device)",
+    "device_impl->backend_ops->destroy_buffer(device_impl, buffer);",
+    "device->backend_ops->create_buffer(device, desc, data,",
+    "buffer->backend_buffer.size = sizeof(buffer->backend_buffer);",
+)
+
 REQUIRED_MAIN = (
     "static const struct d3d11_backend_ops d3d11_on12_backend_ops",
     "WineD3D11On12OpenAdapterV1",
@@ -56,6 +69,9 @@ REQUIRED_MAIN = (
     "backend->core.draw_adapter_device(&backend->adapter,",
     "backend->core.dispatch_draw(&backend->adapter, kind, count0,",
     "backend->core.set_primitive_topology(&backend->adapter,",
+    "backend->create_buffer(&backend->adapter, desc, data,",
+    "backend->set_vertex_buffers(&backend->adapter, start_slot,",
+    "backend->set_index_buffer(&backend->adapter,",
 )
 
 
@@ -63,6 +79,7 @@ def check_tree(root):
     root = pathlib.Path(root)
     header = (root / "dlls/d3d11/d3d11_private.h").read_text()
     device = (root / "dlls/d3d11/device.c").read_text()
+    buffer = (root / "dlls/d3d11/buffer.c").read_text()
     main = (root / "dlls/d3d11/d3d11_main.c").read_text()
     configure = (root / "configure.ac").read_text()
     host_makefile = root / "dlls/d3d11on12host/Makefile.in"
@@ -75,6 +92,9 @@ def check_tree(root):
     for marker in REQUIRED_DEVICE:
         if marker not in device:
             errors.append(f"device.c is missing: {marker}")
+    for marker in REQUIRED_BUFFER:
+        if marker not in buffer:
+            errors.append(f"buffer.c is missing: {marker}")
     for marker in REQUIRED_MAIN:
         if marker not in main:
             errors.append(f"d3d11_main.c is missing: {marker}")
