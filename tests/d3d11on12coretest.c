@@ -161,6 +161,9 @@ static void test_get_interface(void)
     if (!(iface.capabilities & WINE_D3D11ON12_CAP_INDEXED_INSTANCED_DRAW))
         fail("get interface publishes the current version",
                 "the indexed/instanced draw capability bit is missing");
+    if (!(iface.capabilities & WINE_D3D11ON12_CAP_INPUT_ASSEMBLER_TOPOLOGY))
+        fail("get interface publishes the current version",
+                "the input-assembler topology capability bit is missing");
     if (iface.createDevice != WineD3D11On12CreateDeviceV1)
         fail("get interface publishes the current version",
                 "createDevice does not point at the V1 entry point");
@@ -180,6 +183,9 @@ static void test_get_interface(void)
     if (iface.dispatchDraw != WineD3D11On12DispatchDrawV1)
         fail("get interface publishes the current version",
                 "dispatchDraw does not point at the V1 entry point");
+    if (iface.setPrimitiveTopology != WineD3D11On12SetPrimitiveTopologyV1)
+        fail("get interface publishes the current version",
+                "setPrimitiveTopology does not point at the V1 entry point");
 }
 
 static void test_argument_validation(void)
