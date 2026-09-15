@@ -286,6 +286,27 @@ MAPPED_SUBRESOURCE = Struct(
 #   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_openresource
 # Retrieved: 2026-09-08
 
+MIPINFO = Struct(
+    "D3D10DDI_MIPINFO",
+    [
+        Field("TexelWidth", "UINT", *UINT),
+        Field("TexelHeight", "UINT", *UINT),
+        Field("TexelDepth", "UINT", *UINT),
+        Field("PhysicalWidth", "UINT", *UINT),
+        Field("PhysicalHeight", "UINT", *UINT),
+        Field("PhysicalDepth", "UINT", *UINT),
+    ],
+)
+
+SUBRESOURCE_UP = Struct(
+    "D3D10_DDIARG_SUBRESOURCE_UP",
+    [
+        Field("pSysMem", "const void *"),
+        Field("SysMemPitch", "UINT", *UINT),
+        Field("SysMemSlicePitch", "UINT", *UINT),
+    ],
+)
+
 CREATERESOURCE = Struct(
     "D3D10DDIARG_CREATERESOURCE",
     [
@@ -1227,6 +1248,8 @@ GROUPS = HANDLES + [
     HANDLESIZE,
     CREATEDEFERREDCONTEXT,
     MAPPED_SUBRESOURCE,
+    MIPINFO,
+    SUBRESOURCE_UP,
     CREATERESOURCE,
     CREATE11RESOURCE,
     OPENRESOURCE,

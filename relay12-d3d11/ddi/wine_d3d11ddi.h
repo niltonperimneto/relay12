@@ -1397,6 +1397,8 @@ WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CREATEDEFERREDCONTEXT, WinePad0, 4);
  * Retrieved: 2026-09-08
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d11ddiarg_createresource
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_openresource
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddi_mipinfo
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10_ddiarg_subresource_up
  *
  * The resource structures contain pointers to specification-defined helper
  * structures.  Those helpers are not yet needed by the promoted callbacks, so
@@ -1406,8 +1408,22 @@ WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CREATEDEFERREDCONTEXT, WinePad0, 4);
  * members.  The D3D11 form appends ByteStride, DecoderBufferType, and
  * TextureLayout to the D3D10 form.
  */
-typedef struct D3D10DDI_MIPINFO D3D10DDI_MIPINFO;
-typedef struct D3D10_DDIARG_SUBRESOURCE_UP D3D10_DDIARG_SUBRESOURCE_UP;
+typedef struct D3D10DDI_MIPINFO
+{
+    UINT TexelWidth;
+    UINT TexelHeight;
+    UINT TexelDepth;
+    UINT PhysicalWidth;
+    UINT PhysicalHeight;
+    UINT PhysicalDepth;
+} D3D10DDI_MIPINFO;
+
+typedef struct D3D10_DDIARG_SUBRESOURCE_UP
+{
+    const void *pSysMem;
+    UINT SysMemPitch;
+    UINT SysMemSlicePitch;
+} D3D10_DDIARG_SUBRESOURCE_UP;
 typedef struct DXGI_DDI_PRIMARY_DESC DXGI_DDI_PRIMARY_DESC;
 typedef struct D3DDDI_OPENALLOCATIONINFO D3DDDI_OPENALLOCATIONINFO;
 typedef struct D3DDDI_OPENALLOCATIONINFO2 D3DDDI_OPENALLOCATIONINFO2;
@@ -1415,6 +1431,23 @@ typedef UINT D3D10DDIRESOURCE_TYPE;
 typedef UINT D3D11_1DDI_VIDEO_DECODER_BUFFER_TYPE;
 typedef UINT D3DWDDM2_0DDI_TEXTURE_LAYOUT;
 typedef void *D3D10DDI_HKMRESOURCE;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_MIPINFO);
+WINE_DDI_ASSERT_SIZE(D3D10DDI_MIPINFO, 24);
+WINE_DDI_ASSERT_ALIGN(D3D10DDI_MIPINFO, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_MIPINFO, TexelWidth, 0);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_MIPINFO, TexelHeight, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_MIPINFO, TexelDepth, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_MIPINFO, PhysicalWidth, 12);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_MIPINFO, PhysicalHeight, 16);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_MIPINFO, PhysicalDepth, 20);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10_DDIARG_SUBRESOURCE_UP);
+WINE_DDI_ASSERT_SIZE(D3D10_DDIARG_SUBRESOURCE_UP, 16);
+WINE_DDI_ASSERT_ALIGN(D3D10_DDIARG_SUBRESOURCE_UP, 8);
+WINE_DDI_ASSERT_FIELD(D3D10_DDIARG_SUBRESOURCE_UP, pSysMem, 0);
+WINE_DDI_ASSERT_FIELD(D3D10_DDIARG_SUBRESOURCE_UP, SysMemPitch, 8);
+WINE_DDI_ASSERT_FIELD(D3D10_DDIARG_SUBRESOURCE_UP, SysMemSlicePitch, 12);
 
 typedef struct D3D10DDIARG_CREATERESOURCE
 {
