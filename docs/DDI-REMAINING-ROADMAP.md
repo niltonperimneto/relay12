@@ -149,10 +149,11 @@ Below is the structured roadmap of what is yet to be done.
 * **Done:** the element-layout, binding, and draw group — the callbacks that
   turn the objects above into a frame. `pfnCalcPrivateElementLayoutSize`,
   `pfnCreateElementLayout`, `pfnDestroyElementLayout`, `pfnIaSetInputLayout`,
-  `pfnIaSetVertexBuffers`, `pfnIaSetTopology`, `pfnSetRenderTargets`,
+  `pfnIaSetVertexBuffers`, `pfnIaSetIndexBuffer`, `pfnIaSetTopology`,
+  `pfnSetRenderTargets`,
   `pfnSetViewports`, `pfnSetBlendState`, `pfnSetDepthStencilState`,
   `pfnSetRasterizerState`, `pfnClearRenderTargetView`, and `pfnDraw`, plus
-  `PFND3D10DDI_SETSHADER`. Fourteen typedefs, nineteen slots: the SetShader
+  `PFND3D10DDI_SETSHADER`. Fifteen typedefs, twenty slots: the SetShader
   typedef covers all six stages, because its page gives one parameter list for
   all of them. That promotes `pfnGsSetShader`, `pfnHsSetShader`,
   `pfnDsSetShader` and `pfnCsSetShader` as a consequence of the shared type
@@ -210,7 +211,7 @@ makes the worklist a dependency order on structure groups, not a list of slots:
 | Vertex/pixel shader creation (`D3D10DDI_H(RT)SHADER`) — **done** | `pfnCalcPrivateShaderSize`, `pfnCreateVertexShader`, `pfnCreatePixelShader`, `pfnDestroyShader` |
 | Stream-output and tessellation shader structures | `pfnCreateGeometryShader`, `pfnCalcPrivateGeometryShaderWithStreamOutput`, `pfnCreateGeometryShaderWithStreamOutput`, `pfnCreateHullShader`, `pfnCreateDomainShader`, `pfnCreateComputeShader`, `pfnCalcPrivateTessellationShaderSize`, `pfnCreateElementLayout`, the `pfn*SetShaderWithIfaces` family, `pfnRetrieveShaderComment`, `pfnAssignDebugBinary` |
 | State structures (blend, depth-stencil, rasterizer, sampler) — **done** | `pfnSetBlendState`, `pfnSetDepthStencilState`, `pfnSetRasterizerState` — **done**; `pfnPsSetSamplers` and the rest of the `pfn*SetSamplers` family remain, an untextured frame not needing them |
-| Element layout and input assembly — **done** | `pfnCalcPrivateElementLayoutSize`, `pfnCreateElementLayout`, `pfnDestroyElementLayout`, `pfnIaSetInputLayout`, `pfnIaSetVertexBuffers`, `pfnIaSetTopology` |
+| Element layout and input assembly — **done** | `pfnCalcPrivateElementLayoutSize`, `pfnCreateElementLayout`, `pfnDestroyElementLayout`, `pfnIaSetInputLayout`, `pfnIaSetVertexBuffers`, `pfnIaSetIndexBuffer`, `pfnIaSetTopology` |
 | Depth-stencil and unordered-access view *handles* — **done** | `pfnSetRenderTargets`. The handles are declared; nothing promoted can create either kind of view, which is the MVP state |
 | Shader binding (`D3D10DDI_HSHADER`) — **done** | `pfnVsSetShader`, `pfnPsSetShader`, `pfnGsSetShader`, `pfnHsSetShader`, `pfnDsSetShader`, `pfnCsSetShader` — one typedef |
 | Query structures and `D3D10DDI_QUERY` | `pfnCalcPrivateQuerySize`, `pfnCreateQuery`, `pfnDestroyQuery`, `pfnQueryBegin`, `pfnQueryEnd`, `pfnQueryGetData`, `pfnSetPredication` |
