@@ -156,6 +156,7 @@ jobs:
             git -C winecx apply --check "$patch"
             git -C winecx apply "$patch"
           done
+          python3 scripts/check_wine_d3d11_backend.py winecx
           # The diagnostics resolve __wine_dbg_output at run time so the router
           # and the core keep importing only kernel32 and msvcrt.  It is a
           # Wine-internal, unversioned export, so a Wine bump that drops it
@@ -326,6 +327,10 @@ jobs:
           grep -q 'WineD3D11On12CreateDeviceV1' <<<"$core_exports"
           grep -q 'WineD3D11On12GetInterface' <<<"$core_exports"
           grep -q 'WineD3D11On12OpenAdapterV1' <<<"$core_exports"
+          grep -q 'WineD3D11On12CreateBufferV1' <<<"$core_exports"
+          grep -q 'WineD3D11On12DestroyBufferV1' <<<"$core_exports"
+          grep -q 'WineD3D11On12SetVertexBuffersV1' <<<"$core_exports"
+          grep -q 'WineD3D11On12SetIndexBufferV1' <<<"$core_exports"
           exports="$(x86_64-w64-mingw32-objdump -p d3d11shim.dll)"
           grep -q 'D3D11CreateDevice' <<<"$exports"
           grep -q 'D3D11CreateDeviceAndSwapChain' <<<"$exports"
@@ -349,9 +354,13 @@ jobs:
               "d3d11on12core.dll": {
                   1: "WineD3D11On12GetABIVersion",
                   2: "WineD3D11On12CreateDeviceV1",
-                  3: "WineD3D11On12GetInterface",
-                  4: "WineD3D11On12OpenAdapterV1",
-              },
+        3: "WineD3D11On12GetInterface",
+        4: "WineD3D11On12OpenAdapterV1",
+        5: "WineD3D11On12CreateBufferV1",
+        6: "WineD3D11On12DestroyBufferV1",
+        7: "WineD3D11On12SetVertexBuffersV1",
+        8: "WineD3D11On12SetIndexBufferV1",
+    },
           }
           for path, wanted in expected.items():
               output = subprocess.check_output(

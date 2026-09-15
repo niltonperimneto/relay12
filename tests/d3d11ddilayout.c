@@ -1230,6 +1230,16 @@ static VOID stub_ia_set_topology(D3D10DDI_HDEVICE hDevice,
     ++command_list_calls;
 }
 
+static VOID stub_ia_set_index_buffer(D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRESOURCE buffer, DXGI_FORMAT format, UINT offset)
+{
+    (void)hDevice;
+    (void)buffer;
+    (void)format;
+    (void)offset;
+    ++command_list_calls;
+}
+
 /* One implementation for all six stages, which is the claim the shared
  * typedef makes.  Assigning it into six slots below is where that claim would
  * fail if a stage ever took a different list. */
@@ -1706,6 +1716,7 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     funcs->pfnDestroyElementLayout = stub_destroy_element_layout;
     funcs->pfnIaSetInputLayout = stub_ia_set_input_layout;
     funcs->pfnIaSetVertexBuffers = stub_ia_set_vertex_buffers;
+    funcs->pfnIaSetIndexBuffer = stub_ia_set_index_buffer;
     funcs->pfnIaSetTopology = stub_ia_set_topology;
     funcs->pfnVsSetShader = stub_set_shader;
     funcs->pfnPsSetShader = stub_set_shader;
@@ -1846,6 +1857,9 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     CHECK_STACK("PFND3D10DDI_IA_SETVERTEXBUFFERS",
             funcs->pfnIaSetVertexBuffers(device, 0, 1, &vertex_buffer,
                     strides, offsets));
+    CHECK_STACK("PFND3D10DDI_IA_SETINDEXBUFFER",
+            funcs->pfnIaSetIndexBuffer(device, vertex_buffer,
+                    DXGI_FORMAT_R16_UINT, 0));
     CHECK_STACK("PFND3D10DDI_IA_SETTOPOLOGY",
             funcs->pfnIaSetTopology(device, 0));
     /* Six slots, one implementation: the shared typedef's whole claim. */
@@ -1926,14 +1940,14 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
         }
     }
 
-    if (command_list_calls == 74 && handle_count == 1)
+    if (command_list_calls == 75 && handle_count == 1)
     {
         printf("[ ok ] the promoted command-list, deferred-context, resource, state, view, shader, "
                 "and binding/draw slots are callable as declared\n");
     }
     else
     {
-        printf("[fail] %d of 74 promoted command/deferred/resource/state/"
+        printf("[fail] %d of 75 promoted command/deferred/resource/state/"
                 "view/shader/draw/scanout slots "
                 "reached their implementation\n", command_list_calls);
         ++failures;

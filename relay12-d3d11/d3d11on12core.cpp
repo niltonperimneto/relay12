@@ -301,6 +301,33 @@ BOOL CALLBACK initializeDriver(PINIT_ONCE, PVOID, PVOID *) noexcept
     return TRUE;
 }
 
+struct AdapterState;
+struct ResourceState
+{
+    ResourceState *registryNext;
+    ResourceState *ownerNext;
+    AdapterState *owner;
+    WineD3D11On12Buffer *publicHandle;
+    D3D11_RESOURCE_FLAGS flags;
+    D3D10DDI_HRESOURCE driverHandle;
+    D3D10DDI_HRTRESOURCE runtimeHandle;
+    bool created;
+    unsigned char privateResource[1];
+};
+
+INIT_ONCE resourceRegistryOnce = INIT_ONCE_STATIC_INIT;
+/* shared-state: published once through resourceRegistryOnce */
+SRWLOCK resourceRegistryLock;
+/* shared-state: published once through resourceRegistryOnce */
+ResourceState *resourceRegistry;
+
+BOOL CALLBACK initializeResourceRegistry(PINIT_ONCE, PVOID, PVOID *) noexcept
+{
+    InitializeSRWLock(&resourceRegistryLock);
+    resourceRegistry = nullptr;
+    return TRUE;
+}
+
 /* The two callbacks the driver copies out of SOpenAdapterArgs and calls back
  * into. They are not reached during adapter or device creation, but the
  * driver keeps them for the lifetime of the adapter, so a null here would be
@@ -310,16 +337,31 @@ BOOL CALLBACK initializeDriver(PINIT_ONCE, PVOID, PVOID *) noexcept
  * a wrapped resource was created with are runtime state this milestone does
  * not track; reporting no flags and refusing the share is the answer that
  * makes a caller fail rather than proceed on an invented one. */
-D3D11_RESOURCE_FLAGS CALLBACK hostGetResourceFlags(D3D10DDI_HRESOURCE,
+D3D11_RESOURCE_FLAGS CALLBACK hostGetResourceFlags(D3D10DDI_HRESOURCE resource,
         bool *acquireableOnWrite) noexcept
 {
-    wineD3D11DiagReportOnce(&reportedResourceFlagsQuery,
-            "d3d11on12core: the driver asked for a wrapped resource's D3D11 "
-            "creation flags; no runtime tracks them in this milestone, so "
-            "none are reported.\n");
     if (acquireableOnWrite)
         *acquireableOnWrite = false;
     D3D11_RESOURCE_FLAGS flags = {};
+
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry,
+            nullptr, nullptr);
+    AcquireSRWLockShared(&resourceRegistryLock);
+    for (ResourceState *entry = resourceRegistry; entry;
+            entry = entry->registryNext)
+    {
+        if (entry->driverHandle.pDrvPrivate == resource.pDrvPrivate)
+        {
+            flags = entry->flags;
+            ReleaseSRWLockShared(&resourceRegistryLock);
+            return flags;
+        }
+    }
+    ReleaseSRWLockShared(&resourceRegistryLock);
+
+    wineD3D11DiagReportOnce(&reportedResourceFlagsQuery,
+            "d3d11on12core: the driver queried flags for an unknown resource; "
+            "none are reported.\n");
     return flags;
 }
 
@@ -367,14 +409,74 @@ struct AdapterState
     ID3D12CommandQueue *queue;
     bool adapterOpened;
     bool deviceCreated;
+    volatile LONG lastDdiError;
+    ResourceState *resources;
     unsigned char privateDevice[1];
 };
+
+void unlinkResource(ResourceState *resource) noexcept
+{
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry,
+            nullptr, nullptr);
+    AcquireSRWLockExclusive(&resourceRegistryLock);
+    ResourceState **link = &resourceRegistry;
+    while (*link && *link != resource)
+        link = &(*link)->registryNext;
+    if (*link)
+        *link = resource->registryNext;
+    ReleaseSRWLockExclusive(&resourceRegistryLock);
+}
+
+void unlinkOwnerResource(ResourceState *resource) noexcept
+{
+    AdapterState *owner = resource->owner;
+    if (!owner)
+        return;
+    ResourceState **link = &owner->resources;
+    while (*link && *link != resource)
+        link = &(*link)->ownerNext;
+    if (*link)
+        *link = resource->ownerNext;
+}
+
+void destroyResourceState(ResourceState *resource) noexcept
+{
+    if (!resource)
+        return;
+    AdapterState *owner = resource->owner;
+    if (resource->created && owner && owner->deviceCreated
+            && owner->deviceFuncs.pfnDestroyResource)
+        owner->deviceFuncs.pfnDestroyResource(owner->hDevice,
+                resource->driverHandle);
+    unlinkResource(resource);
+    if (resource->publicHandle)
+    {
+        resource->publicHandle->hDrvResource = nullptr;
+        resource->publicHandle->runtimeState = nullptr;
+    }
+    HeapFree(GetProcessHeap(), 0, resource);
+}
+
+void CALLBACK hostSetError(D3D10DDI_HRTCORELAYER runtimeDevice,
+        HRESULT result) noexcept
+{
+    AdapterState *state = static_cast<AdapterState *>(runtimeDevice.handle);
+
+    if (state)
+        InterlockedExchange(&state->lastDdiError, result);
+}
 
 void destroyAdapterState(AdapterState *state) noexcept
 {
     if (!state)
         return;
 
+    while (state->resources)
+    {
+        ResourceState *resource = state->resources;
+        state->resources = resource->ownerNext;
+        destroyResourceState(resource);
+    }
     if (state->deviceCreated && state->deviceFuncs.pfnDestroyDevice)
         state->deviceFuncs.pfnDestroyDevice(state->hDevice);
     if (state->adapterOpened && state->adapterFuncs.pfnCloseAdapter)
@@ -458,6 +560,8 @@ HRESULT createDriverDevice(AdapterState **statePtr,
     createDevice.pWDDM2_6DeviceFuncs = &state->deviceFuncs;
     createDevice.pWDDM2_6UMCallbacks = &state->coreCallbacks;
     createDevice.ppfnRetrieveSubObject = &state->retrieveSubObject;
+    createDevice.hRTCoreLayer.handle = state;
+    state->coreCallbacks.pfnSetErrorCb = hostSetError;
 
     state->hDevice.pDrvPrivate = state->privateDevice;
     createDevice.hDrvDevice = state->hDevice;
@@ -586,12 +690,24 @@ extern "C" HRESULT WINAPI WineD3D11On12GetInterface(UINT requestedVersion,
 
     interfaceOut->capabilities = WINE_D3D11ON12_CAP_VALIDATION
             | WINE_D3D11ON12_CAP_D3DMETAL_BOOTSTRAP
-            | WINE_D3D11ON12_CAP_DEVICE_LIFECYCLE;
+            | WINE_D3D11ON12_CAP_DEVICE_LIFECYCLE
+            | WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_FLUSH
+            | WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_DRAW
+            | WINE_D3D11ON12_CAP_WRAPPED_RESOURCE_VALIDATION
+            | WINE_D3D11ON12_CAP_INDEXED_INSTANCED_DRAW
+            | WINE_D3D11ON12_CAP_INPUT_ASSEMBLER_TOPOLOGY;
     interfaceOut->createDevice = WineD3D11On12CreateDeviceV1;
     interfaceOut->createDirectDevice = WineD3D11CreateDeviceV2;
     interfaceOut->createDirectDeviceAndSwapChain =
             WineD3D11CreateDeviceAndSwapChainV2;
     interfaceOut->closeAdapterDevice = WineD3D11On12CloseAdapterDeviceV1;
+    interfaceOut->flushAdapterDevice = WineD3D11On12FlushAdapterDeviceV1;
+    interfaceOut->drawAdapterDevice = WineD3D11On12DrawAdapterDeviceV1;
+    interfaceOut->validateWrappedResource =
+            WineD3D11On12ValidateWrappedResourceV1;
+    interfaceOut->dispatchDraw = WineD3D11On12DispatchDrawV1;
+    interfaceOut->setPrimitiveTopology =
+            WineD3D11On12SetPrimitiveTopologyV1;
     return S_OK;
 }
 
@@ -636,13 +752,26 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateDeviceV1(IUnknown *deviceObject,
             return FAILED(hr) ? hr : E_INVALIDARG;
     }
 
-    /* Still no ID3D11Device, and deliberately so.  The driver exports one
-     * symbol and it yields a DDI device function table, not a runtime object;
-     * WineD3D11On12OpenAdapterV1 below is how that table is reached.  Building
-     * ID3D11Device over it is the D3D11 runtime's work, planned in
-     * docs/D3D11ON12.md as a Wine d3d11 frontend refactor.  Never return
-     * success until genuine ID3D11Device and context objects are backed by the
-     * supplied device and queue. */
+    /* Exercise the real adapter/device construction path here rather than
+     * leaving the public entry point disconnected from it.  The lifetime is
+     * closed again before returning because the Wine frontend cannot own the
+     * token yet.  Once that frontend supplies a controlling ID3D11Device, the
+     * same token moves into its backend_private member instead.
+     *
+     * Failure remains DXGI_ERROR_UNSUPPORTED at this public boundary.  The
+     * detailed adapter diagnostic has already been emitted, and exposing its
+     * private HRESULT here would make availability depend on deployment
+     * details instead of the documented D3D11 fallback result. */
+    WineD3D11On12AdapterDevice adapterDevice = {};
+    adapterDevice.size = sizeof(adapterDevice);
+    hr = WineD3D11On12OpenAdapterV1(deviceObject, queueObjects, queueCount,
+            nodeMask, &adapterDevice);
+    if (SUCCEEDED(hr))
+        WineD3D11On12CloseAdapterDeviceV1(&adapterDevice);
+
+    /* Still no ID3D11Device, and deliberately so.  Never return success until
+     * genuine device and context objects own the DDI lifetime and all methods
+     * they expose have truthful backing behavior. */
     wineD3D11DiagReportOnce(&reportedNoHost,
             "d3d11on12core: device and queue accepted, but no D3D11 "
             "runtime/DDI host is implemented in this milestone; returning "
@@ -804,6 +933,351 @@ extern "C" HRESULT WINAPI WineD3D11On12CloseAdapterDeviceV1(
     ZeroMemory(adapterDevice->reserved, sizeof(adapterDevice->reserved));
 
     destroyAdapterState(state);
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12FlushAdapterDeviceV1(
+        WineD3D11On12AdapterDevice *adapterDevice, UINT contextType,
+        UINT flushFlags, BOOL *submitted) noexcept
+{
+    if (submitted)
+        *submitted = FALSE;
+    if (!adapterDevice || adapterDevice->size != sizeof(*adapterDevice)
+            || !submitted)
+        return E_INVALIDARG;
+
+    AdapterState *state = static_cast<AdapterState *>(
+            adapterDevice->runtimeState);
+    if (!state || !state->deviceCreated || !state->deviceFuncs.pfnFlush)
+        return DXGI_ERROR_UNSUPPORTED;
+
+    *submitted = state->deviceFuncs.pfnFlush(state->hDevice, contextType,
+            flushFlags);
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12DrawAdapterDeviceV1(
+        WineD3D11On12AdapterDevice *adapterDevice, UINT vertexCount,
+        UINT startVertexLocation) noexcept
+{
+    if (!adapterDevice || adapterDevice->size != sizeof(*adapterDevice))
+        return E_INVALIDARG;
+
+    AdapterState *state = static_cast<AdapterState *>(
+            adapterDevice->runtimeState);
+    if (!state || !state->deviceCreated || !state->deviceFuncs.pfnDraw)
+        return DXGI_ERROR_UNSUPPORTED;
+
+    state->deviceFuncs.pfnDraw(state->hDevice, vertexCount,
+            startVertexLocation);
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12ValidateWrappedResourceV1(
+        WineD3D11On12AdapterDevice *adapterDevice,
+        IUnknown *resourceObject) noexcept
+{
+    if (!adapterDevice || adapterDevice->size != sizeof(*adapterDevice)
+            || !resourceObject)
+        return E_INVALIDARG;
+
+    AdapterState *state = static_cast<AdapterState *>(
+            adapterDevice->runtimeState);
+    if (!state || !state->deviceCreated || !state->device12)
+        return DXGI_ERROR_UNSUPPORTED;
+
+    ComRef<ID3D12Resource> resource;
+    HRESULT hr = strictResult(resourceObject->QueryInterface(IID_ID3D12Resource,
+            reinterpret_cast<void **>(resource.put())), resource);
+    if (FAILED(hr))
+        return hr;
+
+    ComRef<ID3D12Device> resourceDevice;
+    hr = strictResult(resource.get()->GetDevice(IID_ID3D12Device,
+            reinterpret_cast<void **>(resourceDevice.put())), resourceDevice);
+    if (FAILED(hr))
+        return hr;
+
+    bool identical = false;
+    hr = comObjectsIdentical(state->device12, resourceDevice.get(),
+            &identical);
+    if (FAILED(hr))
+        return hr;
+    return identical ? S_OK : E_INVALIDARG;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12DispatchDrawV1(
+        WineD3D11On12AdapterDevice *adapterDevice, UINT kind, UINT count0,
+        UINT count1, UINT start0, INT baseVertex, UINT startInstance) noexcept
+{
+    if (!adapterDevice || adapterDevice->size != sizeof(*adapterDevice))
+        return E_INVALIDARG;
+
+    AdapterState *state = static_cast<AdapterState *>(
+            adapterDevice->runtimeState);
+    if (!state || !state->deviceCreated)
+        return DXGI_ERROR_UNSUPPORTED;
+
+    switch (kind)
+    {
+        case WINE_D3D11ON12_DRAW_INDEXED:
+            if (!state->deviceFuncs.pfnDrawIndexed)
+                return DXGI_ERROR_UNSUPPORTED;
+            state->deviceFuncs.pfnDrawIndexed(state->hDevice, count0, start0,
+                    baseVertex);
+            return S_OK;
+
+        case WINE_D3D11ON12_DRAW_INSTANCED:
+            if (!state->deviceFuncs.pfnDrawInstanced)
+                return DXGI_ERROR_UNSUPPORTED;
+            state->deviceFuncs.pfnDrawInstanced(state->hDevice, count0,
+                    count1, start0, startInstance);
+            return S_OK;
+
+        case WINE_D3D11ON12_DRAW_INDEXED_INSTANCED:
+            if (!state->deviceFuncs.pfnDrawIndexedInstanced)
+                return DXGI_ERROR_UNSUPPORTED;
+            state->deviceFuncs.pfnDrawIndexedInstanced(state->hDevice,
+                    count0, count1, start0, baseVertex, startInstance);
+            return S_OK;
+
+        default:
+            return E_INVALIDARG;
+    }
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12SetPrimitiveTopologyV1(
+        WineD3D11On12AdapterDevice *adapterDevice, INT topology) noexcept
+{
+    if (!adapterDevice || adapterDevice->size != sizeof(*adapterDevice))
+        return E_INVALIDARG;
+
+    AdapterState *state = static_cast<AdapterState *>(
+            adapterDevice->runtimeState);
+    if (!state || !state->deviceCreated
+            || !state->deviceFuncs.pfnIaSetTopology)
+        return DXGI_ERROR_UNSUPPORTED;
+
+    state->deviceFuncs.pfnIaSetTopology(state->hDevice, topology);
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12CreateBufferV1(
+        WineD3D11On12AdapterDevice *adapterDevice,
+        const D3D11_BUFFER_DESC *description,
+        const D3D11_SUBRESOURCE_DATA *initialData,
+        WineD3D11On12Buffer *buffer) noexcept
+{
+    if (!adapterDevice || adapterDevice->size != sizeof(*adapterDevice)
+            || !description || !description->ByteWidth || !buffer
+            || buffer->size != sizeof(*buffer))
+        return E_INVALIDARG;
+    buffer->reserved = 0;
+    buffer->hDrvResource = nullptr;
+    buffer->runtimeState = nullptr;
+
+    AdapterState *owner = static_cast<AdapterState *>(
+            adapterDevice->runtimeState);
+    if (!owner || !owner->deviceCreated
+            || !owner->deviceFuncs.pfnCalcPrivateResourceSize
+            || !owner->deviceFuncs.pfnCreateResource
+            || !owner->deviceFuncs.pfnDestroyResource)
+        return DXGI_ERROR_UNSUPPORTED;
+
+    D3D10DDI_MIPINFO mip = {description->ByteWidth, 1, 1,
+            description->ByteWidth, 1, 1};
+    D3D10_DDIARG_SUBRESOURCE_UP upload = {};
+    if (initialData)
+    {
+        if (!initialData->pSysMem)
+            return E_INVALIDARG;
+        upload.pSysMem = initialData->pSysMem;
+        upload.SysMemPitch = initialData->SysMemPitch;
+        upload.SysMemSlicePitch = initialData->SysMemSlicePitch;
+    }
+
+    D3D11DDIARG_CREATERESOURCE args = {};
+    args.pMipInfoList = &mip;
+    args.pInitialDataUP = initialData ? &upload : nullptr;
+    args.ResourceDimension = D3D10DDIRESOURCE_BUFFER;
+    args.Usage = description->Usage;
+    args.Format = DXGI_FORMAT_UNKNOWN;
+    args.SampleDesc.Count = 1;
+    args.MipLevels = 1;
+    args.ArraySize = 1;
+    args.ByteStride = description->StructureByteStride;
+
+    SIZE_T privateSize = owner->deviceFuncs.pfnCalcPrivateResourceSize(
+            owner->hDevice, &args);
+    if (!privateSize || privateSize > ~static_cast<SIZE_T>(0)
+            - offsetof(ResourceState, privateResource))
+        return E_FAIL;
+    ResourceState *resource = static_cast<ResourceState *>(HeapAlloc(
+            GetProcessHeap(), HEAP_ZERO_MEMORY,
+            offsetof(ResourceState, privateResource) + privateSize));
+    if (!resource)
+        return E_OUTOFMEMORY;
+
+    resource->owner = owner;
+    resource->publicHandle = buffer;
+    resource->flags.BindFlags = description->BindFlags;
+    resource->flags.MiscFlags = description->MiscFlags;
+    resource->flags.CPUAccessFlags = description->CPUAccessFlags;
+    resource->flags.StructureByteStride = description->StructureByteStride;
+    resource->driverHandle.pDrvPrivate = resource->privateResource;
+    resource->runtimeHandle.handle = resource;
+
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry,
+            nullptr, nullptr);
+    AcquireSRWLockExclusive(&resourceRegistryLock);
+    resource->registryNext = resourceRegistry;
+    resourceRegistry = resource;
+    resource->ownerNext = owner->resources;
+    owner->resources = resource;
+    ReleaseSRWLockExclusive(&resourceRegistryLock);
+
+    InterlockedExchange(&owner->lastDdiError, S_OK);
+    owner->deviceFuncs.pfnCreateResource(owner->hDevice, &args,
+            resource->driverHandle, resource->runtimeHandle);
+    HRESULT hr = InterlockedCompareExchange(&owner->lastDdiError, S_OK, S_OK);
+    if (FAILED(hr))
+    {
+        AcquireSRWLockExclusive(&resourceRegistryLock);
+        unlinkOwnerResource(resource);
+        ReleaseSRWLockExclusive(&resourceRegistryLock);
+        unlinkResource(resource);
+        HeapFree(GetProcessHeap(), 0, resource);
+        return hr;
+    }
+
+    resource->created = true;
+    buffer->hDrvResource = resource->driverHandle.pDrvPrivate;
+    buffer->runtimeState = resource;
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12DestroyBufferV1(
+        WineD3D11On12Buffer *buffer) noexcept
+{
+    if (!buffer || buffer->size != sizeof(*buffer))
+        return E_INVALIDARG;
+    ResourceState *resource = static_cast<ResourceState *>(
+            buffer->runtimeState);
+    if (!resource)
+    {
+        buffer->hDrvResource = nullptr;
+        return S_OK;
+    }
+
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry,
+            nullptr, nullptr);
+    AcquireSRWLockExclusive(&resourceRegistryLock);
+    unlinkOwnerResource(resource);
+    ReleaseSRWLockExclusive(&resourceRegistryLock);
+    destroyResourceState(resource);
+    return S_OK;
+}
+
+/* Resolve a public buffer without trusting its runtimeState pointer.  Public
+ * handles cross the frontend/core DLL boundary and may be stale or belong to
+ * another device, so membership and ownership are established while the
+ * registry lock prevents concurrent destruction. */
+ResourceState *findBufferLocked(AdapterState *owner,
+        WineD3D11On12Buffer *buffer, UINT requiredBindFlag) noexcept
+{
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry,
+            nullptr, nullptr);
+    if (!buffer || buffer->size != sizeof(*buffer) || !buffer->runtimeState
+            || !buffer->hDrvResource)
+        return nullptr;
+
+    for (ResourceState *resource = resourceRegistry; resource;
+            resource = resource->registryNext)
+    {
+        if (resource == buffer->runtimeState && resource->owner == owner
+                && resource->publicHandle == buffer && resource->created
+                && resource->driverHandle.pDrvPrivate == buffer->hDrvResource
+                && (resource->flags.BindFlags & requiredBindFlag))
+            return resource;
+    }
+    return nullptr;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12SetVertexBuffersV1(
+        WineD3D11On12AdapterDevice *adapterDevice, UINT startSlot,
+        UINT bufferCount, WineD3D11On12Buffer *const *buffers,
+        const UINT *strides, const UINT *offsets) noexcept
+{
+    if (!adapterDevice || adapterDevice->size != sizeof(*adapterDevice)
+            || startSlot > D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT
+            || bufferCount > D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT
+                    - startSlot
+            || (bufferCount && (!buffers || !strides || !offsets)))
+        return E_INVALIDARG;
+
+    AdapterState *owner = static_cast<AdapterState *>(
+            adapterDevice->runtimeState);
+    if (!owner || !owner->deviceCreated
+            || !owner->deviceFuncs.pfnIaSetVertexBuffers)
+        return DXGI_ERROR_UNSUPPORTED;
+
+    D3D10DDI_HRESOURCE handles[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT] = {};
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry,
+            nullptr, nullptr);
+    AcquireSRWLockShared(&resourceRegistryLock);
+    for (UINT i = 0; i < bufferCount; ++i)
+    {
+        if (!buffers[i])
+            continue;
+        ResourceState *resource = findBufferLocked(owner, buffers[i],
+                D3D11_BIND_VERTEX_BUFFER);
+        if (!resource)
+        {
+            ReleaseSRWLockShared(&resourceRegistryLock);
+            return E_INVALIDARG;
+        }
+        handles[i] = resource->driverHandle;
+    }
+    owner->deviceFuncs.pfnIaSetVertexBuffers(owner->hDevice, startSlot,
+            bufferCount, handles, strides, offsets);
+    ReleaseSRWLockShared(&resourceRegistryLock);
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12SetIndexBufferV1(
+        WineD3D11On12AdapterDevice *adapterDevice,
+        WineD3D11On12Buffer *buffer, DXGI_FORMAT format, UINT offset) noexcept
+{
+    if (!adapterDevice || adapterDevice->size != sizeof(*adapterDevice)
+            || (buffer && format != DXGI_FORMAT_R16_UINT
+                    && format != DXGI_FORMAT_R32_UINT)
+            || (!buffer && format != DXGI_FORMAT_UNKNOWN))
+        return E_INVALIDARG;
+
+    AdapterState *owner = static_cast<AdapterState *>(
+            adapterDevice->runtimeState);
+    if (!owner || !owner->deviceCreated
+            || !owner->deviceFuncs.pfnIaSetIndexBuffer)
+        return DXGI_ERROR_UNSUPPORTED;
+
+    D3D10DDI_HRESOURCE handle = {};
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry,
+            nullptr, nullptr);
+    AcquireSRWLockShared(&resourceRegistryLock);
+    if (buffer)
+    {
+        ResourceState *resource = findBufferLocked(owner, buffer,
+                D3D11_BIND_INDEX_BUFFER);
+        if (!resource)
+        {
+            ReleaseSRWLockShared(&resourceRegistryLock);
+            return E_INVALIDARG;
+        }
+        handle = resource->driverHandle;
+    }
+    owner->deviceFuncs.pfnIaSetIndexBuffer(owner->hDevice, handle, format,
+            offset);
+    ReleaseSRWLockShared(&resourceRegistryLock);
     return S_OK;
 }
 

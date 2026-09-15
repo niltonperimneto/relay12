@@ -1,0 +1,63 @@
+diff --git a/dlls/d3d11/d3d11_main.c b/dlls/d3d11/d3d11_main.c
+index f8876f34..a1434713 100644
+--- a/dlls/d3d11/d3d11_main.c
++++ b/dlls/d3d11/d3d11_main.c
+@@ -380,6 +380,7 @@ cleanup:
+ 
+ #ifdef WINE_D3D11ON12_HOST
+ #define WINE_D3D11ON12_ABI_VERSION 3u
++#define WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_FLUSH 0x0000000000000008ull
+ 
+ struct wine_d3d11on12_adapter_device
+ {
+@@ -396,6 +397,8 @@ typedef HRESULT (WINAPI *wine_d3d11on12_open_adapter_fn)(IUnknown *,
+         IUnknown *const *, UINT, UINT, struct wine_d3d11on12_adapter_device *);
+ typedef HRESULT (WINAPI *wine_d3d11on12_close_adapter_fn)(
+         struct wine_d3d11on12_adapter_device *);
++typedef HRESULT (WINAPI *wine_d3d11on12_flush_adapter_fn)(
++        struct wine_d3d11on12_adapter_device *, UINT, UINT, BOOL *);
+ 
+ struct wine_d3d11on12_core_interface
+ {
+@@ -406,7 +409,8 @@ struct wine_d3d11on12_core_interface
+     void *create_direct_device;
+     void *create_direct_device_and_swapchain;
+     wine_d3d11on12_close_adapter_fn close_adapter_device;
+-    void *reserved[5];
++    wine_d3d11on12_flush_adapter_fn flush_adapter_device;
++    void *reserved[4];
+ };
+ 
+ typedef HRESULT (WINAPI *wine_d3d11on12_get_interface_fn)(UINT, UINT,
+@@ -458,9 +462,17 @@ static HRESULT d3d11_on12_backend_get_removed_reason(struct d3d_device *device)
+ 
+ static void d3d11_on12_backend_flush(struct d3d11_device_context *context)
+ {
+-    /* The object is not published until immediate-context DDI dispatch is
+-     * complete, so this cannot yet be reached by an application. */
+-    (void)context;
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    BOOL submitted = FALSE;
++    HRESULT hr;
++
++    /* D3DWDDM2_0DDI_CONTEXTTYPE_ALL is zero.  A D3D11 immediate-context
++     * Flush has no narrower command-list type, and must submit every batch
++     * accumulated by the mapping layer. */
++    hr = backend->core.flush_adapter_device(&backend->adapter, 0, 0,
++            &submitted);
++    if (FAILED(hr))
++        WARN("D3D11On12 DDI flush failed, hr %#lx.\n", hr);
+ }
+ 
+ static HRESULT d3d11_on12_backend_create_wrapped_resource(
+@@ -548,7 +560,9 @@ static HRESULT d3d11_on12_create_unpublished_backend(IUnknown *device,
+             WINE_D3D11ON12_ABI_VERSION, sizeof(core), &core))
+             || core.size != sizeof(core)
+             || core.version != WINE_D3D11ON12_ABI_VERSION
+-            || !core.close_adapter_device)
++            || !(core.capabilities
++                    & WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_FLUSH)
++            || !core.close_adapter_device || !core.flush_adapter_device)
+     {
+         FreeLibrary(backend->core_module);
+         free(backend);

@@ -1,0 +1,211 @@
+diff --git a/dlls/d3d11/d3d11_main.c b/dlls/d3d11/d3d11_main.c
+index 382067e8..0a8beece 100644
+--- a/dlls/d3d11/d3d11_main.c
++++ b/dlls/d3d11/d3d11_main.c
+@@ -382,6 +382,10 @@ cleanup:
+ #define WINE_D3D11ON12_ABI_VERSION 3u
+ #define WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_FLUSH 0x0000000000000008ull
+ #define WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_DRAW 0x0000000000000010ull
++#define WINE_D3D11ON12_CAP_INDEXED_INSTANCED_DRAW 0x0000000000000040ull
++#define WINE_D3D11ON12_DRAW_INDEXED 1u
++#define WINE_D3D11ON12_DRAW_INSTANCED 2u
++#define WINE_D3D11ON12_DRAW_INDEXED_INSTANCED 3u
+ 
+ struct wine_d3d11on12_adapter_device
+ {
+@@ -402,6 +406,9 @@ typedef HRESULT (WINAPI *wine_d3d11on12_flush_adapter_fn)(
+         struct wine_d3d11on12_adapter_device *, UINT, UINT, BOOL *);
+ typedef HRESULT (WINAPI *wine_d3d11on12_draw_adapter_fn)(
+         struct wine_d3d11on12_adapter_device *, UINT, UINT);
++typedef HRESULT (WINAPI *wine_d3d11on12_dispatch_draw_fn)(
++        struct wine_d3d11on12_adapter_device *, UINT, UINT, UINT, UINT, INT,
++        UINT);
+ 
+ struct wine_d3d11on12_core_interface
+ {
+@@ -414,7 +421,9 @@ struct wine_d3d11on12_core_interface
+     wine_d3d11on12_close_adapter_fn close_adapter_device;
+     wine_d3d11on12_flush_adapter_fn flush_adapter_device;
+     wine_d3d11on12_draw_adapter_fn draw_adapter_device;
+-    void *reserved[3];
++    void *validate_wrapped_resource;
++    wine_d3d11on12_dispatch_draw_fn dispatch_draw;
++    void *reserved[1];
+ };
+ 
+ typedef HRESULT (WINAPI *wine_d3d11on12_get_interface_fn)(UINT, UINT,
+@@ -490,6 +499,42 @@ static void d3d11_on12_backend_draw(struct d3d11_device_context *context,
+         WARN("D3D11On12 DDI draw failed, hr %#lx.\n", hr);
+ }
+ 
++static void d3d11_on12_backend_dispatch_draw(
++        struct d3d11_device_context *context, UINT kind, UINT count0,
++        UINT count1, UINT start0, INT base_vertex, UINT start_instance)
++{
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    HRESULT hr = backend->core.dispatch_draw(&backend->adapter, kind, count0,
++            count1, start0, base_vertex, start_instance);
++    if (FAILED(hr))
++        WARN("D3D11On12 extended DDI draw failed, hr %#lx.\n", hr);
++}
++
++static void d3d11_on12_backend_draw_indexed(
++        struct d3d11_device_context *context, UINT count, UINT start,
++        INT base_vertex)
++{
++    d3d11_on12_backend_dispatch_draw(context, WINE_D3D11ON12_DRAW_INDEXED,
++            count, 0, start, base_vertex, 0);
++}
++
++static void d3d11_on12_backend_draw_instanced(
++        struct d3d11_device_context *context, UINT count, UINT instances,
++        UINT start, UINT start_instance)
++{
++    d3d11_on12_backend_dispatch_draw(context, WINE_D3D11ON12_DRAW_INSTANCED,
++            count, instances, start, 0, start_instance);
++}
++
++static void d3d11_on12_backend_draw_indexed_instanced(
++        struct d3d11_device_context *context, UINT count, UINT instances,
++        UINT start, INT base_vertex, UINT start_instance)
++{
++    d3d11_on12_backend_dispatch_draw(context,
++            WINE_D3D11ON12_DRAW_INDEXED_INSTANCED, count, instances, start,
++            base_vertex, start_instance);
++}
++
+ static HRESULT d3d11_on12_backend_create_wrapped_resource(
+         struct d3d_device *device, IUnknown *resource12,
+         const D3D11_RESOURCE_FLAGS *flags, D3D12_RESOURCE_STATES input_state,
+@@ -537,6 +582,9 @@ static const struct d3d11_backend_ops d3d11_on12_backend_ops =
+     d3d11_on12_backend_get_removed_reason,
+     d3d11_on12_backend_flush,
+     d3d11_on12_backend_draw,
++    d3d11_on12_backend_draw_indexed,
++    d3d11_on12_backend_draw_instanced,
++    d3d11_on12_backend_draw_indexed_instanced,
+     d3d11_on12_backend_create_wrapped_resource,
+     d3d11_on12_backend_release_wrapped_resources,
+     d3d11_on12_backend_acquire_wrapped_resources,
+@@ -580,8 +628,10 @@ static HRESULT d3d11_on12_create_unpublished_backend(IUnknown *device,
+                     & WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_FLUSH)
+             || !(core.capabilities
+                     & WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_DRAW)
++            || !(core.capabilities
++                    & WINE_D3D11ON12_CAP_INDEXED_INSTANCED_DRAW)
+             || !core.close_adapter_device || !core.flush_adapter_device
+-            || !core.draw_adapter_device)
++            || !core.draw_adapter_device || !core.dispatch_draw)
+     {
+         FreeLibrary(backend->core_module);
+         free(backend);
+diff --git a/dlls/d3d11/d3d11_private.h b/dlls/d3d11/d3d11_private.h
+index 3149ee1a..87976cf6 100644
+--- a/dlls/d3d11/d3d11_private.h
++++ b/dlls/d3d11/d3d11_private.h
+@@ -576,6 +576,14 @@ struct d3d11_backend_ops
+     void (*flush)(struct d3d11_device_context *context);
+     void (*draw)(struct d3d11_device_context *context, UINT vertex_count,
+             UINT start_vertex_location);
++    void (*draw_indexed)(struct d3d11_device_context *context,
++            UINT index_count, UINT start_index, INT base_vertex);
++    void (*draw_instanced)(struct d3d11_device_context *context,
++            UINT vertex_count, UINT instance_count, UINT start_vertex,
++            UINT start_instance);
++    void (*draw_indexed_instanced)(struct d3d11_device_context *context,
++            UINT index_count, UINT instance_count, UINT start_index,
++            INT base_vertex, UINT start_instance);
+     HRESULT (*create_wrapped_resource)(struct d3d_device *device,
+             IUnknown *resource12, const D3D11_RESOURCE_FLAGS *flags,
+             D3D12_RESOURCE_STATES input_state,
+diff --git a/dlls/d3d11/device.c b/dlls/d3d11/device.c
+index bcfd5ce3..624d43ba 100644
+--- a/dlls/d3d11/device.c
++++ b/dlls/d3d11/device.c
+@@ -56,6 +56,31 @@ static void wined3d_backend_draw(struct d3d11_device_context *context,
+             start_vertex_location, vertex_count, 0, 0);
+ }
+ 
++static void wined3d_backend_draw_indexed(struct d3d11_device_context *context,
++        UINT index_count, UINT start_index, INT base_vertex)
++{
++    wined3d_device_context_draw_indexed(context->wined3d_context,
++            base_vertex, start_index, index_count, 0, 0);
++}
++
++static void wined3d_backend_draw_instanced(struct d3d11_device_context *context,
++        UINT vertex_count, UINT instance_count, UINT start_vertex,
++        UINT start_instance)
++{
++    wined3d_device_context_draw(context->wined3d_context, start_vertex,
++            vertex_count, start_instance, instance_count);
++}
++
++static void wined3d_backend_draw_indexed_instanced(
++        struct d3d11_device_context *context, UINT index_count,
++        UINT instance_count, UINT start_index, INT base_vertex,
++        UINT start_instance)
++{
++    wined3d_device_context_draw_indexed(context->wined3d_context,
++            base_vertex, start_index, index_count, start_instance,
++            instance_count);
++}
++
+ static const struct d3d11_backend_ops wined3d_backend_ops =
+ {
+     wined3d_backend_destroy_device,
+@@ -64,6 +89,9 @@ static const struct d3d11_backend_ops wined3d_backend_ops =
+     wined3d_backend_get_device_removed_reason,
+     wined3d_backend_flush,
+     wined3d_backend_draw,
++    wined3d_backend_draw_indexed,
++    wined3d_backend_draw_instanced,
++    wined3d_backend_draw_indexed_instanced,
+     NULL,
+     NULL,
+     NULL,
+@@ -824,8 +852,8 @@ static void STDMETHODCALLTYPE d3d11_device_context_DrawIndexed(ID3D11DeviceConte
+     TRACE("iface %p, index_count %u, start_index_location %u, base_vertex_location %d.\n",
+             iface, index_count, start_index_location, base_vertex_location);
+ 
+-    wined3d_device_context_draw_indexed(context->wined3d_context,
+-            base_vertex_location, start_index_location, index_count, 0, 0);
++    context->device->backend_ops->draw_indexed(context, index_count,
++            start_index_location, base_vertex_location);
+ }
+ 
+ static void STDMETHODCALLTYPE d3d11_device_context_Draw(ID3D11DeviceContext4 *iface,
+@@ -962,8 +990,9 @@ static void STDMETHODCALLTYPE d3d11_device_context_DrawIndexedInstanced(ID3D11De
+             iface, instance_index_count, instance_count, start_index_location,
+             base_vertex_location, start_instance_location);
+ 
+-    wined3d_device_context_draw_indexed(context->wined3d_context, base_vertex_location,
+-            start_index_location, instance_index_count, start_instance_location, instance_count);
++    context->device->backend_ops->draw_indexed_instanced(context,
++            instance_index_count, instance_count, start_index_location,
++            base_vertex_location, start_instance_location);
+ }
+ 
+ static void STDMETHODCALLTYPE d3d11_device_context_DrawInstanced(ID3D11DeviceContext4 *iface,
+@@ -976,8 +1005,9 @@ static void STDMETHODCALLTYPE d3d11_device_context_DrawInstanced(ID3D11DeviceCon
+             iface, instance_vertex_count, instance_count, start_vertex_location,
+             start_instance_location);
+ 
+-    wined3d_device_context_draw(context->wined3d_context, start_vertex_location,
+-            instance_vertex_count, start_instance_location, instance_count);
++    context->device->backend_ops->draw_instanced(context,
++            instance_vertex_count, instance_count, start_vertex_location,
++            start_instance_location);
+ }
+ 
+ static void STDMETHODCALLTYPE d3d11_device_context_GSSetConstantBuffers(ID3D11DeviceContext4 *iface,
+@@ -8347,6 +8377,9 @@ struct d3d_device *d3d_device_create_backend(
+             || !backend_ops->get_device_removed_reason
+             || !backend_ops->flush
+             || !backend_ops->draw
++            || !backend_ops->draw_indexed
++            || !backend_ops->draw_instanced
++            || !backend_ops->draw_indexed_instanced
+             || !backend_ops->create_wrapped_resource
+             || !backend_ops->release_wrapped_resources
+             || !backend_ops->acquire_wrapped_resources
