@@ -15,6 +15,8 @@ static LONG draw_calls;
 static LONG indexed_draw_calls;
 static LONG instanced_draw_calls;
 static LONG indexed_instanced_draw_calls;
+static LONG topology_calls;
+static INT last_topology;
 static unsigned char adapter_private;
 
 static HRESULT mock_get_versions(D3D10DDI_HADAPTER adapter, UINT32 *count,
@@ -87,6 +89,14 @@ static void mock_draw_indexed_instanced(D3D10DDI_HDEVICE device,
     InterlockedIncrement(&indexed_instanced_draw_calls);
 }
 
+static void mock_ia_set_topology(D3D10DDI_HDEVICE device,
+        D3D10_DDI_PRIMITIVE_TOPOLOGY topology)
+{
+    (void)device;
+    last_topology = topology;
+    InterlockedIncrement(&topology_calls);
+}
+
 static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
         D3D10DDIARG_CREATEDEVICE *args)
 {
@@ -100,6 +110,7 @@ static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
     args->pWDDM2_6DeviceFuncs->pfnDrawInstanced = mock_draw_instanced;
     args->pWDDM2_6DeviceFuncs->pfnDrawIndexedInstanced =
             mock_draw_indexed_instanced;
+    args->pWDDM2_6DeviceFuncs->pfnIaSetTopology = mock_ia_set_topology;
     InterlockedIncrement(&create_calls);
     return S_OK;
 }
@@ -120,6 +131,14 @@ __declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetExtendedDrawCounts(
     if (indexed) *indexed = indexed_draw_calls;
     if (instanced) *instanced = instanced_draw_calls;
     if (indexed_instanced) *indexed_instanced = indexed_instanced_draw_calls;
+}
+
+__declspec(dllexport) LONG WINAPI WineD3D11On12MockDriverGetTopology(
+        INT *topology)
+{
+    if (topology)
+        *topology = last_topology;
+    return topology_calls;
 }
 
 static HRESULT mock_close_adapter(D3D10DDI_HADAPTER adapter)
