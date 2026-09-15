@@ -367,8 +367,18 @@ struct AdapterState
     ID3D12CommandQueue *queue;
     bool adapterOpened;
     bool deviceCreated;
+    volatile LONG lastDdiError;
     unsigned char privateDevice[1];
 };
+
+void CALLBACK hostSetError(D3D10DDI_HRTCORELAYER runtimeDevice,
+        HRESULT result) noexcept
+{
+    AdapterState *state = static_cast<AdapterState *>(runtimeDevice.handle);
+
+    if (state)
+        InterlockedExchange(&state->lastDdiError, result);
+}
 
 void destroyAdapterState(AdapterState *state) noexcept
 {
@@ -458,6 +468,8 @@ HRESULT createDriverDevice(AdapterState **statePtr,
     createDevice.pWDDM2_6DeviceFuncs = &state->deviceFuncs;
     createDevice.pWDDM2_6UMCallbacks = &state->coreCallbacks;
     createDevice.ppfnRetrieveSubObject = &state->retrieveSubObject;
+    createDevice.hRTCoreLayer.handle = state;
+    state->coreCallbacks.pfnSetErrorCb = hostSetError;
 
     state->hDevice.pDrvPrivate = state->privateDevice;
     createDevice.hDrvDevice = state->hDevice;
