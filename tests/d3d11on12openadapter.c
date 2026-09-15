@@ -60,6 +60,7 @@ int main(void)
     typedef LONG (WINAPI *get_flush_count_fn)(void);
     typedef void (WINAPI *get_extended_draw_counts_fn)(LONG *, LONG *, LONG *);
     typedef LONG (WINAPI *get_topology_fn)(INT *);
+    typedef void (WINAPI *get_resource_counts_fn)(LONG *, LONG *, int *);
     WineD3D11On12AdapterDevice out;
     struct mock_device device;
     struct mock_queue queue;
@@ -71,9 +72,14 @@ int main(void)
     get_flush_count_fn get_draw_count;
     get_extended_draw_counts_fn get_extended_draw_counts;
     get_topology_fn get_topology;
+    get_resource_counts_fn get_resource_counts;
     LONG opened, created, destroyed, closed;
     LONG indexed, instanced, indexed_instanced;
     INT topology;
+    LONG resource_created, resource_destroyed;
+    int bad_resource_description;
+    D3D11_BUFFER_DESC buffer_desc;
+    WineD3D11On12Buffer buffer_handle;
 
     hr = WineD3D11On12CloseAdapterDeviceV1(NULL);
     check(hr == E_INVALIDARG, "close rejects a null out-structure");
@@ -163,14 +169,19 @@ int main(void)
                     "WineD3D11On12MockDriverGetExtendedDrawCounts") : NULL;
     get_topology = mock_driver ? (get_topology_fn)(void *)GetProcAddress(
             mock_driver, "WineD3D11On12MockDriverGetTopology") : NULL;
+    get_resource_counts = mock_driver
+            ? (get_resource_counts_fn)(void *)GetProcAddress(mock_driver,
+                    "WineD3D11On12MockDriverGetResourceCounts") : NULL;
     check(get_counts != NULL, "the lifecycle mock driver is loaded");
     check(get_flush_count != NULL, "the flush counter is exported");
     check(get_draw_count != NULL, "the draw counter is exported");
     check(get_extended_draw_counts != NULL,
           "the extended draw counters are exported");
     check(get_topology != NULL, "the input-assembler topology counter is exported");
+    check(get_resource_counts != NULL, "the resource counters are exported");
     if (get_counts && get_flush_count && get_draw_count
-            && get_extended_draw_counts && get_topology)
+            && get_extended_draw_counts && get_topology
+            && get_resource_counts)
     {
         device.support_device1 = 1;
         initialize_out(&out);
@@ -215,8 +226,44 @@ int main(void)
         check(hr == S_OK && get_topology(&topology) == 1 && topology == 4,
               "primitive topology reaches the exact IA DDI callback once");
 
+        memset(&buffer_desc, 0, sizeof(buffer_desc));
+        buffer_desc.ByteWidth = 256;
+        buffer_desc.Usage = D3D11_USAGE_DEFAULT;
+        buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+        memset(&buffer_handle, 0, sizeof(buffer_handle));
+        buffer_handle.size = sizeof(buffer_handle);
+        hr = WineD3D11On12CreateBufferV1(&out, &buffer_desc, NULL,
+                &buffer_handle);
+        check(hr == S_OK && buffer_handle.hDrvResource
+                && buffer_handle.runtimeState,
+              "buffer creation publishes an owned DDI resource handle");
+        get_resource_counts(&resource_created, &resource_destroyed,
+                &bad_resource_description);
+        check(resource_created == 1 && resource_destroyed == 0
+                && !bad_resource_description,
+              "buffer creation reaches the exact DDI descriptor once");
+        hr = WineD3D11On12DestroyBufferV1(&buffer_handle);
+        check(hr == S_OK && !buffer_handle.hDrvResource
+                && !buffer_handle.runtimeState,
+              "buffer destruction clears the public handle");
+        get_resource_counts(&resource_created, &resource_destroyed,
+                &bad_resource_description);
+        check(resource_created == 1 && resource_destroyed == 1,
+              "buffer destruction reaches the DDI callback once");
+
+        buffer_handle.size = sizeof(buffer_handle);
+        hr = WineD3D11On12CreateBufferV1(&out, &buffer_desc, NULL,
+                &buffer_handle);
+        check(hr == S_OK, "a buffer can remain owned until device teardown");
+
         hr = WineD3D11On12CloseAdapterDeviceV1(&out);
         check(hr == S_OK, "the complete driver lifecycle closes successfully");
+        check(!buffer_handle.hDrvResource && !buffer_handle.runtimeState,
+              "device teardown invalidates every surviving buffer handle");
+        get_resource_counts(&resource_created, &resource_destroyed,
+                &bad_resource_description);
+        check(resource_created == 2 && resource_destroyed == 2,
+              "device teardown destroys each surviving DDI resource");
         get_counts(&opened, &created, &destroyed, &closed);
         check(destroyed == 1 && closed == 1,
               "close destroys the device and then closes its adapter once");
