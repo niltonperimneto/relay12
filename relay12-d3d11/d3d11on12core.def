@@ -3,3 +3,7 @@ WineD3D11On12GetABIVersion @1
 WineD3D11On12CreateDeviceV1 @2
 WineD3D11On12GetInterface @3
 WineD3D11On12OpenAdapterV1 @4
+WineD3D11On12CreateBufferV1 @5
+WineD3D11On12DestroyBufferV1 @6
+WineD3D11On12SetVertexBuffersV1 @7
+WineD3D11On12SetIndexBufferV1 @8

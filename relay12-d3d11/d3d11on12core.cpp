@@ -1178,6 +1178,109 @@ extern "C" HRESULT WINAPI WineD3D11On12DestroyBufferV1(
     return S_OK;
 }
 
+/* Resolve a public buffer without trusting its runtimeState pointer.  Public
+ * handles cross the frontend/core DLL boundary and may be stale or belong to
+ * another device, so membership and ownership are established while the
+ * registry lock prevents concurrent destruction. */
+ResourceState *findBufferLocked(AdapterState *owner,
+        WineD3D11On12Buffer *buffer, UINT requiredBindFlag) noexcept
+{
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry,
+            nullptr, nullptr);
+    if (!buffer || buffer->size != sizeof(*buffer) || !buffer->runtimeState
+            || !buffer->hDrvResource)
+        return nullptr;
+
+    for (ResourceState *resource = resourceRegistry; resource;
+            resource = resource->registryNext)
+    {
+        if (resource == buffer->runtimeState && resource->owner == owner
+                && resource->publicHandle == buffer && resource->created
+                && resource->driverHandle.pDrvPrivate == buffer->hDrvResource
+                && (resource->flags.BindFlags & requiredBindFlag))
+            return resource;
+    }
+    return nullptr;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12SetVertexBuffersV1(
+        WineD3D11On12AdapterDevice *adapterDevice, UINT startSlot,
+        UINT bufferCount, WineD3D11On12Buffer *const *buffers,
+        const UINT *strides, const UINT *offsets) noexcept
+{
+    if (!adapterDevice || adapterDevice->size != sizeof(*adapterDevice)
+            || startSlot > D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT
+            || bufferCount > D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT
+                    - startSlot
+            || (bufferCount && (!buffers || !strides || !offsets)))
+        return E_INVALIDARG;
+
+    AdapterState *owner = static_cast<AdapterState *>(
+            adapterDevice->runtimeState);
+    if (!owner || !owner->deviceCreated
+            || !owner->deviceFuncs.pfnIaSetVertexBuffers)
+        return DXGI_ERROR_UNSUPPORTED;
+
+    D3D10DDI_HRESOURCE handles[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT] = {};
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry,
+            nullptr, nullptr);
+    AcquireSRWLockShared(&resourceRegistryLock);
+    for (UINT i = 0; i < bufferCount; ++i)
+    {
+        if (!buffers[i])
+            continue;
+        ResourceState *resource = findBufferLocked(owner, buffers[i],
+                D3D11_BIND_VERTEX_BUFFER);
+        if (!resource)
+        {
+            ReleaseSRWLockShared(&resourceRegistryLock);
+            return E_INVALIDARG;
+        }
+        handles[i] = resource->driverHandle;
+    }
+    owner->deviceFuncs.pfnIaSetVertexBuffers(owner->hDevice, startSlot,
+            bufferCount, handles, strides, offsets);
+    ReleaseSRWLockShared(&resourceRegistryLock);
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12SetIndexBufferV1(
+        WineD3D11On12AdapterDevice *adapterDevice,
+        WineD3D11On12Buffer *buffer, DXGI_FORMAT format, UINT offset) noexcept
+{
+    if (!adapterDevice || adapterDevice->size != sizeof(*adapterDevice)
+            || (buffer && format != DXGI_FORMAT_R16_UINT
+                    && format != DXGI_FORMAT_R32_UINT)
+            || (!buffer && format != DXGI_FORMAT_UNKNOWN))
+        return E_INVALIDARG;
+
+    AdapterState *owner = static_cast<AdapterState *>(
+            adapterDevice->runtimeState);
+    if (!owner || !owner->deviceCreated
+            || !owner->deviceFuncs.pfnIaSetIndexBuffer)
+        return DXGI_ERROR_UNSUPPORTED;
+
+    D3D10DDI_HRESOURCE handle = {};
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry,
+            nullptr, nullptr);
+    AcquireSRWLockShared(&resourceRegistryLock);
+    if (buffer)
+    {
+        ResourceState *resource = findBufferLocked(owner, buffer,
+                D3D11_BIND_INDEX_BUFFER);
+        if (!resource)
+        {
+            ReleaseSRWLockShared(&resourceRegistryLock);
+            return E_INVALIDARG;
+        }
+        handle = resource->driverHandle;
+    }
+    owner->deviceFuncs.pfnIaSetIndexBuffer(owner->hDevice, handle, format,
+            offset);
+    ReleaseSRWLockShared(&resourceRegistryLock);
+    return S_OK;
+}
+
 extern "C" HRESULT WINAPI WineD3D11CreateDeviceV2(IDXGIAdapter *adapter,
         D3D_DRIVER_TYPE driverType, HMODULE software, UINT flags,
         const D3D_FEATURE_LEVEL *featureLevels, UINT featureLevelCount,
