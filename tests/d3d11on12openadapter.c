@@ -59,6 +59,7 @@ int main(void)
     typedef void (WINAPI *get_counts_fn)(LONG *, LONG *, LONG *, LONG *);
     typedef LONG (WINAPI *get_flush_count_fn)(void);
     typedef void (WINAPI *get_extended_draw_counts_fn)(LONG *, LONG *, LONG *);
+    typedef LONG (WINAPI *get_topology_fn)(INT *);
     WineD3D11On12AdapterDevice out;
     struct mock_device device;
     struct mock_queue queue;
@@ -69,8 +70,10 @@ int main(void)
     get_flush_count_fn get_flush_count;
     get_flush_count_fn get_draw_count;
     get_extended_draw_counts_fn get_extended_draw_counts;
+    get_topology_fn get_topology;
     LONG opened, created, destroyed, closed;
     LONG indexed, instanced, indexed_instanced;
+    INT topology;
 
     hr = WineD3D11On12CloseAdapterDeviceV1(NULL);
     check(hr == E_INVALIDARG, "close rejects a null out-structure");
@@ -158,13 +161,16 @@ int main(void)
     get_extended_draw_counts = mock_driver
             ? (get_extended_draw_counts_fn)(void *)GetProcAddress(mock_driver,
                     "WineD3D11On12MockDriverGetExtendedDrawCounts") : NULL;
+    get_topology = mock_driver ? (get_topology_fn)(void *)GetProcAddress(
+            mock_driver, "WineD3D11On12MockDriverGetTopology") : NULL;
     check(get_counts != NULL, "the lifecycle mock driver is loaded");
     check(get_flush_count != NULL, "the flush counter is exported");
     check(get_draw_count != NULL, "the draw counter is exported");
     check(get_extended_draw_counts != NULL,
           "the extended draw counters are exported");
+    check(get_topology != NULL, "the input-assembler topology counter is exported");
     if (get_counts && get_flush_count && get_draw_count
-            && get_extended_draw_counts)
+            && get_extended_draw_counts && get_topology)
     {
         device.support_device1 = 1;
         initialize_out(&out);
@@ -205,6 +211,9 @@ int main(void)
         get_extended_draw_counts(&indexed, &instanced, &indexed_instanced);
         check(indexed == 1 && instanced == 1 && indexed_instanced == 1,
               "each extended draw reaches its exact DDI callback once");
+        hr = WineD3D11On12SetPrimitiveTopologyV1(&out, 4);
+        check(hr == S_OK && get_topology(&topology) == 1 && topology == 4,
+              "primitive topology reaches the exact IA DDI callback once");
 
         hr = WineD3D11On12CloseAdapterDeviceV1(&out);
         check(hr == S_OK, "the complete driver lifecycle closes successfully");
@@ -220,6 +229,9 @@ int main(void)
         hr = WineD3D11On12DrawAdapterDeviceV1(&out, 3, 0);
         check(hr == DXGI_ERROR_UNSUPPORTED && get_draw_count() == 1,
               "draw fails closed after lifecycle teardown");
+        hr = WineD3D11On12SetPrimitiveTopologyV1(&out, 4);
+        check(hr == DXGI_ERROR_UNSUPPORTED && get_topology(&topology) == 1,
+              "primitive topology fails closed after lifecycle teardown");
         check(device.refcount == 1 && queue.refcount == 1,
               "close releases the retained D3D12 device and queue");
         check(out.runtimeState == NULL && out.deviceFuncs == NULL

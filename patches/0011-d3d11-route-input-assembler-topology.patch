@@ -1,0 +1,139 @@
+diff --git a/dlls/d3d11/d3d11_main.c b/dlls/d3d11/d3d11_main.c
+index 0a8beece..cd6264c0 100644
+--- a/dlls/d3d11/d3d11_main.c
++++ b/dlls/d3d11/d3d11_main.c
+@@ -383,6 +383,7 @@ cleanup:
+ #define WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_FLUSH 0x0000000000000008ull
+ #define WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_DRAW 0x0000000000000010ull
+ #define WINE_D3D11ON12_CAP_INDEXED_INSTANCED_DRAW 0x0000000000000040ull
++#define WINE_D3D11ON12_CAP_INPUT_ASSEMBLER_TOPOLOGY 0x0000000000000080ull
+ #define WINE_D3D11ON12_DRAW_INDEXED 1u
+ #define WINE_D3D11ON12_DRAW_INSTANCED 2u
+ #define WINE_D3D11ON12_DRAW_INDEXED_INSTANCED 3u
+@@ -409,6 +410,8 @@ typedef HRESULT (WINAPI *wine_d3d11on12_draw_adapter_fn)(
+ typedef HRESULT (WINAPI *wine_d3d11on12_dispatch_draw_fn)(
+         struct wine_d3d11on12_adapter_device *, UINT, UINT, UINT, UINT, INT,
+         UINT);
++typedef HRESULT (WINAPI *wine_d3d11on12_set_primitive_topology_fn)(
++        struct wine_d3d11on12_adapter_device *, INT);
+ 
+ struct wine_d3d11on12_core_interface
+ {
+@@ -423,7 +426,7 @@ struct wine_d3d11on12_core_interface
+     wine_d3d11on12_draw_adapter_fn draw_adapter_device;
+     void *validate_wrapped_resource;
+     wine_d3d11on12_dispatch_draw_fn dispatch_draw;
+-    void *reserved[1];
++    wine_d3d11on12_set_primitive_topology_fn set_primitive_topology;
+ };
+ 
+ typedef HRESULT (WINAPI *wine_d3d11on12_get_interface_fn)(UINT, UINT,
+@@ -535,6 +538,17 @@ static void d3d11_on12_backend_draw_indexed_instanced(
+             base_vertex, start_instance);
+ }
+ 
++static void d3d11_on12_backend_set_primitive_topology(
++        struct d3d11_device_context *context,
++        D3D11_PRIMITIVE_TOPOLOGY topology)
++{
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    HRESULT hr = backend->core.set_primitive_topology(&backend->adapter,
++            topology);
++    if (FAILED(hr))
++        WARN("D3D11On12 IA topology dispatch failed, hr %#lx.\n", hr);
++}
++
+ static HRESULT d3d11_on12_backend_create_wrapped_resource(
+         struct d3d_device *device, IUnknown *resource12,
+         const D3D11_RESOURCE_FLAGS *flags, D3D12_RESOURCE_STATES input_state,
+@@ -585,6 +599,7 @@ static const struct d3d11_backend_ops d3d11_on12_backend_ops =
+     d3d11_on12_backend_draw_indexed,
+     d3d11_on12_backend_draw_instanced,
+     d3d11_on12_backend_draw_indexed_instanced,
++    d3d11_on12_backend_set_primitive_topology,
+     d3d11_on12_backend_create_wrapped_resource,
+     d3d11_on12_backend_release_wrapped_resources,
+     d3d11_on12_backend_acquire_wrapped_resources,
+@@ -630,8 +645,11 @@ static HRESULT d3d11_on12_create_unpublished_backend(IUnknown *device,
+                     & WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_DRAW)
+             || !(core.capabilities
+                     & WINE_D3D11ON12_CAP_INDEXED_INSTANCED_DRAW)
++            || !(core.capabilities
++                    & WINE_D3D11ON12_CAP_INPUT_ASSEMBLER_TOPOLOGY)
+             || !core.close_adapter_device || !core.flush_adapter_device
+-            || !core.draw_adapter_device || !core.dispatch_draw)
++            || !core.draw_adapter_device || !core.dispatch_draw
++            || !core.set_primitive_topology)
+     {
+         FreeLibrary(backend->core_module);
+         free(backend);
+diff --git a/dlls/d3d11/d3d11_private.h b/dlls/d3d11/d3d11_private.h
+index 87976cf6..d043279c 100644
+--- a/dlls/d3d11/d3d11_private.h
++++ b/dlls/d3d11/d3d11_private.h
+@@ -584,6 +584,8 @@ struct d3d11_backend_ops
+     void (*draw_indexed_instanced)(struct d3d11_device_context *context,
+             UINT index_count, UINT instance_count, UINT start_index,
+             INT base_vertex, UINT start_instance);
++    void (*set_primitive_topology)(struct d3d11_device_context *context,
++            D3D11_PRIMITIVE_TOPOLOGY topology);
+     HRESULT (*create_wrapped_resource)(struct d3d_device *device,
+             IUnknown *resource12, const D3D11_RESOURCE_FLAGS *flags,
+             D3D12_RESOURCE_STATES input_state,
+diff --git a/dlls/d3d11/device.c b/dlls/d3d11/device.c
+index 624d43ba..936d2739 100644
+--- a/dlls/d3d11/device.c
++++ b/dlls/d3d11/device.c
+@@ -81,6 +81,19 @@ static void wined3d_backend_draw_indexed_instanced(
+             instance_count);
+ }
+ 
++static void wined3d_backend_set_primitive_topology(
++        struct d3d11_device_context *context,
++        D3D11_PRIMITIVE_TOPOLOGY topology)
++{
++    enum wined3d_primitive_type primitive_type;
++    unsigned int patch_vertex_count;
++
++    wined3d_primitive_type_from_d3d11_primitive_topology(topology,
++            &primitive_type, &patch_vertex_count);
++    wined3d_device_context_set_primitive_type(context->wined3d_context,
++            primitive_type, patch_vertex_count);
++}
++
+ static const struct d3d11_backend_ops wined3d_backend_ops =
+ {
+     wined3d_backend_destroy_device,
+@@ -92,6 +105,7 @@ static const struct d3d11_backend_ops wined3d_backend_ops =
+     wined3d_backend_draw_indexed,
+     wined3d_backend_draw_instanced,
+     wined3d_backend_draw_indexed_instanced,
++    wined3d_backend_set_primitive_topology,
+     NULL,
+     NULL,
+     NULL,
+@@ -1040,14 +1054,10 @@ static void STDMETHODCALLTYPE d3d11_device_context_IASetPrimitiveTopology(ID3D11
+         D3D11_PRIMITIVE_TOPOLOGY topology)
+ {
+     struct d3d11_device_context *context = impl_from_ID3D11DeviceContext4(iface);
+-    enum wined3d_primitive_type primitive_type;
+-    unsigned int patch_vertex_count;
+ 
+     TRACE("iface %p, topology %#x.\n", iface, topology);
+ 
+-    wined3d_primitive_type_from_d3d11_primitive_topology(topology, &primitive_type, &patch_vertex_count);
+-
+-    wined3d_device_context_set_primitive_type(context->wined3d_context, primitive_type, patch_vertex_count);
++    context->device->backend_ops->set_primitive_topology(context, topology);
+ }
+ 
+ static void STDMETHODCALLTYPE d3d11_device_context_VSSetShaderResources(ID3D11DeviceContext4 *iface,
+@@ -8380,6 +8390,7 @@ struct d3d_device *d3d_device_create_backend(
+             || !backend_ops->draw_indexed
+             || !backend_ops->draw_instanced
+             || !backend_ops->draw_indexed_instanced
++            || !backend_ops->set_primitive_topology
+             || !backend_ops->create_wrapped_resource
+             || !backend_ops->release_wrapped_resources
+             || !backend_ops->acquire_wrapped_resources
+

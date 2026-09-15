@@ -13,6 +13,7 @@ REQUIRED_HEADER = (
     "void (*draw_indexed)(struct d3d11_device_context *context,",
     "void (*draw_instanced)(struct d3d11_device_context *context,",
     "void (*draw_indexed_instanced)(struct d3d11_device_context *context,",
+    "void (*set_primitive_topology)(struct d3d11_device_context *context,",
     "const struct d3d11_backend_ops *backend_ops;",
     "void *backend_private;",
     "BOOL standalone_allocation;",
@@ -30,6 +31,7 @@ REQUIRED_DEVICE = (
     "context->device->backend_ops->draw_indexed(context, index_count,",
     "context->device->backend_ops->draw_instanced(context,",
     "context->device->backend_ops->draw_indexed_instanced(context,",
+    "context->device->backend_ops->set_primitive_topology(context, topology);",
     "device->backend_ops->get_feature_level(device)",
     "device->backend_ops->get_creation_flags(device)",
     "device->backend_ops->get_device_removed_reason(device)",
@@ -53,6 +55,7 @@ REQUIRED_MAIN = (
     "backend->core.flush_adapter_device(&backend->adapter, 0, 0,",
     "backend->core.draw_adapter_device(&backend->adapter,",
     "backend->core.dispatch_draw(&backend->adapter, kind, count0,",
+    "backend->core.set_primitive_topology(&backend->adapter,",
 )
 
 

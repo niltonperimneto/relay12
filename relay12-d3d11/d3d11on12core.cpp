@@ -590,7 +590,8 @@ extern "C" HRESULT WINAPI WineD3D11On12GetInterface(UINT requestedVersion,
             | WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_FLUSH
             | WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_DRAW
             | WINE_D3D11ON12_CAP_WRAPPED_RESOURCE_VALIDATION
-            | WINE_D3D11ON12_CAP_INDEXED_INSTANCED_DRAW;
+            | WINE_D3D11ON12_CAP_INDEXED_INSTANCED_DRAW
+            | WINE_D3D11ON12_CAP_INPUT_ASSEMBLER_TOPOLOGY;
     interfaceOut->createDevice = WineD3D11On12CreateDeviceV1;
     interfaceOut->createDirectDevice = WineD3D11CreateDeviceV2;
     interfaceOut->createDirectDeviceAndSwapChain =
@@ -601,6 +602,8 @@ extern "C" HRESULT WINAPI WineD3D11On12GetInterface(UINT requestedVersion,
     interfaceOut->validateWrappedResource =
             WineD3D11On12ValidateWrappedResourceV1;
     interfaceOut->dispatchDraw = WineD3D11On12DispatchDrawV1;
+    interfaceOut->setPrimitiveTopology =
+            WineD3D11On12SetPrimitiveTopologyV1;
     return S_OK;
 }
 
@@ -937,6 +940,22 @@ extern "C" HRESULT WINAPI WineD3D11On12DispatchDrawV1(
         default:
             return E_INVALIDARG;
     }
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12SetPrimitiveTopologyV1(
+        WineD3D11On12AdapterDevice *adapterDevice, INT topology) noexcept
+{
+    if (!adapterDevice || adapterDevice->size != sizeof(*adapterDevice))
+        return E_INVALIDARG;
+
+    AdapterState *state = static_cast<AdapterState *>(
+            adapterDevice->runtimeState);
+    if (!state || !state->deviceCreated
+            || !state->deviceFuncs.pfnIaSetTopology)
+        return DXGI_ERROR_UNSUPPORTED;
+
+    state->deviceFuncs.pfnIaSetTopology(state->hDevice, topology);
+    return S_OK;
 }
 
 extern "C" HRESULT WINAPI WineD3D11CreateDeviceV2(IDXGIAdapter *adapter,
