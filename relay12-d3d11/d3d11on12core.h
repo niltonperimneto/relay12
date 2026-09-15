@@ -142,6 +142,10 @@ struct WineD3D11On12Buffer
 };
 
 #ifndef __cplusplus
+typedef struct WineD3D11On12Buffer WineD3D11On12Buffer;
+#endif
+
+#ifndef __cplusplus
 typedef struct WineD3D11On12AdapterDevice WineD3D11On12AdapterDevice;
 #endif
 
