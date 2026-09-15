@@ -354,9 +354,13 @@ jobs:
               "d3d11on12core.dll": {
                   1: "WineD3D11On12GetABIVersion",
                   2: "WineD3D11On12CreateDeviceV1",
-                  3: "WineD3D11On12GetInterface",
-                  4: "WineD3D11On12OpenAdapterV1",
-              },
+        3: "WineD3D11On12GetInterface",
+        4: "WineD3D11On12OpenAdapterV1",
+        5: "WineD3D11On12CreateBufferV1",
+        6: "WineD3D11On12DestroyBufferV1",
+        7: "WineD3D11On12SetVertexBuffersV1",
+        8: "WineD3D11On12SetIndexBufferV1",
+    },
           }
           for path, wanted in expected.items():
               output = subprocess.check_output(
