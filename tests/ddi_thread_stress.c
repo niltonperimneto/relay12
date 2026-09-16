@@ -34,7 +34,7 @@
  * until its own timeout, hours later and with no output; a watchdog turns that
  * into a failure with a name.
  *
- * Build: x86_64-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
+ * Build: x86_64-w64-mingw32-clang -std=gnu11 -O2 -Wall -Wextra -Werror \
  *            -Irelay12-d3d11 -c -o ddi_thread_stress.o \
  *            tests/ddi_thread_stress.c
  */
