@@ -18,6 +18,7 @@
 import pathlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -113,6 +114,26 @@ struct SOpenAdapterArgs
     UINT D3D11On12InterfaceVersion = c_CurrentD3D11On12InterfaceVersion;
     PrivateCallbacks2* Callbacks2;
 };
+
+struct SHADER_DESC
+{
+    const BYTE* pFunction;
+    UINT SizeInBytes;
+    ID3D11ClassLinkage* pLinkage;
+};
+
+interface ID3D11On12DDIDevice
+{
+    static ID3D11On12DDIDevice* CastFrom(D3D10DDI_HDEVICE hDevice) { return reinterpret_cast<ID3D11On12DDIDevice*>(hDevice.pDrvPrivate); }
+    STDMETHOD(GetD3D12Device)(REFIID riid, void** ppv) = 0;
+    STDMETHOD_(UINT, GetNodeMask)() = 0;
+    STDMETHOD_(void, DestroyKMTHandle)(D3DKMT_HANDLE) = 0;
+    STDMETHOD(OpenSharedHandle)(_In_ HANDLE hSharedHandle, _Out_writes_bytes_(PrivateDriverDataSize) void* pPrivateDriverData, UINT PrivateDriverDataSize, _Out_ D3DKMT_HANDLE* hKMTHandle) = 0;
+    STDMETHOD(CreateFence)(UINT64 InitialValue, UINT Flags, _COM_Outptr_ ID3D11On12DDIFence** ppFence) = 0;
+    STDMETHOD(CreateVertexShader)(D3D10DDI_HSHADER hShader, _In_ D3D11On12::SHADER_DESC const* pDesc) = 0;
+    STDMETHOD(CreatePixelShader)(D3D10DDI_HSHADER hShader, _In_ D3D11On12::SHADER_DESC const* pDesc) = 0;
+    STDMETHOD_(void, SetMarker)(_In_opt_z_ const wchar_t* name) = 0;
+};
 """
 
 # The same declarations as a GPL transcription would spell them: no SAL, a
@@ -143,6 +164,31 @@ struct SOpenAdapterArgs
     bool bSupportDeferredContexts;
     UINT D3D11On12InterfaceVersion = c_CurrentD3D11On12InterfaceVersion;
     PrivateCallbacks2 *Callbacks2;
+};
+
+struct SHADER_DESC
+{
+    const BYTE *pFunction;
+    UINT SizeInBytes;
+    ID3D11ClassLinkage *pLinkage;
+};
+
+struct ID3D11On12DDIDeviceVtbl
+{
+    HRESULT (STDMETHODCALLTYPE *GetD3D12Device)(ID3D11On12DDIDevice *This,
+            REFIID riid, void **ppv);
+    UINT (STDMETHODCALLTYPE *GetNodeMask)(ID3D11On12DDIDevice *This);
+    void (STDMETHODCALLTYPE *DestroyKMTHandle)(ID3D11On12DDIDevice *This,
+            D3DKMT_HANDLE);
+    HRESULT (STDMETHODCALLTYPE *OpenSharedHandle)(ID3D11On12DDIDevice *This,
+            HANDLE hSharedHandle, void *pPrivateDriverData,
+            UINT PrivateDriverDataSize, D3DKMT_HANDLE *hKMTHandle);
+    HRESULT (STDMETHODCALLTYPE *CreateFence)(ID3D11On12DDIDevice *This,
+            UINT64 InitialValue, UINT Flags, ID3D11On12DDIFence **ppFence);
+    HRESULT (STDMETHODCALLTYPE *CreateVertexShader)(ID3D11On12DDIDevice *This,
+            D3D10DDI_HSHADER hShader, D3D11On12::SHADER_DESC const *pDesc);
+    HRESULT (STDMETHODCALLTYPE *CreatePixelShader)(ID3D11On12DDIDevice *This,
+            D3D10DDI_HSHADER hShader, D3D11On12::SHADER_DESC const *pDesc);
 };
 """
 
@@ -219,6 +265,141 @@ class AdapterArgsTranscription(unittest.TestCase):
         errors = check_adapter_args.check(gone, CORE_ADAPTER_ARGS)
         self.assertTrue(any("not found in the pinned driver" in error
                             for error in errors), errors)
+
+
+class DDIDeviceVtableTranscription(unittest.TestCase):
+    """The sub-object vtable the core indexes to create shaders.
+
+    The pinned driver never fills pfnCreateVertexShader or pfnCreatePixelShader
+    on the immediate device, so ID3D11On12DDIDevice is the only creation path
+    and its declaration order is what fixes the two slots the core calls. An
+    insertion anywhere above them renumbers both, and because the interface is
+    reached by reinterpreting a private block rather than by linking, nothing
+    in the build would otherwise notice.
+    """
+
+    def test_a_faithful_transcription_passes_despite_spelling(self):
+        self.assertEqual(
+            check_adapter_args.check_interface(DRIVER_ADAPTER_ARGS,
+                                               CORE_ADAPTER_ARGS),
+            [])
+
+    def test_slots_after_the_last_indexed_one_are_not_compared(self):
+        """The core stops at CreatePixelShader on purpose: nothing indexes
+        past it, so the rest is surface the gate need not police."""
+        self.assertIn("SetMarker", DRIVER_ADAPTER_ARGS)
+        self.assertNotIn("SetMarker", CORE_ADAPTER_ARGS)
+        self.assertEqual(
+            check_adapter_args.check_interface(DRIVER_ADAPTER_ARGS,
+                                               CORE_ADAPTER_ARGS),
+            [])
+
+    def test_a_slot_inserted_upstream_is_rejected(self):
+        """The failure this gate exists for."""
+        grown = DRIVER_ADAPTER_ARGS.replace(
+            "    STDMETHOD_(UINT, GetNodeMask)() = 0;",
+            "    STDMETHOD_(UINT, GetNodeMask)() = 0;\n"
+            "    STDMETHOD(EnqueueSetEvent)(_In_ HANDLE hEvent) = 0;")
+        self.assertNotEqual(grown, DRIVER_ADAPTER_ARGS)
+        errors = check_adapter_args.check_interface(grown, CORE_ADAPTER_ARGS)
+        self.assertTrue(any("drifted" in error for error in errors), errors)
+
+    def test_a_reordered_slot_is_rejected(self):
+        """Names alone would not catch this, and the two shader slots take
+        identical parameter lists -- so swapping them is exactly the mistake
+        a name-insensitive comparison would ratify."""
+        swapped = CORE_ADAPTER_ARGS.replace(
+            "    HRESULT (STDMETHODCALLTYPE *CreateVertexShader)"
+            "(ID3D11On12DDIDevice *This,\n"
+            "            D3D10DDI_HSHADER hShader, "
+            "D3D11On12::SHADER_DESC const *pDesc);\n"
+            "    HRESULT (STDMETHODCALLTYPE *CreatePixelShader)"
+            "(ID3D11On12DDIDevice *This,\n"
+            "            D3D10DDI_HSHADER hShader, "
+            "D3D11On12::SHADER_DESC const *pDesc);",
+            "    HRESULT (STDMETHODCALLTYPE *CreatePixelShader)"
+            "(ID3D11On12DDIDevice *This,\n"
+            "            D3D10DDI_HSHADER hShader, "
+            "D3D11On12::SHADER_DESC const *pDesc);\n"
+            "    HRESULT (STDMETHODCALLTYPE *CreateVertexShader)"
+            "(ID3D11On12DDIDevice *This,\n"
+            "            D3D10DDI_HSHADER hShader, "
+            "D3D11On12::SHADER_DESC const *pDesc);")
+        self.assertNotEqual(swapped, CORE_ADAPTER_ARGS)
+        errors = check_adapter_args.check_interface(DRIVER_ADAPTER_ARGS,
+                                                    swapped)
+        self.assertTrue(any("drifted" in error for error in errors), errors)
+
+    def test_a_retyped_shader_argument_is_rejected(self):
+        """Dropping the const would let the driver's own header disagree with
+        what the host promises it may do to the descriptor."""
+        retyped = CORE_ADAPTER_ARGS.replace(
+            "D3D11On12::SHADER_DESC const *pDesc);\n};",
+            "D3D11On12::SHADER_DESC *pDesc);\n};")
+        self.assertNotEqual(retyped, CORE_ADAPTER_ARGS)
+        errors = check_adapter_args.check_interface(DRIVER_ADAPTER_ARGS,
+                                                    retyped)
+        self.assertTrue(any("CreatePixelShader" in error for error in errors),
+                        errors)
+
+    def test_a_missing_self_parameter_is_rejected(self):
+        """An explicit vtable has to carry the `this` a C++ method implies;
+        a slot without it would shift every argument by one register."""
+        dropped = CORE_ADAPTER_ARGS.replace(
+            "*GetNodeMask)(ID3D11On12DDIDevice *This)",
+            "*GetNodeMask)()")
+        self.assertNotEqual(dropped, CORE_ADAPTER_ARGS)
+        errors = check_adapter_args.check_interface(DRIVER_ADAPTER_ARGS,
+                                                    dropped)
+        self.assertTrue(any("GetNodeMask" in error for error in errors),
+                        errors)
+
+    def test_a_driver_bump_that_removes_the_interface_is_rejected(self):
+        gone = DRIVER_ADAPTER_ARGS.replace("interface ID3D11On12DDIDevice",
+                                           "interface ID3D11On12DDIDevice2")
+        errors = check_adapter_args.check_interface(gone, CORE_ADAPTER_ARGS)
+        self.assertTrue(any("not found in the pinned driver" in error
+                            for error in errors), errors)
+
+    def test_a_driver_bump_that_removes_the_last_slot_is_rejected(self):
+        """If CreatePixelShader stops existing, the scan would run off the end
+        of the interface. It must say so rather than compare garbage."""
+        gone = DRIVER_ADAPTER_ARGS.replace("CreatePixelShader",
+                                           "CreatePixelShaderEx")
+        errors = check_adapter_args.check_interface(gone, CORE_ADAPTER_ARGS)
+        self.assertTrue(any("no longer a method" in error
+                            or "drifted" in error for error in errors), errors)
+
+    def test_the_committed_transcription_matches_the_pinned_driver(self):
+        driver = (REPOSITORY / "third_party" / "D3D11On12" / "interface"
+                  / "D3D11On12DDI.h")
+        core = REPOSITORY / "relay12-d3d11" / "d3d11on12core.cpp"
+        if not driver.exists():
+            self.skipTest("the pinned driver submodule is not checked out")
+        self.assertEqual(
+            check_adapter_args.check_interface(
+                driver.read_text(errors="replace"),
+                core.read_text(errors="replace")),
+            [])
+
+    def test_the_published_slot_indices_match_the_transcription(self):
+        """The core static-asserts this too, but that assertion only fires in
+        a MinGW build; this one fires in the Python lane."""
+        core = (REPOSITORY / "relay12-d3d11" / "d3d11on12core.cpp")
+        header = (REPOSITORY / "relay12-d3d11" / "d3d11on12core.h")
+        methods = check_adapter_args.core_methods(
+            core.read_text(errors="replace"))
+        self.assertIsNotNone(methods)
+        names = [name for name, _ in methods]
+        published = {}
+        for line in header.read_text(errors="replace").splitlines():
+            match = re.match(r"#define WINE_D3D11ON12_DDIDEVICE_SLOT_(\w+)"
+                             r"\s+(\d+)u", line)
+            if match:
+                published[match.group(1)] = int(match.group(2))
+        self.assertEqual(published,
+                         {"CREATEVERTEXSHADER": names.index("CreateVertexShader"),
+                          "CREATEPIXELSHADER": names.index("CreatePixelShader")})
 
 
 class DtlPortabilityInventory(unittest.TestCase):

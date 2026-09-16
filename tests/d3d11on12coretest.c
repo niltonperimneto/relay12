@@ -155,6 +155,17 @@ static void test_get_interface(void)
     if (iface.closeAdapterDevice != WineD3D11On12CloseAdapterDeviceV1)
         fail("get interface publishes the current version",
                 "closeAdapterDevice does not point at the V1 entry point");
+    if (!(iface.capabilities & WINE_D3D11ON12_CAP_SHADER_LIFECYCLE))
+        fail("get interface publishes the current version",
+                "the shader lifecycle capability bit is missing");
+    /* The shader trio is the only way a caller reaches shader creation: the
+     * three entry points are deliberately not in the export table, on the
+     * same terms as closeAdapterDevice. */
+    if (iface.createShader != WineD3D11On12CreateShaderV1
+            || iface.destroyShader != WineD3D11On12DestroyShaderV1
+            || iface.setShader != WineD3D11On12SetShaderV1)
+        fail("get interface publishes the current version",
+                "the shader entry points do not point at the V1 functions");
 }
 
 static void test_argument_validation(void)

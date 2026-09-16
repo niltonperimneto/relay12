@@ -22,10 +22,11 @@
 # define WINE_D3D11ON12_ASSERT(condition) _Static_assert(condition, #condition)
 #endif
 
-#define WINE_D3D11ON12_ABI_VERSION 3u
+#define WINE_D3D11ON12_ABI_VERSION 4u
 #define WINE_D3D11ON12_CAP_VALIDATION 0x0000000000000001ull
 #define WINE_D3D11ON12_CAP_D3DMETAL_BOOTSTRAP 0x0000000000000002ull
 #define WINE_D3D11ON12_CAP_DEVICE_LIFECYCLE 0x0000000000000004ull
+#define WINE_D3D11ON12_CAP_SHADER_LIFECYCLE 0x0000000000000008ull
 
 typedef UINT (WINAPI *WineD3D11On12GetABIVersionFn)(void);
 typedef HRESULT (WINAPI *WineD3D11On12CreateDeviceFn)(IUnknown *, UINT,
@@ -43,6 +44,16 @@ struct WineD3D11On12AdapterDevice;
 typedef HRESULT (WINAPI *WineD3D11On12CloseAdapterDeviceFn)(
         struct WineD3D11On12AdapterDevice *);
 
+struct WineD3D11On12Shader;
+typedef HRESULT (WINAPI *WineD3D11On12CreateShaderFn)(
+        struct WineD3D11On12AdapterDevice *, UINT, const void *, SIZE_T,
+        struct WineD3D11On12Shader *);
+typedef HRESULT (WINAPI *WineD3D11On12DestroyShaderFn)(
+        struct WineD3D11On12AdapterDevice *, struct WineD3D11On12Shader *);
+typedef HRESULT (WINAPI *WineD3D11On12SetShaderFn)(
+        struct WineD3D11On12AdapterDevice *, UINT,
+        const struct WineD3D11On12Shader *);
+
 struct WineD3D11On12Interface
 {
     UINT size;
@@ -52,7 +63,10 @@ struct WineD3D11On12Interface
     WineD3D11CreateDeviceFn createDirectDevice;
     WineD3D11CreateDeviceAndSwapChainFn createDirectDeviceAndSwapChain;
     WineD3D11On12CloseAdapterDeviceFn closeAdapterDevice;
-    void *reserved[5];
+    WineD3D11On12CreateShaderFn createShader;
+    WineD3D11On12DestroyShaderFn destroyShader;
+    WineD3D11On12SetShaderFn setShader;
+    void *reserved[2];
 };
 
 #ifndef __cplusplus
@@ -70,7 +84,13 @@ WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface,
         createDirectDeviceAndSwapChain) == 32);
 WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface,
         closeAdapterDevice) == 40);
-WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface, reserved) == 48);
+/* The three shader entries came out of the reserved tail, which is what keeps
+ * the table at 88 bytes across the v3-to-v4 bump.  GetInterface refuses any
+ * version but its own, so a v3 caller never sees these words as reserved. */
+WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface, createShader) == 48);
+WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface, destroyShader) == 56);
+WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface, setShader) == 64);
+WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Interface, reserved) == 72);
 
 typedef HRESULT (WINAPI *WineD3D11On12GetInterfaceFn)(UINT, UINT,
         WineD3D11On12Interface *);
@@ -117,6 +137,62 @@ WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12AdapterDevice, runtimeState) == 32);
 typedef HRESULT (WINAPI *WineD3D11On12OpenAdapterFn)(IUnknown *,
         IUnknown *const *, UINT, UINT, WineD3D11On12AdapterDevice *);
 
+/* Where the driver's shader-creation methods sit in the ID3D11On12DDIDevice
+ * vtable.
+ *
+ * Published as numbers because the only other consumer is a C mock driver,
+ * and having it transcribe the interface a second time would give the project
+ * two vtable orders to keep in step instead of one. The loop is closed at both
+ * ends: d3d11on12core.cpp asserts these against the offsets of its own
+ * transcription, and scripts/check_adapter_args.py asserts that transcription
+ * against the pinned driver header. */
+#define WINE_D3D11ON12_DDIDEVICE_SLOT_CREATEVERTEXSHADER 16u
+#define WINE_D3D11ON12_DDIDEVICE_SLOT_CREATEPIXELSHADER 17u
+/* sizeof(D3D11On12::SHADER_DESC): a container pointer, a UINT with its tail
+ * padding, and a class-linkage pointer. */
+#define WINE_D3D11ON12_SHADER_DESC_SIZE 24u
+
+/* Which pipeline stage a shader was created for.
+ *
+ * Only the two stages the pinned driver can create from a bytecode container
+ * are named.  Geometry, hull, domain and compute creation take argument types
+ * this host has not authored, so naming them here would advertise a stage
+ * CreateShader would have to refuse. */
+#define WINE_D3D11ON12_SHADER_VERTEX 0u
+#define WINE_D3D11ON12_SHADER_PIXEL 1u
+
+/* What a successful CreateShader leaves behind.
+ *
+ * hDrvShader is the pDrvPrivate word of D3D10DDI_HSHADER and runtimeState is
+ * the core's ownership token, on the same terms as
+ * WineD3D11On12AdapterDevice: neither may be freed by the caller, and the
+ * complete structure goes back to destroyShader.
+ *
+ * stage is recorded rather than re-supplied at bind time so that binding a
+ * pixel shader to the vertex stage is a rejection here instead of a
+ * mis-drawn frame. */
+struct WineD3D11On12Shader
+{
+    UINT size;
+    UINT stage;
+    void *hDrvShader;
+    void *runtimeState;
+    void *reserved[2];
+};
+
+#ifndef __cplusplus
+typedef struct WineD3D11On12Shader WineD3D11On12Shader;
+#endif
+
+#ifdef __cplusplus
+WINE_D3D11ON12_ASSERT(std::is_standard_layout_v<WineD3D11On12Shader>);
+#endif
+WINE_D3D11ON12_ASSERT(sizeof(void *) != 8 || sizeof(WineD3D11On12Shader) == 40);
+WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Shader, stage) == 4);
+WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Shader, hDrvShader) == 8);
+WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Shader, runtimeState) == 16);
+WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12Shader, reserved) == 24);
+
 WINE_D3D11ON12_LINKAGE UINT WINAPI WineD3D11On12GetABIVersion(void)
         WINE_D3D11ON12_NOEXCEPT;
 WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12GetInterface(UINT, UINT,
@@ -140,6 +216,37 @@ WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12OpenAdapterV1(IUnknown *,
         WINE_D3D11ON12_NOEXCEPT;
 WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12CloseAdapterDeviceV1(
         WineD3D11On12AdapterDevice *) WINE_D3D11ON12_NOEXCEPT;
+/* Creates a vertex or pixel shader on an opened adapter/device pair, from a
+ * DXBC container and its length.
+ *
+ * The container, not the driver bytecode the DDI's own CreateVertexShader
+ * slot takes.  That is not a preference: the pinned driver never fills
+ * pfnCreateVertexShader or pfnCreatePixelShader on the immediate device -- its
+ * only creation path is the ID3D11On12DDIDevice sub-object, whose own comment
+ * calls these "shader creates which take the full containers instead of
+ * driver bytecode".  See docs/CLEANROOM-DDI.md.
+ *
+ * The caller's bytecode is not retained.  The driver copies it inside the
+ * call, which tests/d3d11on12shaderlifecycle.c pins by overwriting the
+ * caller's buffer afterwards. */
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12CreateShaderV1(
+        WineD3D11On12AdapterDevice *, UINT, const void *, SIZE_T,
+        WineD3D11On12Shader *) WINE_D3D11ON12_NOEXCEPT;
+/* Destroys one shader, and is idempotent on a structure that holds none.
+ *
+ * Calling this is the caller's part of the contract but not the host's only
+ * defence: closeAdapterDevice releases any shader still outstanding, telling
+ * the driver before the device they belong to goes away. After that the
+ * caller's stale shader structures are inert rather than dangerous, because
+ * every entry point here requires the adapter/device pair close clears. */
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12DestroyShaderV1(
+        WineD3D11On12AdapterDevice *, WineD3D11On12Shader *)
+        WINE_D3D11ON12_NOEXCEPT;
+/* Binds a shader to its stage, or unbinds the stage when the shader is null.
+ * Routed to pfnVsSetShader or pfnPsSetShader, which the driver does fill. */
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12SetShaderV1(
+        WineD3D11On12AdapterDevice *, UINT, const WineD3D11On12Shader *)
+        WINE_D3D11ON12_NOEXCEPT;
 WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11CreateDeviceV2(IDXGIAdapter *,
         D3D_DRIVER_TYPE, HMODULE, UINT, const D3D_FEATURE_LEVEL *, UINT, UINT,
         ID3D11Device **, D3D_FEATURE_LEVEL *, ID3D11DeviceContext **)
