@@ -10,7 +10,7 @@
  *
  * These paths all report, so this also exercises the diagnostic sinks.
  *
- * Build: x86_64-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
+ * Build: x86_64-w64-mingw32-clang -std=gnu11 -O2 -Wall -Wextra -Werror \
  *            -Irelay12-d3d11 -o d3d11shimstatus.exe tests/d3d11shimstatus.c
  */
 #include <windows.h>

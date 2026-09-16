@@ -1,6 +1,6 @@
 /* D3DMetal D3D11-on-12 conformance probe.
  *
- * Build: x86_64-w64-mingw32-gcc -O2 -Wall -Werror -o d3d11on12probe.exe \
+ * Build: x86_64-w64-mingw32-clang -O2 -Wall -Werror -o d3d11on12probe.exe \
  *            d3d11on12probe.c -ld3d11 -ld3d12 -ldxgi -ldxguid -luuid
  */
 #define COBJMACROS
