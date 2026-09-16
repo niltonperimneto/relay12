@@ -19,9 +19,9 @@
  * that cannot tolerate it.
  *
  * Build (both languages must succeed):
- *   x86_64-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
+ *   x86_64-w64-mingw32-clang -std=gnu11 -O2 -Wall -Wextra -Werror \
  *       -Irelay12-d3d11/ddi -o d3d11ddilayout.exe tests/d3d11ddilayout.c
- *   x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Werror \
+ *   x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
  *       -Irelay12-d3d11/ddi -x c++ -o d3d11ddilayoutxx.exe tests/d3d11ddilayout.c
  */
 #include <stdio.h>
