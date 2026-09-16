@@ -208,7 +208,7 @@ makes the worklist a dependency order on structure groups, not a list of slots:
 | `D3D10_DDI_MAP`, `D3D10DDI_MAPPED_SUBRESOURCE` — **done** | all thirteen `pfn*ResourceMap`/`Unmap` slots and `pfnResourceCopy` — **done**; `pfnResourceCopyRegion`, `pfnResourceUpdateSubresourceUP`, `pfnDiscard`, and `pfnResourceConvert*` still require their own argument types |
 | SRV/RTV creation arguments (`D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW`, `D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW`) — **done** | `pfnCalcPrivateShaderResourceViewSize`, `pfnCreateShaderResourceView`, `pfnDestroyShaderResourceView`, `pfnCalcPrivateRenderTargetViewSize`, `pfnCreateRenderTargetView`, `pfnDestroyRenderTargetView` |
 | DSV/UAV creation arguments | every remaining `pfnCalcPrivate*ViewSize`/`pfnCreate*View`/`pfnDestroy*View`, `pfnClearRenderTargetView`, `pfnClearDepthStencilView`, `pfnClearView`, `pfnClearUnorderedAccessView*` |
-| Vertex/pixel shader creation (`D3D10DDI_H(RT)SHADER`) — **done** | `pfnCalcPrivateShaderSize`, `pfnCreateVertexShader`, `pfnCreatePixelShader`, `pfnDestroyShader` |
+| Vertex/pixel shader creation (`D3D10DDI_H(RT)SHADER`) — **done**, but see §3.3: these declare the contract, and `pfnCreateVertexShader`/`pfnCreatePixelShader` are never filled by the pinned driver on the immediate device. Creation runs through `ID3D11On12DDIDevice` instead | `pfnCalcPrivateShaderSize`, `pfnCreateVertexShader`, `pfnCreatePixelShader`, `pfnDestroyShader` |
 | Stream-output and tessellation shader structures | `pfnCreateGeometryShader`, `pfnCalcPrivateGeometryShaderWithStreamOutput`, `pfnCreateGeometryShaderWithStreamOutput`, `pfnCreateHullShader`, `pfnCreateDomainShader`, `pfnCreateComputeShader`, `pfnCalcPrivateTessellationShaderSize`, `pfnCreateElementLayout`, the `pfn*SetShaderWithIfaces` family, `pfnRetrieveShaderComment`, `pfnAssignDebugBinary` |
 | State structures (blend, depth-stencil, rasterizer, sampler) — **done** | `pfnSetBlendState`, `pfnSetDepthStencilState`, `pfnSetRasterizerState` — **done**; `pfnPsSetSamplers` and the rest of the `pfn*SetSamplers` family remain, an untextured frame not needing them |
 | Element layout and input assembly — **done** | `pfnCalcPrivateElementLayoutSize`, `pfnCreateElementLayout`, `pfnDestroyElementLayout`, `pfnIaSetInputLayout`, `pfnIaSetVertexBuffers`, `pfnIaSetTopology` |
@@ -232,9 +232,43 @@ only because the DestroyCommandList page states the two members may take one
 implementation.
 
 **3.3. WDDM Interface Translation**
-* **Status:** Ongoing
-* **Action:** Finalize the state/pipeline mapping mechanisms across `hs`, `ds`,
-  `ps`, and `vs` shaders natively against macOS translation limits.
+* **Status:** Ongoing — `vs` and `ps` lifecycle and binding implemented
+* **Done:** the host now owns vertex and pixel shaders end to end.
+  `WineD3D11On12CreateShaderV1`, `WineD3D11On12DestroyShaderV1` and
+  `WineD3D11On12SetShaderV1` are published through the interface table at ABI
+  v4 behind `WINE_D3D11ON12_CAP_SHADER_LIFECYCLE`, and
+  `tests/d3d11on12shaderlifecycle.c` drives them against a mock driver that
+  reproduces the pinned driver's slot population exactly.
+* **The finding that shaped it, and which contradicts §3.1's framing:** no DDI
+  table slot creates a shader. The pinned driver's `FillContextDDIs` fills
+  `pfnCalcPrivateShaderSize`, `pfnDestroyShader`, `pfnVsSetShader` and
+  `pfnPsSetShader` for the immediate device and never assigns
+  `pfnCreateVertexShader` or `pfnCreatePixelShader`; the only device that
+  assigns them is the deferred context, via a `PopulateDeferredShaderInit`
+  that ignores the bytecode and records a handle mapping. Creation exists only
+  on `ID3D11On12DDIDevice`, which takes a DXBC container rather than driver
+  bytecode. So the host sizes and destroys and binds through the table, and
+  creates through the sub-object. See `docs/CLEANROOM-DDI.md`.
+* **What that means for §3.1:** promoting `pfnCreateVertexShader` and
+  `pfnCreatePixelShader` was not wrong — they are part of the frozen contract
+  and another driver may implement them — but the table promotion was never
+  what unblocked creation, and the dependency table below said otherwise.
+* **Bytecode lifetime, resolved by reading the driver rather than guessing:**
+  the caller's container is not retained. `CreateUnderlyingShader` copies it
+  into the shader object's own buffer inside the call. The host passes the
+  caller's pointer through and keeps no copy; the test pins this by asserting
+  the driver saw the caller's own address and then overwriting that buffer
+  before binding and destroying.
+* **Ownership, not just creation:** each shader's private block is tracked on
+  the device that made it, so closing a lifecycle whose shaders the caller
+  abandoned destroys them through the driver first rather than leaking a block
+  per shader. The list is unlocked, which the D3D11 immediate context's own
+  single-threaded contract is what justifies.
+* **Remaining:** `hs` and `ds` have no creation path at all yet — their
+  argument types (tessellation IO signatures) are unauthored, and the
+  sub-object's `CreateHullShader`/`CreateDomainShader` sit below
+  `CreatePixelShader` in the vtable, so reaching them means transcribing the
+  slots between. Neither stage is needed for the MVP frame.
 
 **3.4. CI & End-to-End Test Harness**
 * **Status:** Framework Drafted
