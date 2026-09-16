@@ -28,6 +28,23 @@ static UINT last_vertex_stride;
 static UINT last_vertex_offset;
 static UINT last_index_offset;
 static DXGI_FORMAT last_index_format;
+static LONG input_layout_create_calls;
+static LONG input_layout_destroy_calls;
+static LONG input_layout_bind_calls;
+static void *last_input_layout;
+static int bad_input_layout_description;
+static volatile LONG fail_next_input_layout;
+static LONG vertex_shader_create_calls;
+static LONG pixel_shader_create_calls;
+static LONG shader_destroy_calls;
+static LONG vertex_shader_bind_calls;
+static LONG pixel_shader_bind_calls;
+static void *last_vertex_shader;
+static void *last_pixel_shader;
+static int bad_shader_description;
+static volatile LONG fail_next_shader;
+static D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS *runtime_callbacks;
+static D3D10DDI_HRTCORELAYER runtime_device;
 static unsigned char adapter_private;
 
 static HRESULT mock_get_versions(D3D10DDI_HADAPTER adapter, UINT32 *count,
@@ -168,12 +185,131 @@ static void mock_ia_set_index_buffer(D3D10DDI_HDEVICE device,
     InterlockedIncrement(&index_buffer_bind_calls);
 }
 
+static SIZE_T mock_calc_private_element_layout_size(D3D10DDI_HDEVICE device,
+        const D3D10DDIARG_CREATEELEMENTLAYOUT *description)
+{
+    (void)device;
+    if (!description || description->NumElements != 1
+            || !description->pVertexElements)
+        bad_input_layout_description = 1;
+    return 32;
+}
+
+static void mock_create_element_layout(D3D10DDI_HDEVICE device,
+        const D3D10DDIARG_CREATEELEMENTLAYOUT *description,
+        D3D10DDI_HELEMENTLAYOUT layout,
+        D3D10DDI_HRTELEMENTLAYOUT runtime_layout)
+{
+    (void)device;
+    if (!description || description->NumElements != 1
+            || !description->pVertexElements
+            || description->pVertexElements[0].InputSlot != 0
+            || description->pVertexElements[0].AlignedByteOffset != 0
+            || description->pVertexElements[0].Format != DXGI_FORMAT_R32G32_FLOAT
+            || description->pVertexElements[0].InputRegister != 3
+            || !layout.pDrvPrivate || !runtime_layout.handle)
+        bad_input_layout_description = 1;
+    InterlockedIncrement(&input_layout_create_calls);
+    if (InterlockedExchange(&fail_next_input_layout, 0)
+            && runtime_callbacks && runtime_callbacks->pfnSetErrorCb)
+        runtime_callbacks->pfnSetErrorCb(runtime_device, E_OUTOFMEMORY);
+}
+
+static void mock_destroy_element_layout(D3D10DDI_HDEVICE device,
+        D3D10DDI_HELEMENTLAYOUT layout)
+{
+    (void)device;
+    if (!layout.pDrvPrivate)
+        bad_input_layout_description = 1;
+    InterlockedIncrement(&input_layout_destroy_calls);
+}
+
+static void mock_ia_set_input_layout(D3D10DDI_HDEVICE device,
+        D3D10DDI_HELEMENTLAYOUT layout)
+{
+    (void)device;
+    last_input_layout = layout.pDrvPrivate;
+    InterlockedIncrement(&input_layout_bind_calls);
+}
+
+static SIZE_T mock_calc_private_shader_size(D3D10DDI_HDEVICE device,
+        const UINT *code, const D3D11_1DDIARG_STAGE_IO_SIGNATURES *signatures)
+{
+    (void)device;
+    (void)signatures;
+    if (!code || code[0] != 0x43425844)
+        bad_shader_description = 1;
+    return 32;
+}
+
+static void mock_create_vertex_shader(D3D10DDI_HDEVICE device,
+        const UINT *code, D3D10DDI_HSHADER shader,
+        D3D10DDI_HRTSHADER runtime_shader,
+        const D3D11_1DDIARG_STAGE_IO_SIGNATURES *signatures)
+{
+    (void)device;
+    (void)signatures;
+    if (!code || code[0] != 0x43425844 || !shader.pDrvPrivate
+            || !runtime_shader.handle)
+        bad_shader_description = 1;
+    InterlockedIncrement(&vertex_shader_create_calls);
+    if (InterlockedExchange(&fail_next_shader, 0)
+            && runtime_callbacks && runtime_callbacks->pfnSetErrorCb)
+        runtime_callbacks->pfnSetErrorCb(runtime_device, E_OUTOFMEMORY);
+}
+
+static void mock_create_pixel_shader(D3D10DDI_HDEVICE device,
+        const UINT *code, D3D10DDI_HSHADER shader,
+        D3D10DDI_HRTSHADER runtime_shader,
+        const D3D11_1DDIARG_STAGE_IO_SIGNATURES *signatures)
+{
+    (void)device;
+    (void)signatures;
+    if (!code || code[0] != 0x43425844 || !shader.pDrvPrivate
+            || !runtime_shader.handle)
+        bad_shader_description = 1;
+    InterlockedIncrement(&pixel_shader_create_calls);
+    if (InterlockedExchange(&fail_next_shader, 0)
+            && runtime_callbacks && runtime_callbacks->pfnSetErrorCb)
+        runtime_callbacks->pfnSetErrorCb(runtime_device, E_OUTOFMEMORY);
+}
+
+static void mock_destroy_shader(D3D10DDI_HDEVICE device,
+        D3D10DDI_HSHADER shader)
+{
+    (void)device;
+    if (!shader.pDrvPrivate)
+        bad_shader_description = 1;
+    InterlockedIncrement(&shader_destroy_calls);
+}
+
+static void mock_vs_set_shader(D3D10DDI_HDEVICE device,
+        D3D10DDI_HSHADER shader)
+{
+    (void)device;
+    last_vertex_shader = shader.pDrvPrivate;
+    InterlockedIncrement(&vertex_shader_bind_calls);
+}
+
+static void mock_ps_set_shader(D3D10DDI_HDEVICE device,
+        D3D10DDI_HSHADER shader)
+{
+    (void)device;
+    last_pixel_shader = shader.pDrvPrivate;
+    InterlockedIncrement(&pixel_shader_bind_calls);
+}
+
 static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
         D3D10DDIARG_CREATEDEVICE *args)
 {
     (void)adapter;
     if (!args || !args->pWDDM2_6DeviceFuncs)
         return E_INVALIDARG;
+    if (!runtime_callbacks)
+    {
+        runtime_callbacks = args->pWDDM2_6UMCallbacks;
+        runtime_device = args->hRTCoreLayer;
+    }
     args->pWDDM2_6DeviceFuncs->pfnDestroyDevice = mock_destroy_device;
     args->pWDDM2_6DeviceFuncs->pfnFlush = mock_flush;
     args->pWDDM2_6DeviceFuncs->pfnDraw = mock_draw;
@@ -189,6 +325,23 @@ static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
             mock_calc_private_resource_size;
     args->pWDDM2_6DeviceFuncs->pfnCreateResource = mock_create_resource;
     args->pWDDM2_6DeviceFuncs->pfnDestroyResource = mock_destroy_resource;
+    args->pWDDM2_6DeviceFuncs->pfnCalcPrivateElementLayoutSize =
+            mock_calc_private_element_layout_size;
+    args->pWDDM2_6DeviceFuncs->pfnCreateElementLayout =
+            mock_create_element_layout;
+    args->pWDDM2_6DeviceFuncs->pfnDestroyElementLayout =
+            mock_destroy_element_layout;
+    args->pWDDM2_6DeviceFuncs->pfnIaSetInputLayout =
+            mock_ia_set_input_layout;
+    args->pWDDM2_6DeviceFuncs->pfnCalcPrivateShaderSize =
+            mock_calc_private_shader_size;
+    args->pWDDM2_6DeviceFuncs->pfnCreateVertexShader =
+            mock_create_vertex_shader;
+    args->pWDDM2_6DeviceFuncs->pfnCreatePixelShader =
+            mock_create_pixel_shader;
+    args->pWDDM2_6DeviceFuncs->pfnDestroyShader = mock_destroy_shader;
+    args->pWDDM2_6DeviceFuncs->pfnVsSetShader = mock_vs_set_shader;
+    args->pWDDM2_6DeviceFuncs->pfnPsSetShader = mock_ps_set_shader;
     InterlockedIncrement(&create_calls);
     return S_OK;
 }
@@ -240,6 +393,42 @@ __declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetIABufferBindings(
     if (index_buffer) *index_buffer = last_index_buffer;
     if (index_format) *index_format = last_index_format;
     if (index_offset) *index_offset = last_index_offset;
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetInputLayoutCounts(
+        LONG *created, LONG *destroyed, LONG *bound, void **last_bound,
+        int *bad_description)
+{
+    if (created) *created = input_layout_create_calls;
+    if (destroyed) *destroyed = input_layout_destroy_calls;
+    if (bound) *bound = input_layout_bind_calls;
+    if (last_bound) *last_bound = last_input_layout;
+    if (bad_description) *bad_description = bad_input_layout_description;
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverFailNextInputLayout(void)
+{
+    InterlockedExchange(&fail_next_input_layout, 1);
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetShaderCounts(
+        LONG *vertex_created, LONG *pixel_created, LONG *destroyed,
+        LONG *vertex_bound, LONG *pixel_bound, void **last_vertex,
+        void **last_pixel, int *bad_description)
+{
+    if (vertex_created) *vertex_created = vertex_shader_create_calls;
+    if (pixel_created) *pixel_created = pixel_shader_create_calls;
+    if (destroyed) *destroyed = shader_destroy_calls;
+    if (vertex_bound) *vertex_bound = vertex_shader_bind_calls;
+    if (pixel_bound) *pixel_bound = pixel_shader_bind_calls;
+    if (last_vertex) *last_vertex = last_vertex_shader;
+    if (last_pixel) *last_pixel = last_pixel_shader;
+    if (bad_description) *bad_description = bad_shader_description;
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverFailNextShader(void)
+{
+    InterlockedExchange(&fail_next_shader, 1);
 }
 
 static HRESULT mock_close_adapter(D3D10DDI_HADAPTER adapter)

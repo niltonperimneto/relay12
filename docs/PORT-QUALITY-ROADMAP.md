@@ -28,7 +28,7 @@ successful local build is not evidence by itself.
 | D3D12TranslationLayer linker | Three static archives contain 37 unique translation-unit objects; standard CI links them into D3D11On12 | Static library links reproducibly without ATL, telemetry, PIX, or MSVC runtime imports (ACHIEVED) |
 | D3D11On12 source | Pinned patch series (0001–0016); `_com_error`, `CComPtr`, `__if_exists`, MSVC pragmas/warnings removed; member detection tested | Prepared tree passes portability inventory and clean-room header scan (ACHIEVED) |
 | D3D11On12 compiler/linker | Portable Linux/MinGW build linked against portable DTL and audited in standard CI; EWDK as secondary lane | Driver DLL compiles, links reproducibly, and passes export/import audit (ACHIEVED) |
-| Wine host | Router and fail-closed core tests only | Real adapter/device creation, callback reachability audit, and explicit unsupported-path tests |
+| Wine host | Real adapter/device lifecycle; draw/flush; topology; owned vertex/index buffers; input layouts; vertex/pixel shader lifecycle and binding, all covered by the native mock driver | Complete Texture2D, render-target, and basic frame-state routing, then prove the same callbacks against a real D3D12 device |
 | Frame correctness | DDI mock readback agrees with application test expectations | Both tests pass against the real host, with centre/corner pixels compared byte-for-byte |
 | Failure behavior | Interface, router, negative-compile, and concurrency tests | Allocation/interface/state-transition fault injection at every new boundary |
 | Concurrency | Shared-state audit and oversubscribed core stress | Every newly shared object adds lifetime and shutdown stress before integration |

@@ -8,7 +8,7 @@
  * initializers: any method the core is not expected to call is left NULL, so
  * an unexpected call faults immediately instead of passing silently.
  *
- * Build: x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -Werror -Irelay12-d3d11 \
+ * Build: x86_64-w64-mingw32-clang -O2 -Wall -Wextra -Werror -Irelay12-d3d11 \
  *            -c -o d3d11on12coretest.o tests/d3d11on12coretest.c
  */
 #include <windows.h>

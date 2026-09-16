@@ -212,6 +212,14 @@ makes the worklist a dependency order on structure groups, not a list of slots:
 | Stream-output and tessellation shader structures | `pfnCreateGeometryShader`, `pfnCalcPrivateGeometryShaderWithStreamOutput`, `pfnCreateGeometryShaderWithStreamOutput`, `pfnCreateHullShader`, `pfnCreateDomainShader`, `pfnCreateComputeShader`, `pfnCalcPrivateTessellationShaderSize`, `pfnCreateElementLayout`, the `pfn*SetShaderWithIfaces` family, `pfnRetrieveShaderComment`, `pfnAssignDebugBinary` |
 | State structures (blend, depth-stencil, rasterizer, sampler) — **done** | `pfnSetBlendState`, `pfnSetDepthStencilState`, `pfnSetRasterizerState` — **done**; `pfnPsSetSamplers` and the rest of the `pfn*SetSamplers` family remain, an untextured frame not needing them |
 | Element layout and input assembly — **done** | `pfnCalcPrivateElementLayoutSize`, `pfnCreateElementLayout`, `pfnDestroyElementLayout`, `pfnIaSetInputLayout`, `pfnIaSetVertexBuffers`, `pfnIaSetIndexBuffer`, `pfnIaSetTopology` |
+
+The Wine host now consumes this family as well: it reuses Wine's DXBC input
+signature parser to resolve semantic names to input registers, creates an owned
+driver element-layout handle, routes `IASetInputLayout`, rejects stale or
+foreign handles, and destroys surviving layouts before device teardown. Its
+lifetime tests also cover null unbinding, injected `pfnSetErrorCb` failure, and
+concurrent binding versus destruction; registry removal drains shared-lock
+binders before the driver handle is destroyed.
 | Depth-stencil and unordered-access view *handles* — **done** | `pfnSetRenderTargets`. The handles are declared; nothing promoted can create either kind of view, which is the MVP state |
 | Shader binding (`D3D10DDI_HSHADER`) — **done** | `pfnVsSetShader`, `pfnPsSetShader`, `pfnGsSetShader`, `pfnHsSetShader`, `pfnDsSetShader`, `pfnCsSetShader` — one typedef |
 | Query structures and `D3D10DDI_QUERY` | `pfnCalcPrivateQuerySize`, `pfnCreateQuery`, `pfnDestroyQuery`, `pfnQueryBegin`, `pfnQueryEnd`, `pfnQueryGetData`, `pfnSetPredication` |
@@ -233,8 +241,10 @@ implementation.
 
 **3.3. WDDM Interface Translation**
 * **Status:** Ongoing
-* **Action:** Finalize the state/pipeline mapping mechanisms across `hs`, `ds`,
-  `ps`, and `vs` shaders natively against macOS translation limits.
+* **Done:** `vs` and `ps` creation, destruction, and immediate-context binding
+  now cross the Wine/Relay12 boundary with typed lifetime validation.
+* **Action:** Complete `hs`, `ds`, geometry, compute, and shader-interface
+  binding once their remaining public DDI structures are authored.
 
 **3.4. CI & End-to-End Test Harness**
 * **Status:** Framework Drafted

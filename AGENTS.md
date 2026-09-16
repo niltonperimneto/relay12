@@ -98,7 +98,7 @@ All modifications to this codebase must preserve the following architectural inv
 ## 4. Compilation and Toolchain Rules
 
 ### 4.1 MinGW-w64 GCC Configuration
-- PE binaries are compiled with `x86_64-w64-mingw32-g++` in C++17 mode.
+- PE binaries are compiled with `x86_64-w64-mingw32-clang++` in C++17 mode.
 - Linkage against `libstdc++` and `libgcc_s` is prohibited to ensure runtime independence; PE binaries must import only `kernel32.dll` and `msvcrt.dll`.
 - Code must be compiled with `-fno-exceptions -fno-rtti`.
 
