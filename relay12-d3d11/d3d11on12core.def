@@ -7,3 +7,13 @@ WineD3D11On12CreateBufferV1 @5
 WineD3D11On12DestroyBufferV1 @6
 WineD3D11On12SetVertexBuffersV1 @7
 WineD3D11On12SetIndexBufferV1 @8
+WineD3D11On12CreateInputLayoutV1 @9
+WineD3D11On12DestroyInputLayoutV1 @10
+WineD3D11On12SetInputLayoutV1 @11
+WineD3D11On12CreateVertexShaderV1 @12
+WineD3D11On12CreatePixelShaderV1 @13
+WineD3D11On12DestroyShaderV1 @14
+WineD3D11On12SetVertexShaderV1 @15
+WineD3D11On12SetPixelShaderV1 @16
+WineD3D11On12CreateTexture2DV1 @17
+WineD3D11On12DestroyTexture2DV1 @18
