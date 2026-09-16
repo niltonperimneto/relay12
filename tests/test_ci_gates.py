@@ -69,6 +69,8 @@ class WineD3D11BackendGate(unittest.TestCase):
         (source / "device.c").write_text(device)
         (source / "buffer.c").write_text("\n".join(
             check_wine_d3d11_backend.REQUIRED_BUFFER))
+        (source / "shader.c").write_text("\n".join(
+            check_wine_d3d11_backend.REQUIRED_SHADER))
         (source / "d3d11_main.c").write_text("\n".join(
             check_wine_d3d11_backend.REQUIRED_MAIN))
         (root / "configure.ac").write_text(
@@ -103,6 +105,17 @@ class WineD3D11BackendGate(unittest.TestCase):
         (root / "dlls/d3d11on12host/Makefile.in").unlink()
         errors = check_wine_d3d11_backend.check_tree(root)
         self.assertTrue(any("Makefile.in is missing" in error for error in errors))
+
+    def test_shader_lifecycle_regression_is_rejected(self):
+        root = self.make_tree("\n".join(
+            check_wine_d3d11_backend.REQUIRED_HEADER), "\n".join(
+            check_wine_d3d11_backend.REQUIRED_DEVICE))
+        shader = root / "dlls/d3d11/shader.c"
+        shader.write_text(shader.read_text().replace(
+            "device_impl->backend_ops->destroy_vertex_shader(device_impl, shader);",
+            ""))
+        errors = check_wine_d3d11_backend.check_tree(root)
+        self.assertTrue(any("destroy_vertex_shader" in error for error in errors))
 
 
 class D3D11On12PortGate(unittest.TestCase):
@@ -859,6 +872,7 @@ class LayoutModel(unittest.TestCase):
             if struct.padding()
         }
         self.assertEqual(padding, {
+            "D3D10DDIARG_CREATEELEMENTLAYOUT": [(12, 4)],
             "D3D10DDIARG_CREATEDEVICE": [(76, 4)],
             "D3D11DDIARG_CREATEDEFERREDCONTEXT": [(36, 4)],
             "D3D11DDIARG_CREATERESOURCE": [(76, 4)],

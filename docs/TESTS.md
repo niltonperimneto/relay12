@@ -63,6 +63,9 @@ real frame.
 Before extending a newly introduced lifetime boundary, add focused coverage
 for partial creation, `pfnSetErrorCb`, double destruction, adapter teardown,
 stale and cross-device handles, and concurrent create/bind/destroy activity.
+The buffer, input-layout, and vertex/pixel shader boundaries now carry that
+coverage in the native mock-driver suite, including DDI error injection and
+device-teardown invalidation.
 Do not delay the rendering path to build exhaustive mocks: mocks cannot prove
 barrier, residency, command submission, shader, or presentation correctness.
 
@@ -79,3 +82,11 @@ The runtime checkpoints, in order, are:
 The EWDK linked-driver build is also a required release gate. If runner or
 toolchain availability causes that job to skip, the portable lane may guide
 continued development but does not qualify a canary runtime for game testing.
+
+The input-layout boundary now exercises these rules in
+`d3d11on12openadapter.c`: null unbinding, stale and cross-device rejection,
+`pfnSetErrorCb` allocation failure cleanup, adapter teardown invalidation, and
+an eight-thread bind-versus-destroy stress pass. Destruction removes a layout
+from the registry while holding the exclusive lock, which first drains every
+in-flight shared-lock binding and prevents a new binding from observing the
+driver object before `DestroyElementLayout` runs.

@@ -302,12 +302,15 @@ BOOL CALLBACK initializeDriver(PINIT_ONCE, PVOID, PVOID *) noexcept
 }
 
 struct AdapterState;
+struct InputLayoutState;
+struct ShaderState;
 struct ResourceState
 {
     ResourceState *registryNext;
     ResourceState *ownerNext;
     AdapterState *owner;
-    WineD3D11On12Buffer *publicHandle;
+    void *publicHandle;
+    UINT kind;
     D3D11_RESOURCE_FLAGS flags;
     D3D10DDI_HRESOURCE driverHandle;
     D3D10DDI_HRTRESOURCE runtimeHandle;
@@ -315,16 +318,25 @@ struct ResourceState
     unsigned char privateResource[1];
 };
 
+#define RESOURCE_KIND_BUFFER 1u
+#define RESOURCE_KIND_TEXTURE2D 2u
+
 INIT_ONCE resourceRegistryOnce = INIT_ONCE_STATIC_INIT;
 /* shared-state: published once through resourceRegistryOnce */
 SRWLOCK resourceRegistryLock;
 /* shared-state: published once through resourceRegistryOnce */
 ResourceState *resourceRegistry;
+/* shared-state: published once through resourceRegistryOnce */
+InputLayoutState *inputLayoutRegistry;
+/* shared-state: published once through resourceRegistryOnce */
+ShaderState *shaderRegistry;
 
 BOOL CALLBACK initializeResourceRegistry(PINIT_ONCE, PVOID, PVOID *) noexcept
 {
     InitializeSRWLock(&resourceRegistryLock);
     resourceRegistry = nullptr;
+    inputLayoutRegistry = nullptr;
+    shaderRegistry = nullptr;
     return TRUE;
 }
 
@@ -411,8 +423,115 @@ struct AdapterState
     bool deviceCreated;
     volatile LONG lastDdiError;
     ResourceState *resources;
+    InputLayoutState *inputLayouts;
+    ShaderState *shaders;
     unsigned char privateDevice[1];
 };
+
+struct ShaderState
+{
+    ShaderState *registryNext;
+    ShaderState *ownerNext;
+    AdapterState *owner;
+    WineD3D11On12Shader *publicHandle;
+    UINT stage;
+    D3D10DDI_HSHADER driverHandle;
+    D3D10DDI_HRTSHADER runtimeHandle;
+    bool created;
+    unsigned char privateShader[1];
+};
+
+void unlinkShader(ShaderState *shader) noexcept
+{
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry,
+            nullptr, nullptr);
+    AcquireSRWLockExclusive(&resourceRegistryLock);
+    ShaderState **link = &shaderRegistry;
+    while (*link && *link != shader)
+        link = &(*link)->registryNext;
+    if (*link)
+        *link = shader->registryNext;
+    ReleaseSRWLockExclusive(&resourceRegistryLock);
+}
+
+void unlinkOwnerShader(ShaderState *shader) noexcept
+{
+    ShaderState **link = &shader->owner->shaders;
+    while (*link && *link != shader)
+        link = &(*link)->ownerNext;
+    if (*link)
+        *link = shader->ownerNext;
+}
+
+void destroyShaderState(ShaderState *shader) noexcept
+{
+    if (!shader)
+        return;
+    AdapterState *owner = shader->owner;
+    if (shader->created && owner && owner->deviceCreated
+            && owner->deviceFuncs.pfnDestroyShader)
+        owner->deviceFuncs.pfnDestroyShader(owner->hDevice,
+                shader->driverHandle);
+    unlinkShader(shader);
+    if (shader->publicHandle)
+    {
+        shader->publicHandle->hDrvShader = nullptr;
+        shader->publicHandle->runtimeState = nullptr;
+    }
+    HeapFree(GetProcessHeap(), 0, shader);
+}
+
+struct InputLayoutState
+{
+    InputLayoutState *registryNext;
+    InputLayoutState *ownerNext;
+    AdapterState *owner;
+    WineD3D11On12InputLayout *publicHandle;
+    D3D10DDI_HELEMENTLAYOUT driverHandle;
+    D3D10DDI_HRTELEMENTLAYOUT runtimeHandle;
+    bool created;
+    unsigned char privateLayout[1];
+};
+
+void unlinkInputLayout(InputLayoutState *layout) noexcept
+{
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry,
+            nullptr, nullptr);
+    AcquireSRWLockExclusive(&resourceRegistryLock);
+    InputLayoutState **link = &inputLayoutRegistry;
+    while (*link && *link != layout)
+        link = &(*link)->registryNext;
+    if (*link)
+        *link = layout->registryNext;
+    ReleaseSRWLockExclusive(&resourceRegistryLock);
+}
+
+void unlinkOwnerInputLayout(InputLayoutState *layout) noexcept
+{
+    InputLayoutState **link = &layout->owner->inputLayouts;
+    while (*link && *link != layout)
+        link = &(*link)->ownerNext;
+    if (*link)
+        *link = layout->ownerNext;
+}
+
+void destroyInputLayoutState(InputLayoutState *layout) noexcept
+{
+    if (!layout)
+        return;
+    AdapterState *owner = layout->owner;
+    if (layout->created && owner && owner->deviceCreated
+            && owner->deviceFuncs.pfnDestroyElementLayout)
+        owner->deviceFuncs.pfnDestroyElementLayout(owner->hDevice,
+                layout->driverHandle);
+    unlinkInputLayout(layout);
+    if (layout->publicHandle)
+    {
+        layout->publicHandle->hDrvElementLayout = nullptr;
+        layout->publicHandle->runtimeState = nullptr;
+    }
+    HeapFree(GetProcessHeap(), 0, layout);
+}
 
 void unlinkResource(ResourceState *resource) noexcept
 {
@@ -451,8 +570,10 @@ void destroyResourceState(ResourceState *resource) noexcept
     unlinkResource(resource);
     if (resource->publicHandle)
     {
-        resource->publicHandle->hDrvResource = nullptr;
-        resource->publicHandle->runtimeState = nullptr;
+        WineD3D11On12Buffer *handle = static_cast<WineD3D11On12Buffer *>(
+                resource->publicHandle);
+        handle->hDrvResource = nullptr;
+        handle->runtimeState = nullptr;
     }
     HeapFree(GetProcessHeap(), 0, resource);
 }
@@ -471,6 +592,18 @@ void destroyAdapterState(AdapterState *state) noexcept
     if (!state)
         return;
 
+    while (state->inputLayouts)
+    {
+        InputLayoutState *layout = state->inputLayouts;
+        state->inputLayouts = layout->ownerNext;
+        destroyInputLayoutState(layout);
+    }
+    while (state->shaders)
+    {
+        ShaderState *shader = state->shaders;
+        state->shaders = shader->ownerNext;
+        destroyShaderState(shader);
+    }
     while (state->resources)
     {
         ResourceState *resource = state->resources;
@@ -1101,6 +1234,9 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateBufferV1(
     args.pInitialDataUP = initialData ? &upload : nullptr;
     args.ResourceDimension = D3D10DDIRESOURCE_BUFFER;
     args.Usage = description->Usage;
+    args.BindFlags = description->BindFlags;
+    args.MapFlags = description->CPUAccessFlags;
+    args.MiscFlags = description->MiscFlags;
     args.Format = DXGI_FORMAT_UNKNOWN;
     args.SampleDesc.Count = 1;
     args.MipLevels = 1;
@@ -1120,6 +1256,7 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateBufferV1(
 
     resource->owner = owner;
     resource->publicHandle = buffer;
+    resource->kind = RESOURCE_KIND_BUFFER;
     resource->flags.BindFlags = description->BindFlags;
     resource->flags.MiscFlags = description->MiscFlags;
     resource->flags.CPUAccessFlags = description->CPUAccessFlags;
@@ -1196,11 +1333,179 @@ ResourceState *findBufferLocked(AdapterState *owner,
     {
         if (resource == buffer->runtimeState && resource->owner == owner
                 && resource->publicHandle == buffer && resource->created
+                && resource->kind == RESOURCE_KIND_BUFFER
                 && resource->driverHandle.pDrvPrivate == buffer->hDrvResource
                 && (resource->flags.BindFlags & requiredBindFlag))
             return resource;
     }
     return nullptr;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12CreateTexture2DV1(
+        WineD3D11On12AdapterDevice *adapterDevice,
+        const D3D11_TEXTURE2D_DESC *description,
+        const D3D11_SUBRESOURCE_DATA *initialData,
+        WineD3D11On12Texture2D *texture) noexcept
+{
+    if (!adapterDevice || adapterDevice->size != sizeof(*adapterDevice)
+            || !description || !description->Width || !description->Height
+            || !description->ArraySize || !description->SampleDesc.Count
+            || description->Format == DXGI_FORMAT_UNKNOWN || !texture
+            || texture->size != sizeof(*texture))
+        return E_INVALIDARG;
+    texture->reserved = 0;
+    texture->hDrvResource = nullptr;
+    texture->runtimeState = nullptr;
+    AdapterState *owner = static_cast<AdapterState *>(adapterDevice->runtimeState);
+    if (!owner || !owner->deviceCreated
+            || !owner->deviceFuncs.pfnCalcPrivateResourceSize
+            || !owner->deviceFuncs.pfnCreateResource
+            || !owner->deviceFuncs.pfnDestroyResource)
+        return DXGI_ERROR_UNSUPPORTED;
+
+    UINT fullMipLevels = 1;
+    for (UINT extent = description->Width > description->Height
+            ? description->Width : description->Height; extent > 1; extent >>= 1)
+        ++fullMipLevels;
+    const UINT mipLevels = description->MipLevels
+            ? description->MipLevels : fullMipLevels;
+    if (mipLevels > fullMipLevels || description->ArraySize > ~0u / mipLevels)
+        return E_INVALIDARG;
+    const UINT subresourceCount = mipLevels * description->ArraySize;
+    if (subresourceCount > (~static_cast<SIZE_T>(0)) / sizeof(D3D10DDI_MIPINFO)
+            || subresourceCount > (~static_cast<SIZE_T>(0))
+                    / sizeof(D3D10_DDIARG_SUBRESOURCE_UP))
+        return E_OUTOFMEMORY;
+    D3D10DDI_MIPINFO *mips = static_cast<D3D10DDI_MIPINFO *>(HeapAlloc(
+            GetProcessHeap(), HEAP_ZERO_MEMORY,
+            subresourceCount * sizeof(*mips)));
+    D3D10_DDIARG_SUBRESOURCE_UP *uploads = initialData
+            ? static_cast<D3D10_DDIARG_SUBRESOURCE_UP *>(HeapAlloc(
+                    GetProcessHeap(), HEAP_ZERO_MEMORY,
+                    subresourceCount * sizeof(*uploads))) : nullptr;
+    if (!mips || (initialData && !uploads))
+    {
+        if (uploads) HeapFree(GetProcessHeap(), 0, uploads);
+        if (mips) HeapFree(GetProcessHeap(), 0, mips);
+        return E_OUTOFMEMORY;
+    }
+    for (UINT array = 0; array < description->ArraySize; ++array)
+        for (UINT mip = 0; mip < mipLevels; ++mip)
+        {
+            const UINT index = array * mipLevels + mip;
+            const UINT width = description->Width >> mip
+                    ? description->Width >> mip : 1;
+            const UINT height = description->Height >> mip
+                    ? description->Height >> mip : 1;
+            mips[index] = {width, height, 1, width, height, 1};
+            if (initialData)
+            {
+                if (!initialData[index].pSysMem)
+                {
+                    HeapFree(GetProcessHeap(), 0, uploads);
+                    HeapFree(GetProcessHeap(), 0, mips);
+                    return E_INVALIDARG;
+                }
+                uploads[index].pSysMem = initialData[index].pSysMem;
+                uploads[index].SysMemPitch = initialData[index].SysMemPitch;
+                uploads[index].SysMemSlicePitch = initialData[index].SysMemSlicePitch;
+            }
+        }
+    D3D11DDIARG_CREATERESOURCE args = {};
+    args.pMipInfoList = mips;
+    args.pInitialDataUP = uploads;
+    args.ResourceDimension = D3D10DDIRESOURCE_TEXTURE2D;
+    args.Usage = description->Usage;
+    args.BindFlags = description->BindFlags;
+    args.MapFlags = description->CPUAccessFlags;
+    args.MiscFlags = description->MiscFlags;
+    args.Format = description->Format;
+    args.SampleDesc = description->SampleDesc;
+    args.MipLevels = mipLevels;
+    args.ArraySize = description->ArraySize;
+    const SIZE_T privateSize = owner->deviceFuncs.pfnCalcPrivateResourceSize(
+            owner->hDevice, &args);
+    if (!privateSize || privateSize > ~static_cast<SIZE_T>(0)
+            - offsetof(ResourceState, privateResource))
+    {
+        if (uploads) HeapFree(GetProcessHeap(), 0, uploads);
+        HeapFree(GetProcessHeap(), 0, mips);
+        return E_FAIL;
+    }
+    ResourceState *resource = static_cast<ResourceState *>(HeapAlloc(
+            GetProcessHeap(), HEAP_ZERO_MEMORY,
+            offsetof(ResourceState, privateResource) + privateSize));
+    if (!resource)
+    {
+        if (uploads) HeapFree(GetProcessHeap(), 0, uploads);
+        HeapFree(GetProcessHeap(), 0, mips);
+        return E_OUTOFMEMORY;
+    }
+    resource->owner = owner;
+    resource->publicHandle = texture;
+    resource->kind = RESOURCE_KIND_TEXTURE2D;
+    resource->flags.BindFlags = description->BindFlags;
+    resource->flags.MiscFlags = description->MiscFlags;
+    resource->flags.CPUAccessFlags = description->CPUAccessFlags;
+    resource->driverHandle.pDrvPrivate = resource->privateResource;
+    resource->runtimeHandle.handle = resource;
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry,
+            nullptr, nullptr);
+    AcquireSRWLockExclusive(&resourceRegistryLock);
+    resource->registryNext = resourceRegistry;
+    resourceRegistry = resource;
+    resource->ownerNext = owner->resources;
+    owner->resources = resource;
+    ReleaseSRWLockExclusive(&resourceRegistryLock);
+    InterlockedExchange(&owner->lastDdiError, S_OK);
+    owner->deviceFuncs.pfnCreateResource(owner->hDevice, &args,
+            resource->driverHandle, resource->runtimeHandle);
+    if (uploads) HeapFree(GetProcessHeap(), 0, uploads);
+    HeapFree(GetProcessHeap(), 0, mips);
+    const HRESULT hr = InterlockedCompareExchange(&owner->lastDdiError,
+            S_OK, S_OK);
+    if (FAILED(hr))
+    {
+        AcquireSRWLockExclusive(&resourceRegistryLock);
+        unlinkOwnerResource(resource);
+        ReleaseSRWLockExclusive(&resourceRegistryLock);
+        unlinkResource(resource);
+        HeapFree(GetProcessHeap(), 0, resource);
+        return hr;
+    }
+    resource->created = true;
+    texture->hDrvResource = resource->driverHandle.pDrvPrivate;
+    texture->runtimeState = resource;
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12DestroyTexture2DV1(
+        WineD3D11On12Texture2D *texture) noexcept
+{
+    if (!texture || texture->size != sizeof(*texture))
+        return E_INVALIDARG;
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry,
+            nullptr, nullptr);
+    AcquireSRWLockExclusive(&resourceRegistryLock);
+    ResourceState *resource = nullptr;
+    for (ResourceState *entry = resourceRegistry; entry; entry = entry->registryNext)
+        if (entry == texture->runtimeState && entry->publicHandle == texture
+                && entry->kind == RESOURCE_KIND_TEXTURE2D
+                && entry->driverHandle.pDrvPrivate == texture->hDrvResource)
+        {
+            resource = entry;
+            unlinkOwnerResource(entry);
+            break;
+        }
+    ReleaseSRWLockExclusive(&resourceRegistryLock);
+    if (resource)
+        destroyResourceState(resource);
+    else
+    {
+        texture->hDrvResource = nullptr;
+        texture->runtimeState = nullptr;
+    }
+    return S_OK;
 }
 
 extern "C" HRESULT WINAPI WineD3D11On12SetVertexBuffersV1(
@@ -1279,6 +1584,370 @@ extern "C" HRESULT WINAPI WineD3D11On12SetIndexBufferV1(
             offset);
     ReleaseSRWLockShared(&resourceRegistryLock);
     return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12CreateInputLayoutV1(
+        WineD3D11On12AdapterDevice *adapterDevice,
+        const D3D11_INPUT_ELEMENT_DESC *elements, const UINT *registers,
+        UINT elementCount, WineD3D11On12InputLayout *layout) noexcept
+{
+    if (!adapterDevice || adapterDevice->size != sizeof(*adapterDevice)
+            || !elements || !registers || !elementCount
+            || elementCount > D3D11_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT
+            || !layout || layout->size != sizeof(*layout))
+        return E_INVALIDARG;
+    layout->reserved = 0;
+    layout->hDrvElementLayout = nullptr;
+    layout->runtimeState = nullptr;
+
+    AdapterState *owner = static_cast<AdapterState *>(adapterDevice->runtimeState);
+    if (!owner || !owner->deviceCreated
+            || !owner->deviceFuncs.pfnCalcPrivateElementLayoutSize
+            || !owner->deviceFuncs.pfnCreateElementLayout
+            || !owner->deviceFuncs.pfnDestroyElementLayout)
+        return DXGI_ERROR_UNSUPPORTED;
+
+    D3D10DDIARG_INPUT_ELEMENT_DESC ddiElements[
+            D3D11_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT] = {};
+    for (UINT i = 0; i < elementCount; ++i)
+    {
+        if (elements[i].InputSlot >= D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT
+                || elements[i].InputSlotClass > D3D11_INPUT_PER_INSTANCE_DATA)
+            return E_INVALIDARG;
+        ddiElements[i].InputSlot = elements[i].InputSlot;
+        ddiElements[i].AlignedByteOffset = elements[i].AlignedByteOffset;
+        ddiElements[i].Format = elements[i].Format;
+        ddiElements[i].InputSlotClass = elements[i].InputSlotClass;
+        ddiElements[i].InstanceDataStepRate = elements[i].InstanceDataStepRate;
+        ddiElements[i].InputRegister = registers[i];
+    }
+    D3D10DDIARG_CREATEELEMENTLAYOUT args = {};
+    args.pVertexElements = ddiElements;
+    args.NumElements = elementCount;
+    const SIZE_T privateSize = owner->deviceFuncs.pfnCalcPrivateElementLayoutSize(
+            owner->hDevice, &args);
+    if (!privateSize || privateSize > ~static_cast<SIZE_T>(0)
+            - offsetof(InputLayoutState, privateLayout))
+        return E_FAIL;
+    InputLayoutState *state = static_cast<InputLayoutState *>(HeapAlloc(
+            GetProcessHeap(), HEAP_ZERO_MEMORY,
+            offsetof(InputLayoutState, privateLayout) + privateSize));
+    if (!state)
+        return E_OUTOFMEMORY;
+    state->owner = owner;
+    state->publicHandle = layout;
+    state->driverHandle.pDrvPrivate = state->privateLayout;
+    state->runtimeHandle.handle = state;
+
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry,
+            nullptr, nullptr);
+    AcquireSRWLockExclusive(&resourceRegistryLock);
+    state->registryNext = inputLayoutRegistry;
+    inputLayoutRegistry = state;
+    state->ownerNext = owner->inputLayouts;
+    owner->inputLayouts = state;
+    ReleaseSRWLockExclusive(&resourceRegistryLock);
+
+    InterlockedExchange(&owner->lastDdiError, S_OK);
+    owner->deviceFuncs.pfnCreateElementLayout(owner->hDevice, &args,
+            state->driverHandle, state->runtimeHandle);
+    HRESULT hr = InterlockedCompareExchange(&owner->lastDdiError, S_OK, S_OK);
+    if (FAILED(hr))
+    {
+        AcquireSRWLockExclusive(&resourceRegistryLock);
+        unlinkOwnerInputLayout(state);
+        ReleaseSRWLockExclusive(&resourceRegistryLock);
+        unlinkInputLayout(state);
+        HeapFree(GetProcessHeap(), 0, state);
+        return hr;
+    }
+    state->created = true;
+    layout->hDrvElementLayout = state->driverHandle.pDrvPrivate;
+    layout->runtimeState = state;
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12DestroyInputLayoutV1(
+        WineD3D11On12InputLayout *layout) noexcept
+{
+    if (!layout || layout->size != sizeof(*layout))
+        return E_INVALIDARG;
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry,
+            nullptr, nullptr);
+    AcquireSRWLockExclusive(&resourceRegistryLock);
+    InputLayoutState *state = nullptr;
+    InputLayoutState **registryLink = &inputLayoutRegistry;
+    for (InputLayoutState *entry = inputLayoutRegistry; entry;
+            registryLink = &entry->registryNext, entry = entry->registryNext)
+        if (entry == layout->runtimeState && entry->publicHandle == layout
+                && entry->driverHandle.pDrvPrivate == layout->hDrvElementLayout)
+        {
+            state = entry;
+            unlinkOwnerInputLayout(entry);
+            *registryLink = entry->registryNext;
+            layout->hDrvElementLayout = nullptr;
+            layout->runtimeState = nullptr;
+            break;
+        }
+    ReleaseSRWLockExclusive(&resourceRegistryLock);
+    if (!state)
+    {
+        layout->hDrvElementLayout = nullptr;
+        layout->runtimeState = nullptr;
+        return S_OK;
+    }
+    /* Removing the object under the exclusive registry lock waits for every
+     * in-flight binding (which holds the shared lock) and prevents any new
+     * one from finding it before the driver sees DestroyElementLayout. */
+    if (state->created && state->owner && state->owner->deviceCreated
+            && state->owner->deviceFuncs.pfnDestroyElementLayout)
+        state->owner->deviceFuncs.pfnDestroyElementLayout(
+                state->owner->hDevice, state->driverHandle);
+    HeapFree(GetProcessHeap(), 0, state);
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12SetInputLayoutV1(
+        WineD3D11On12AdapterDevice *adapterDevice,
+        WineD3D11On12InputLayout *layout) noexcept
+{
+    if (!adapterDevice || adapterDevice->size != sizeof(*adapterDevice))
+        return E_INVALIDARG;
+    AdapterState *owner = static_cast<AdapterState *>(adapterDevice->runtimeState);
+    if (!owner || !owner->deviceCreated || !owner->deviceFuncs.pfnIaSetInputLayout)
+        return DXGI_ERROR_UNSUPPORTED;
+    D3D10DDI_HELEMENTLAYOUT handle = {};
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry,
+            nullptr, nullptr);
+    AcquireSRWLockShared(&resourceRegistryLock);
+    if (layout)
+    {
+        InputLayoutState *found = nullptr;
+        for (InputLayoutState *entry = inputLayoutRegistry; entry;
+                entry = entry->registryNext)
+            if (entry == layout->runtimeState && entry->owner == owner
+                    && entry->publicHandle == layout && entry->created
+                    && entry->driverHandle.pDrvPrivate == layout->hDrvElementLayout)
+            {
+                found = entry;
+                break;
+            }
+        if (!found)
+        {
+            ReleaseSRWLockShared(&resourceRegistryLock);
+            return E_INVALIDARG;
+        }
+        handle = found->driverHandle;
+    }
+    owner->deviceFuncs.pfnIaSetInputLayout(owner->hDevice, handle);
+    ReleaseSRWLockShared(&resourceRegistryLock);
+    return S_OK;
+}
+
+HRESULT createBasicShader(WineD3D11On12AdapterDevice *adapterDevice,
+        const void *byteCode, SIZE_T byteCodeLength,
+        WineD3D11On12Shader *shader, UINT stage) noexcept
+{
+    if (!adapterDevice || adapterDevice->size != sizeof(*adapterDevice)
+            || !byteCode || byteCodeLength < 32 || byteCodeLength % sizeof(UINT)
+            || !shader
+            || shader->size != sizeof(*shader))
+        return E_INVALIDARG;
+    shader->stage = 0;
+    shader->hDrvShader = nullptr;
+    shader->runtimeState = nullptr;
+    AdapterState *owner = static_cast<AdapterState *>(adapterDevice->runtimeState);
+    PFND3D11_1DDI_CREATEVERTEXSHADER createVertex = owner
+            ? owner->deviceFuncs.pfnCreateVertexShader : nullptr;
+    PFND3D11_1DDI_CREATEPIXELSHADER createPixel = owner
+            ? owner->deviceFuncs.pfnCreatePixelShader : nullptr;
+    if (!owner || !owner->deviceCreated
+            || !owner->deviceFuncs.pfnCalcPrivateShaderSize
+            || !owner->deviceFuncs.pfnDestroyShader
+            || (stage == WINE_D3D11ON12_SHADER_VERTEX && !createVertex)
+            || (stage == WINE_D3D11ON12_SHADER_PIXEL && !createPixel))
+        return DXGI_ERROR_UNSUPPORTED;
+
+    const unsigned char *bytes = static_cast<const unsigned char *>(byteCode);
+    UINT magic, containerSize, chunkCount;
+    memcpy(&magic, bytes, sizeof(magic));
+    memcpy(&containerSize, bytes + 24, sizeof(containerSize));
+    memcpy(&chunkCount, bytes + 28, sizeof(chunkCount));
+    if (magic != 0x43425844 || containerSize != byteCodeLength
+            || chunkCount > (byteCodeLength - 32) / sizeof(UINT))
+        return E_INVALIDARG;
+    UINT *tokens = static_cast<UINT *>(HeapAlloc(GetProcessHeap(), 0,
+            byteCodeLength));
+    if (!tokens)
+        return E_OUTOFMEMORY;
+    memcpy(tokens, byteCode, byteCodeLength);
+    const SIZE_T privateSize = owner->deviceFuncs.pfnCalcPrivateShaderSize(
+            owner->hDevice, tokens, nullptr);
+    if (!privateSize || privateSize > ~static_cast<SIZE_T>(0)
+            - offsetof(ShaderState, privateShader))
+    {
+        HeapFree(GetProcessHeap(), 0, tokens);
+        return E_FAIL;
+    }
+    ShaderState *state = static_cast<ShaderState *>(HeapAlloc(GetProcessHeap(),
+            HEAP_ZERO_MEMORY, offsetof(ShaderState, privateShader) + privateSize));
+    if (!state)
+    {
+        HeapFree(GetProcessHeap(), 0, tokens);
+        return E_OUTOFMEMORY;
+    }
+    state->owner = owner;
+    state->publicHandle = shader;
+    state->stage = stage;
+    state->driverHandle.pDrvPrivate = state->privateShader;
+    state->runtimeHandle.handle = state;
+
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry,
+            nullptr, nullptr);
+    AcquireSRWLockExclusive(&resourceRegistryLock);
+    state->registryNext = shaderRegistry;
+    shaderRegistry = state;
+    state->ownerNext = owner->shaders;
+    owner->shaders = state;
+    ReleaseSRWLockExclusive(&resourceRegistryLock);
+
+    InterlockedExchange(&owner->lastDdiError, S_OK);
+    if (stage == WINE_D3D11ON12_SHADER_VERTEX)
+        createVertex(owner->hDevice, tokens, state->driverHandle,
+                state->runtimeHandle, nullptr);
+    else
+        createPixel(owner->hDevice, tokens, state->driverHandle,
+                state->runtimeHandle, nullptr);
+    HeapFree(GetProcessHeap(), 0, tokens);
+    HRESULT hr = InterlockedCompareExchange(&owner->lastDdiError, S_OK, S_OK);
+    if (FAILED(hr))
+    {
+        AcquireSRWLockExclusive(&resourceRegistryLock);
+        unlinkOwnerShader(state);
+        ReleaseSRWLockExclusive(&resourceRegistryLock);
+        unlinkShader(state);
+        HeapFree(GetProcessHeap(), 0, state);
+        return hr;
+    }
+    state->created = true;
+    shader->stage = stage;
+    shader->hDrvShader = state->driverHandle.pDrvPrivate;
+    shader->runtimeState = state;
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12CreateVertexShaderV1(
+        WineD3D11On12AdapterDevice *adapterDevice, const void *byteCode,
+        SIZE_T byteCodeLength, WineD3D11On12Shader *shader) noexcept
+{
+    return createBasicShader(adapterDevice, byteCode, byteCodeLength, shader,
+            WINE_D3D11ON12_SHADER_VERTEX);
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12CreatePixelShaderV1(
+        WineD3D11On12AdapterDevice *adapterDevice, const void *byteCode,
+        SIZE_T byteCodeLength, WineD3D11On12Shader *shader) noexcept
+{
+    return createBasicShader(adapterDevice, byteCode, byteCodeLength, shader,
+            WINE_D3D11ON12_SHADER_PIXEL);
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12DestroyShaderV1(
+        WineD3D11On12Shader *shader) noexcept
+{
+    if (!shader || shader->size != sizeof(*shader))
+        return E_INVALIDARG;
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry,
+            nullptr, nullptr);
+    AcquireSRWLockExclusive(&resourceRegistryLock);
+    ShaderState *state = nullptr;
+    ShaderState **link = &shaderRegistry;
+    for (ShaderState *entry = shaderRegistry; entry;
+            link = &entry->registryNext, entry = entry->registryNext)
+        if (entry == shader->runtimeState && entry->publicHandle == shader
+                && entry->driverHandle.pDrvPrivate == shader->hDrvShader
+                && entry->stage == shader->stage)
+        {
+            state = entry;
+            unlinkOwnerShader(entry);
+            *link = entry->registryNext;
+            shader->stage = 0;
+            shader->hDrvShader = nullptr;
+            shader->runtimeState = nullptr;
+            break;
+        }
+    ReleaseSRWLockExclusive(&resourceRegistryLock);
+    if (!state)
+    {
+        shader->stage = 0;
+        shader->hDrvShader = nullptr;
+        shader->runtimeState = nullptr;
+        return S_OK;
+    }
+    if (state->created && state->owner && state->owner->deviceCreated
+            && state->owner->deviceFuncs.pfnDestroyShader)
+        state->owner->deviceFuncs.pfnDestroyShader(state->owner->hDevice,
+                state->driverHandle);
+    HeapFree(GetProcessHeap(), 0, state);
+    return S_OK;
+}
+
+HRESULT setBasicShader(WineD3D11On12AdapterDevice *adapterDevice,
+        WineD3D11On12Shader *shader, UINT stage) noexcept
+{
+    if (!adapterDevice || adapterDevice->size != sizeof(*adapterDevice))
+        return E_INVALIDARG;
+    AdapterState *owner = static_cast<AdapterState *>(adapterDevice->runtimeState);
+    PFND3D10DDI_SETSHADER setShader = nullptr;
+    if (owner)
+        setShader = stage == WINE_D3D11ON12_SHADER_VERTEX
+                ? owner->deviceFuncs.pfnVsSetShader
+                : owner->deviceFuncs.pfnPsSetShader;
+    if (!owner || !owner->deviceCreated || !setShader)
+        return DXGI_ERROR_UNSUPPORTED;
+    D3D10DDI_HSHADER handle = {};
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry,
+            nullptr, nullptr);
+    AcquireSRWLockShared(&resourceRegistryLock);
+    if (shader)
+    {
+        ShaderState *found = nullptr;
+        for (ShaderState *entry = shaderRegistry; entry;
+                entry = entry->registryNext)
+            if (entry == shader->runtimeState && entry->owner == owner
+                    && entry->publicHandle == shader && entry->created
+                    && entry->stage == stage && shader->stage == stage
+                    && entry->driverHandle.pDrvPrivate == shader->hDrvShader)
+            {
+                found = entry;
+                break;
+            }
+        if (!found)
+        {
+            ReleaseSRWLockShared(&resourceRegistryLock);
+            return E_INVALIDARG;
+        }
+        handle = found->driverHandle;
+    }
+    setShader(owner->hDevice, handle);
+    ReleaseSRWLockShared(&resourceRegistryLock);
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12SetVertexShaderV1(
+        WineD3D11On12AdapterDevice *adapterDevice,
+        WineD3D11On12Shader *shader) noexcept
+{
+    return setBasicShader(adapterDevice, shader,
+            WINE_D3D11ON12_SHADER_VERTEX);
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12SetPixelShaderV1(
+        WineD3D11On12AdapterDevice *adapterDevice,
+        WineD3D11On12Shader *shader) noexcept
+{
+    return setBasicShader(adapterDevice, shader,
+            WINE_D3D11ON12_SHADER_PIXEL);
 }
 
 extern "C" HRESULT WINAPI WineD3D11CreateDeviceV2(IDXGIAdapter *adapter,

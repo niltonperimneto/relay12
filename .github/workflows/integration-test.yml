@@ -24,8 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install MinGW-w64
-        run: brew install mingw-w64
+      - name: Install LLVM-MinGW
+        run: brew install llvm-mingw
 
       - name: Cross-compile the E2E harnesses
         run: |
@@ -33,14 +33,14 @@ jobs:
           # The triangle harness is the MVP target: VS+PS, one render target,
           # a draw, and a staging readback.  It mirrors, at the application
           # level, what tests/d3d11ddi_triangle.c asserts at the DDI level.
-          x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Werror \
+          x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
             -o d3d11_e2e_triangle.exe tests/e2e_d3d11_triangle.cpp \
             -ld3d11 -ld3dcompiler -ldxgi -luuid
           # The compute harness is kept as a future target.  It exercises a
           # compute shader and a UAV, neither of which is in the MVP scope
           # described by docs/D3D11ON12-SKIPPABLE-ELEMENTS.md, so it will stay
           # unrunnable for longer than the triangle does.
-          x86_64-w64-mingw32-g++ -std=c++17 -O2 \
+          x86_64-w64-mingw32-clang++ -std=c++17 -O2 \
             -o d3d11_e2e_harness.exe tests/e2e_d3d11_harness.cpp \
             -ld3d11 -ld3dcompiler
 

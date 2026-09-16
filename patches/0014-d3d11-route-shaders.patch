@@ -1,0 +1,447 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Relay12 <relay12@example.invalid>
+Date: Tue, 15 Sep 2026 18:54:28 -0300
+Subject: [PATCH] d3d11: route vertex and pixel shaders through On12 backend
+
+---
+ dlls/d3d11/d3d11_main.c    | 118 ++++++++++++++++++++++++++++++++++++-
+ dlls/d3d11/d3d11_private.h |  28 +++++++++
+ dlls/d3d11/device.c        |  48 +++++++++++----
+ dlls/d3d11/shader.c        |  56 ++++++++++++++++--
+ 4 files changed, 233 insertions(+), 17 deletions(-)
+
+diff --git a/dlls/d3d11/d3d11_main.c b/dlls/d3d11/d3d11_main.c
+index 58ba7521..869b1c75 100644
+--- a/dlls/d3d11/d3d11_main.c
++++ b/dlls/d3d11/d3d11_main.c
+@@ -415,6 +415,14 @@ struct wine_d3d11on12_input_layout
+     void *runtime_state;
+ };
+ 
++struct wine_d3d11on12_shader
++{
++    UINT size;
++    UINT stage;
++    void *driver_shader;
++    void *runtime_state;
++};
++
+ typedef HRESULT (WINAPI *wine_d3d11on12_open_adapter_fn)(IUnknown *,
+         IUnknown *const *, UINT, UINT, struct wine_d3d11on12_adapter_device *);
+ typedef HRESULT (WINAPI *wine_d3d11on12_close_adapter_fn)(
+@@ -448,6 +456,14 @@ typedef HRESULT (WINAPI *wine_d3d11on12_destroy_input_layout_fn)(
+ typedef HRESULT (WINAPI *wine_d3d11on12_set_input_layout_fn)(
+         struct wine_d3d11on12_adapter_device *,
+         struct wine_d3d11on12_input_layout *);
++typedef HRESULT (WINAPI *wine_d3d11on12_create_shader_fn)(
++        struct wine_d3d11on12_adapter_device *, const void *, SIZE_T,
++        struct wine_d3d11on12_shader *);
++typedef HRESULT (WINAPI *wine_d3d11on12_destroy_shader_fn)(
++        struct wine_d3d11on12_shader *);
++typedef HRESULT (WINAPI *wine_d3d11on12_set_shader_fn)(
++        struct wine_d3d11on12_adapter_device *,
++        struct wine_d3d11on12_shader *);
+ 
+ struct wine_d3d11on12_core_interface
+ {
+@@ -483,6 +499,11 @@ struct d3d11_on12_backend
+     wine_d3d11on12_create_input_layout_fn create_input_layout;
+     wine_d3d11on12_destroy_input_layout_fn destroy_input_layout;
+     wine_d3d11on12_set_input_layout_fn set_input_layout;
++    wine_d3d11on12_create_shader_fn create_vertex_shader;
++    wine_d3d11on12_create_shader_fn create_pixel_shader;
++    wine_d3d11on12_destroy_shader_fn destroy_shader;
++    wine_d3d11on12_set_shader_fn set_vertex_shader;
++    wine_d3d11on12_set_shader_fn set_pixel_shader;
+ };
+ 
+ static void d3d11_on12_backend_destroy(struct d3d_device *device)
+@@ -682,6 +703,72 @@ static void d3d11_on12_backend_set_input_layout(
+         WARN("D3D11On12 input-layout binding failed, hr %#lx.\n", hr);
+ }
+ 
++static HRESULT d3d11_on12_backend_create_vertex_shader(
++        struct d3d_device *device, const void *byte_code,
++        SIZE_T byte_code_length, struct d3d_vertex_shader *shader)
++{
++    struct d3d11_on12_backend *backend = device->backend_private;
++    return backend->create_vertex_shader(&backend->adapter, byte_code,
++            byte_code_length, (struct wine_d3d11on12_shader *)
++                    &shader->backend_shader);
++}
++
++static HRESULT d3d11_on12_backend_create_pixel_shader(
++        struct d3d_device *device, const void *byte_code,
++        SIZE_T byte_code_length, struct d3d_pixel_shader *shader)
++{
++    struct d3d11_on12_backend *backend = device->backend_private;
++    return backend->create_pixel_shader(&backend->adapter, byte_code,
++            byte_code_length, (struct wine_d3d11on12_shader *)
++                    &shader->backend_shader);
++}
++
++static void d3d11_on12_backend_destroy_vertex_shader(
++        struct d3d_device *device, struct d3d_vertex_shader *shader)
++{
++    struct d3d11_on12_backend *backend = device->backend_private;
++    HRESULT hr = backend->destroy_shader((struct wine_d3d11on12_shader *)
++            &shader->backend_shader);
++    if (FAILED(hr))
++        WARN("D3D11On12 vertex-shader destruction failed, hr %#lx.\n", hr);
++}
++
++static void d3d11_on12_backend_destroy_pixel_shader(
++        struct d3d_device *device, struct d3d_pixel_shader *shader)
++{
++    struct d3d11_on12_backend *backend = device->backend_private;
++    HRESULT hr = backend->destroy_shader((struct wine_d3d11on12_shader *)
++            &shader->backend_shader);
++    if (FAILED(hr))
++        WARN("D3D11On12 pixel-shader destruction failed, hr %#lx.\n", hr);
++}
++
++static void d3d11_on12_backend_set_vertex_shader(
++        struct d3d11_device_context *context, ID3D11VertexShader *shader)
++{
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    struct d3d_vertex_shader *shader_impl =
++            unsafe_impl_from_ID3D11VertexShader(shader);
++    HRESULT hr = backend->set_vertex_shader(&backend->adapter,
++            shader_impl ? (struct wine_d3d11on12_shader *)
++                    &shader_impl->backend_shader : NULL);
++    if (FAILED(hr))
++        WARN("D3D11On12 vertex-shader binding failed, hr %#lx.\n", hr);
++}
++
++static void d3d11_on12_backend_set_pixel_shader(
++        struct d3d11_device_context *context, ID3D11PixelShader *shader)
++{
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    struct d3d_pixel_shader *shader_impl =
++            unsafe_impl_from_ID3D11PixelShader(shader);
++    HRESULT hr = backend->set_pixel_shader(&backend->adapter,
++            shader_impl ? (struct wine_d3d11on12_shader *)
++                    &shader_impl->backend_shader : NULL);
++    if (FAILED(hr))
++        WARN("D3D11On12 pixel-shader binding failed, hr %#lx.\n", hr);
++}
++
+ static HRESULT d3d11_on12_backend_create_wrapped_resource(
+         struct d3d_device *device, IUnknown *resource12,
+         const D3D11_RESOURCE_FLAGS *flags, D3D12_RESOURCE_STATES input_state,
+@@ -740,6 +827,12 @@ static const struct d3d11_backend_ops d3d11_on12_backend_ops =
+     d3d11_on12_backend_create_input_layout,
+     d3d11_on12_backend_destroy_input_layout,
+     d3d11_on12_backend_set_input_layout,
++    d3d11_on12_backend_create_vertex_shader,
++    d3d11_on12_backend_create_pixel_shader,
++    d3d11_on12_backend_destroy_vertex_shader,
++    d3d11_on12_backend_destroy_pixel_shader,
++    d3d11_on12_backend_set_vertex_shader,
++    d3d11_on12_backend_set_pixel_shader,
+     d3d11_on12_backend_create_wrapped_resource,
+     d3d11_on12_backend_release_wrapped_resources,
+     d3d11_on12_backend_acquire_wrapped_resources,
+@@ -824,10 +917,33 @@ static HRESULT d3d11_on12_create_unpublished_backend(IUnknown *device,
+             "WineD3D11On12SetInputLayoutV1");
+     memcpy(&backend->set_input_layout, &address,
+             sizeof(backend->set_input_layout));
++    address = GetProcAddress(backend->core_module,
++            "WineD3D11On12CreateVertexShaderV1");
++    memcpy(&backend->create_vertex_shader, &address,
++            sizeof(backend->create_vertex_shader));
++    address = GetProcAddress(backend->core_module,
++            "WineD3D11On12CreatePixelShaderV1");
++    memcpy(&backend->create_pixel_shader, &address,
++            sizeof(backend->create_pixel_shader));
++    address = GetProcAddress(backend->core_module,
++            "WineD3D11On12DestroyShaderV1");
++    memcpy(&backend->destroy_shader, &address,
++            sizeof(backend->destroy_shader));
++    address = GetProcAddress(backend->core_module,
++            "WineD3D11On12SetVertexShaderV1");
++    memcpy(&backend->set_vertex_shader, &address,
++            sizeof(backend->set_vertex_shader));
++    address = GetProcAddress(backend->core_module,
++            "WineD3D11On12SetPixelShaderV1");
++    memcpy(&backend->set_pixel_shader, &address,
++            sizeof(backend->set_pixel_shader));
+     if (!backend->create_buffer || !backend->destroy_buffer
+             || !backend->set_vertex_buffers || !backend->set_index_buffer
+             || !backend->create_input_layout
+-            || !backend->destroy_input_layout || !backend->set_input_layout)
++            || !backend->destroy_input_layout || !backend->set_input_layout
++            || !backend->create_vertex_shader
++            || !backend->create_pixel_shader || !backend->destroy_shader
++            || !backend->set_vertex_shader || !backend->set_pixel_shader)
+     {
+         FreeLibrary(backend->core_module);
+         free(backend);
+diff --git a/dlls/d3d11/d3d11_private.h b/dlls/d3d11/d3d11_private.h
+index 3d22411a..45951c60 100644
+--- a/dlls/d3d11/d3d11_private.h
++++ b/dlls/d3d11/d3d11_private.h
+@@ -330,6 +330,13 @@ struct d3d_vertex_shader
+     struct wined3d_private_store private_store;
+     struct wined3d_shader *wined3d_shader;
+     ID3D11Device5 *device;
++    struct
++    {
++        UINT size;
++        UINT stage;
++        void *driver_shader;
++        void *runtime_state;
++    } backend_shader;
+ };
+ 
+ HRESULT d3d_vertex_shader_create(struct d3d_device *device, const void *byte_code, SIZE_T byte_code_length,
+@@ -396,6 +403,13 @@ struct d3d_pixel_shader
+     struct wined3d_private_store private_store;
+     struct wined3d_shader *wined3d_shader;
+     ID3D11Device5 *device;
++    struct
++    {
++        UINT size;
++        UINT stage;
++        void *driver_shader;
++        void *runtime_state;
++    } backend_shader;
+ };
+ 
+ HRESULT d3d_pixel_shader_create(struct d3d_device *device, const void *byte_code, SIZE_T byte_code_length,
+@@ -619,6 +633,20 @@ struct d3d11_backend_ops
+             struct d3d_input_layout *layout);
+     void (*set_input_layout)(struct d3d11_device_context *context,
+             ID3D11InputLayout *layout);
++    HRESULT (*create_vertex_shader)(struct d3d_device *device,
++            const void *byte_code, SIZE_T byte_code_length,
++            struct d3d_vertex_shader *shader);
++    HRESULT (*create_pixel_shader)(struct d3d_device *device,
++            const void *byte_code, SIZE_T byte_code_length,
++            struct d3d_pixel_shader *shader);
++    void (*destroy_vertex_shader)(struct d3d_device *device,
++            struct d3d_vertex_shader *shader);
++    void (*destroy_pixel_shader)(struct d3d_device *device,
++            struct d3d_pixel_shader *shader);
++    void (*set_vertex_shader)(struct d3d11_device_context *context,
++            ID3D11VertexShader *shader);
++    void (*set_pixel_shader)(struct d3d11_device_context *context,
++            ID3D11PixelShader *shader);
+     HRESULT (*create_wrapped_resource)(struct d3d_device *device,
+             IUnknown *resource12, const D3D11_RESOURCE_FLAGS *flags,
+             D3D12_RESOURCE_STATES input_state,
+diff --git a/dlls/d3d11/device.c b/dlls/d3d11/device.c
+index 64efe6ee..cce6f24a 100644
+--- a/dlls/d3d11/device.c
++++ b/dlls/d3d11/device.c
+@@ -127,6 +127,24 @@ static void wined3d_backend_set_index_buffer(
+             wined3dformat_from_dxgi_format(format), offset);
+ }
+ 
++static void wined3d_backend_set_vertex_shader(
++        struct d3d11_device_context *context, ID3D11VertexShader *shader)
++{
++    struct d3d_vertex_shader *shader_impl = unsafe_impl_from_ID3D11VertexShader(shader);
++    wined3d_device_context_set_shader(context->wined3d_context,
++            WINED3D_SHADER_TYPE_VERTEX,
++            shader_impl ? shader_impl->wined3d_shader : NULL);
++}
++
++static void wined3d_backend_set_pixel_shader(
++        struct d3d11_device_context *context, ID3D11PixelShader *shader)
++{
++    struct d3d_pixel_shader *shader_impl = unsafe_impl_from_ID3D11PixelShader(shader);
++    wined3d_device_context_set_shader(context->wined3d_context,
++            WINED3D_SHADER_TYPE_PIXEL,
++            shader_impl ? shader_impl->wined3d_shader : NULL);
++}
++
+ static const struct d3d11_backend_ops wined3d_backend_ops =
+ {
+     wined3d_backend_destroy_device,
+@@ -150,6 +168,12 @@ static const struct d3d11_backend_ops wined3d_backend_ops =
+     NULL,
+     NULL,
+     NULL,
++    wined3d_backend_set_vertex_shader,
++    wined3d_backend_set_pixel_shader,
++    NULL,
++    NULL,
++    NULL,
++    NULL,
+ };
+ 
+ static BOOL d3d_array_reserve(void **elements, SIZE_T *capacity, SIZE_T count, SIZE_T size)
+@@ -861,16 +885,13 @@ static void STDMETHODCALLTYPE d3d11_device_context_PSSetShader(ID3D11DeviceConte
+         ID3D11PixelShader *shader, ID3D11ClassInstance *const *class_instances, UINT class_instance_count)
+ {
+     struct d3d11_device_context *context = impl_from_ID3D11DeviceContext4(iface);
+-    struct d3d_pixel_shader *ps = unsafe_impl_from_ID3D11PixelShader(shader);
+-
+     TRACE("iface %p, shader %p, class_instances %p, class_instance_count %u.\n",
+             iface, shader, class_instances, class_instance_count);
+ 
+     if (class_instance_count)
+         FIXME("Dynamic linking is not implemented yet.\n");
+ 
+-    wined3d_device_context_set_shader(context->wined3d_context, WINED3D_SHADER_TYPE_PIXEL,
+-            ps ? ps->wined3d_shader : NULL);
++    context->device->backend_ops->set_pixel_shader(context, shader);
+ }
+ 
+ static void STDMETHODCALLTYPE d3d11_device_context_PSSetSamplers(ID3D11DeviceContext4 *iface,
+@@ -886,16 +907,13 @@ static void STDMETHODCALLTYPE d3d11_device_context_VSSetShader(ID3D11DeviceConte
+         ID3D11VertexShader *shader, ID3D11ClassInstance *const *class_instances, UINT class_instance_count)
+ {
+     struct d3d11_device_context *context = impl_from_ID3D11DeviceContext4(iface);
+-    struct d3d_vertex_shader *vs = unsafe_impl_from_ID3D11VertexShader(shader);
+-
+     TRACE("iface %p, shader %p, class_instances %p, class_instance_count %u.\n",
+             iface, shader, class_instances, class_instance_count);
+ 
+     if (class_instance_count)
+         FIXME("Dynamic linking is not implemented yet.\n");
+ 
+-    wined3d_device_context_set_shader(context->wined3d_context, WINED3D_SHADER_TYPE_VERTEX,
+-            vs ? vs->wined3d_shader : NULL);
++    context->device->backend_ops->set_vertex_shader(context, shader);
+ }
+ 
+ static void STDMETHODCALLTYPE d3d11_device_context_DrawIndexed(ID3D11DeviceContext4 *iface,
+@@ -5960,8 +5978,8 @@ static void STDMETHODCALLTYPE d3d10_device_PSSetShader(ID3D10Device1 *iface,
+ 
+     TRACE("iface %p, shader %p\n", iface, shader);
+ 
+-    wined3d_device_context_set_shader(device->immediate_context.wined3d_context,
+-            WINED3D_SHADER_TYPE_PIXEL, ps ? ps->wined3d_shader : NULL);
++    device->backend_ops->set_pixel_shader(&device->immediate_context,
++            ps ? &ps->ID3D11PixelShader_iface : NULL);
+ }
+ 
+ static void STDMETHODCALLTYPE d3d10_device_PSSetSamplers(ID3D10Device1 *iface,
+@@ -5981,8 +5999,8 @@ static void STDMETHODCALLTYPE d3d10_device_VSSetShader(ID3D10Device1 *iface,
+ 
+     TRACE("iface %p, shader %p\n", iface, shader);
+ 
+-    wined3d_device_context_set_shader(device->immediate_context.wined3d_context,
+-            WINED3D_SHADER_TYPE_VERTEX, vs ? vs->wined3d_shader : NULL);
++    device->backend_ops->set_vertex_shader(&device->immediate_context,
++            vs ? &vs->ID3D11VertexShader_iface : NULL);
+ }
+ 
+ static void STDMETHODCALLTYPE d3d10_device_DrawIndexed(ID3D10Device1 *iface, UINT index_count,
+@@ -8425,6 +8443,12 @@ struct d3d_device *d3d_device_create_backend(
+             || !backend_ops->create_input_layout
+             || !backend_ops->destroy_input_layout
+             || !backend_ops->set_input_layout
++            || !backend_ops->create_vertex_shader
++            || !backend_ops->create_pixel_shader
++            || !backend_ops->destroy_vertex_shader
++            || !backend_ops->destroy_pixel_shader
++            || !backend_ops->set_vertex_shader
++            || !backend_ops->set_pixel_shader
+             || !backend_ops->create_wrapped_resource
+             || !backend_ops->release_wrapped_resources
+             || !backend_ops->acquire_wrapped_resources
+diff --git a/dlls/d3d11/shader.c b/dlls/d3d11/shader.c
+index 7b6e52ed..a8ebdaa1 100644
+--- a/dlls/d3d11/shader.c
++++ b/dlls/d3d11/shader.c
+@@ -69,7 +69,8 @@ static ULONG STDMETHODCALLTYPE d3d11_vertex_shader_AddRef(ID3D11VertexShader *if
+     if (refcount == 1)
+     {
+         ID3D11Device5_AddRef(shader->device);
+-        wined3d_shader_incref(shader->wined3d_shader);
++        if (shader->wined3d_shader)
++            wined3d_shader_incref(shader->wined3d_shader);
+     }
+ 
+     return refcount;
+@@ -86,7 +87,15 @@ static ULONG STDMETHODCALLTYPE d3d11_vertex_shader_Release(ID3D11VertexShader *i
+     {
+         ID3D11Device5 *device = shader->device;
+ 
+-        wined3d_shader_decref(shader->wined3d_shader);
++        if (shader->wined3d_shader)
++            wined3d_shader_decref(shader->wined3d_shader);
++        else
++        {
++            struct d3d_device *device_impl = impl_from_ID3D11Device5(device);
++            device_impl->backend_ops->destroy_vertex_shader(device_impl, shader);
++            wined3d_private_store_cleanup(&shader->private_store);
++            free(shader);
++        }
+         /* Release the device last, it may cause the wined3d device to be
+          * destroyed. */
+         ID3D11Device5_Release(device);
+@@ -267,6 +276,21 @@ static HRESULT d3d_vertex_shader_init(struct d3d_vertex_shader *shader, struct d
+     wined3d_mutex_lock();
+     wined3d_private_store_init(&shader->private_store);
+ 
++    if (device->backend_ops->create_vertex_shader)
++    {
++        shader->backend_shader.size = sizeof(shader->backend_shader);
++        if (FAILED(hr = device->backend_ops->create_vertex_shader(device,
++                byte_code, byte_code_length, shader)))
++        {
++            wined3d_private_store_cleanup(&shader->private_store);
++            wined3d_mutex_unlock();
++            return hr;
++        }
++        wined3d_mutex_unlock();
++        ID3D11Device5_AddRef(shader->device = &device->ID3D11Device5_iface);
++        return S_OK;
++    }
++
+     desc.byte_code = byte_code;
+     desc.byte_code_size = byte_code_length;
+     if (FAILED(hr = wined3d_shader_create_vs(device->wined3d_device, &desc, shader,
+@@ -361,7 +385,8 @@ static ULONG STDMETHODCALLTYPE d3d11_hull_shader_AddRef(ID3D11HullShader *iface)
+     if (refcount == 1)
+     {
+         ID3D11Device5_AddRef(shader->device);
+-        wined3d_shader_incref(shader->wined3d_shader);
++        if (shader->wined3d_shader)
++            wined3d_shader_incref(shader->wined3d_shader);
+     }
+ 
+     return refcount;
+@@ -377,7 +402,15 @@ static ULONG STDMETHODCALLTYPE d3d11_hull_shader_Release(ID3D11HullShader *iface
+     if (!refcount)
+     {
+         ID3D11Device5 *device = shader->device;
+-        wined3d_shader_decref(shader->wined3d_shader);
++        if (shader->wined3d_shader)
++            wined3d_shader_decref(shader->wined3d_shader);
++        else
++        {
++            struct d3d_device *device_impl = impl_from_ID3D11Device5(device);
++            device_impl->backend_ops->destroy_pixel_shader(device_impl, shader);
++            wined3d_private_store_cleanup(&shader->private_store);
++            free(shader);
++        }
+         /* Release the device last, it may cause the wined3d device to be
+          * destroyed. */
+         ID3D11Device5_Release(device);
+@@ -464,6 +497,21 @@ static HRESULT d3d11_hull_shader_init(struct d3d11_hull_shader *shader, struct d
+     wined3d_mutex_lock();
+     wined3d_private_store_init(&shader->private_store);
+ 
++    if (device->backend_ops->create_pixel_shader)
++    {
++        shader->backend_shader.size = sizeof(shader->backend_shader);
++        if (FAILED(hr = device->backend_ops->create_pixel_shader(device,
++                byte_code, byte_code_length, shader)))
++        {
++            wined3d_private_store_cleanup(&shader->private_store);
++            wined3d_mutex_unlock();
++            return hr;
++        }
++        wined3d_mutex_unlock();
++        ID3D11Device5_AddRef(shader->device = &device->ID3D11Device5_iface);
++        return S_OK;
++    }
++
+     desc.byte_code = byte_code;
+     desc.byte_code_size = byte_code_length;
+     if (FAILED(hr = wined3d_shader_create_hs(device->wined3d_device, &desc, shader,

@@ -1,0 +1,267 @@
+diff --git a/dlls/d3d11/d3d11_main.c b/dlls/d3d11/d3d11_main.c
+index ae4b6923..58ba7521 100644
+--- a/dlls/d3d11/d3d11_main.c
++++ b/dlls/d3d11/d3d11_main.c
+@@ -407,6 +407,14 @@ struct wine_d3d11on12_buffer
+     void *runtime_state;
+ };
+ 
++struct wine_d3d11on12_input_layout
++{
++    UINT size;
++    UINT reserved;
++    void *driver_layout;
++    void *runtime_state;
++};
++
+ typedef HRESULT (WINAPI *wine_d3d11on12_open_adapter_fn)(IUnknown *,
+         IUnknown *const *, UINT, UINT, struct wine_d3d11on12_adapter_device *);
+ typedef HRESULT (WINAPI *wine_d3d11on12_close_adapter_fn)(
+@@ -431,6 +439,15 @@ typedef HRESULT (WINAPI *wine_d3d11on12_set_vertex_buffers_fn)(
+ typedef HRESULT (WINAPI *wine_d3d11on12_set_index_buffer_fn)(
+         struct wine_d3d11on12_adapter_device *,
+         struct wine_d3d11on12_buffer *, DXGI_FORMAT, UINT);
++typedef HRESULT (WINAPI *wine_d3d11on12_create_input_layout_fn)(
++        struct wine_d3d11on12_adapter_device *,
++        const D3D11_INPUT_ELEMENT_DESC *, const UINT *, UINT,
++        struct wine_d3d11on12_input_layout *);
++typedef HRESULT (WINAPI *wine_d3d11on12_destroy_input_layout_fn)(
++        struct wine_d3d11on12_input_layout *);
++typedef HRESULT (WINAPI *wine_d3d11on12_set_input_layout_fn)(
++        struct wine_d3d11on12_adapter_device *,
++        struct wine_d3d11on12_input_layout *);
+ 
+ struct wine_d3d11on12_core_interface
+ {
+@@ -463,6 +480,9 @@ struct d3d11_on12_backend
+     wine_d3d11on12_destroy_buffer_fn destroy_buffer;
+     wine_d3d11on12_set_vertex_buffers_fn set_vertex_buffers;
+     wine_d3d11on12_set_index_buffer_fn set_index_buffer;
++    wine_d3d11on12_create_input_layout_fn create_input_layout;
++    wine_d3d11on12_destroy_input_layout_fn destroy_input_layout;
++    wine_d3d11on12_set_input_layout_fn set_input_layout;
+ };
+ 
+ static void d3d11_on12_backend_destroy(struct d3d_device *device)
+@@ -629,6 +649,39 @@ static void d3d11_on12_backend_set_index_buffer(
+         WARN("D3D11On12 index-buffer binding failed, hr %#lx.\n", hr);
+ }
+ 
++static HRESULT d3d11_on12_backend_create_input_layout(struct d3d_device *device,
++        const D3D11_INPUT_ELEMENT_DESC *elements, const UINT *registers,
++        UINT element_count, struct d3d_input_layout *layout)
++{
++    struct d3d11_on12_backend *backend = device->backend_private;
++    return backend->create_input_layout(&backend->adapter, elements, registers,
++            element_count, (struct wine_d3d11on12_input_layout *)
++                    &layout->backend_layout);
++}
++
++static void d3d11_on12_backend_destroy_input_layout(struct d3d_device *device,
++        struct d3d_input_layout *layout)
++{
++    struct d3d11_on12_backend *backend = device->backend_private;
++    HRESULT hr = backend->destroy_input_layout(
++            (struct wine_d3d11on12_input_layout *)&layout->backend_layout);
++    if (FAILED(hr))
++        WARN("D3D11On12 input-layout destruction failed, hr %#lx.\n", hr);
++}
++
++static void d3d11_on12_backend_set_input_layout(
++        struct d3d11_device_context *context, ID3D11InputLayout *layout)
++{
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    struct d3d_input_layout *layout_impl =
++            unsafe_impl_from_ID3D11InputLayout(layout);
++    HRESULT hr = backend->set_input_layout(&backend->adapter,
++            layout_impl ? (struct wine_d3d11on12_input_layout *)
++                    &layout_impl->backend_layout : NULL);
++    if (FAILED(hr))
++        WARN("D3D11On12 input-layout binding failed, hr %#lx.\n", hr);
++}
++
+ static HRESULT d3d11_on12_backend_create_wrapped_resource(
+         struct d3d_device *device, IUnknown *resource12,
+         const D3D11_RESOURCE_FLAGS *flags, D3D12_RESOURCE_STATES input_state,
+@@ -684,6 +737,9 @@ static const struct d3d11_backend_ops d3d11_on12_backend_ops =
+     d3d11_on12_backend_destroy_buffer,
+     d3d11_on12_backend_set_vertex_buffers,
+     d3d11_on12_backend_set_index_buffer,
++    d3d11_on12_backend_create_input_layout,
++    d3d11_on12_backend_destroy_input_layout,
++    d3d11_on12_backend_set_input_layout,
+     d3d11_on12_backend_create_wrapped_resource,
+     d3d11_on12_backend_release_wrapped_resources,
+     d3d11_on12_backend_acquire_wrapped_resources,
+@@ -756,8 +812,22 @@ static HRESULT d3d11_on12_create_unpublished_backend(IUnknown *device,
+             "WineD3D11On12SetIndexBufferV1");
+     memcpy(&backend->set_index_buffer, &address,
+             sizeof(backend->set_index_buffer));
++    address = GetProcAddress(backend->core_module,
++            "WineD3D11On12CreateInputLayoutV1");
++    memcpy(&backend->create_input_layout, &address,
++            sizeof(backend->create_input_layout));
++    address = GetProcAddress(backend->core_module,
++            "WineD3D11On12DestroyInputLayoutV1");
++    memcpy(&backend->destroy_input_layout, &address,
++            sizeof(backend->destroy_input_layout));
++    address = GetProcAddress(backend->core_module,
++            "WineD3D11On12SetInputLayoutV1");
++    memcpy(&backend->set_input_layout, &address,
++            sizeof(backend->set_input_layout));
+     if (!backend->create_buffer || !backend->destroy_buffer
+-            || !backend->set_vertex_buffers || !backend->set_index_buffer)
++            || !backend->set_vertex_buffers || !backend->set_index_buffer
++            || !backend->create_input_layout
++            || !backend->destroy_input_layout || !backend->set_input_layout)
+     {
+         FreeLibrary(backend->core_module);
+         free(backend);
+diff --git a/dlls/d3d11/d3d11_private.h b/dlls/d3d11/d3d11_private.h
+index 8046712f..3d22411a 100644
+--- a/dlls/d3d11/d3d11_private.h
++++ b/dlls/d3d11/d3d11_private.h
+@@ -304,6 +304,13 @@ struct d3d_input_layout
+     struct wined3d_private_store private_store;
+     struct wined3d_vertex_declaration *wined3d_decl;
+     ID3D11Device5 *device;
++    struct
++    {
++        UINT size;
++        UINT reserved;
++        void *driver_layout;
++        void *runtime_state;
++    } backend_layout;
+ };
+ 
+ HRESULT d3d_input_layout_create(struct d3d_device *device,
+@@ -604,6 +611,14 @@ struct d3d11_backend_ops
+             const UINT *offsets);
+     void (*set_index_buffer)(struct d3d11_device_context *context,
+             ID3D11Buffer *buffer, DXGI_FORMAT format, UINT offset);
++    HRESULT (*create_input_layout)(struct d3d_device *device,
++            const D3D11_INPUT_ELEMENT_DESC *elements,
++            const UINT *registers, UINT element_count,
++            struct d3d_input_layout *layout);
++    void (*destroy_input_layout)(struct d3d_device *device,
++            struct d3d_input_layout *layout);
++    void (*set_input_layout)(struct d3d11_device_context *context,
++            ID3D11InputLayout *layout);
+     HRESULT (*create_wrapped_resource)(struct d3d_device *device,
+             IUnknown *resource12, const D3D11_RESOURCE_FLAGS *flags,
+             D3D12_RESOURCE_STATES input_state,
+diff --git a/dlls/d3d11/device.c b/dlls/d3d11/device.c
+index 6f0f539f..64efe6ee 100644
+--- a/dlls/d3d11/device.c
++++ b/dlls/d3d11/device.c
+@@ -147,6 +147,9 @@ static const struct d3d11_backend_ops wined3d_backend_ops =
+     NULL,
+     NULL,
+     NULL,
++    NULL,
++    NULL,
++    NULL,
+ };
+ 
+ static BOOL d3d_array_reserve(void **elements, SIZE_T *capacity, SIZE_T count, SIZE_T size)
+@@ -983,7 +986,11 @@ static void STDMETHODCALLTYPE d3d11_device_context_IASetInputLayout(ID3D11Device
+ 
+     TRACE("iface %p, input_layout %p.\n", iface, input_layout);
+ 
+-    wined3d_device_context_set_vertex_declaration(context->wined3d_context, layout ? layout->wined3d_decl : NULL);
++    if (context->device->backend_ops->set_input_layout)
++        context->device->backend_ops->set_input_layout(context, input_layout);
++    else
++        wined3d_device_context_set_vertex_declaration(context->wined3d_context,
++                layout ? layout->wined3d_decl : NULL);
+ }
+ 
+ static void STDMETHODCALLTYPE d3d11_device_context_IASetVertexBuffers(ID3D11DeviceContext4 *iface,
+@@ -6019,8 +6026,13 @@ static void STDMETHODCALLTYPE d3d10_device_IASetInputLayout(ID3D10Device1 *iface
+ 
+     TRACE("iface %p, input_layout %p\n", iface, input_layout);
+ 
+-    wined3d_device_context_set_vertex_declaration(device->immediate_context.wined3d_context,
+-            layout ? layout->wined3d_decl : NULL);
++    if (device->backend_ops->set_input_layout)
++        device->backend_ops->set_input_layout(&device->immediate_context,
++                layout ? &layout->ID3D11InputLayout_iface : NULL);
++    else
++        wined3d_device_context_set_vertex_declaration(
++                device->immediate_context.wined3d_context,
++                layout ? layout->wined3d_decl : NULL);
+ }
+ 
+ static void STDMETHODCALLTYPE d3d10_device_IASetVertexBuffers(ID3D10Device1 *iface, UINT start_slot,
+@@ -8410,6 +8422,9 @@ struct d3d_device *d3d_device_create_backend(
+             || !backend_ops->set_primitive_topology
+             || !backend_ops->set_vertex_buffers
+             || !backend_ops->set_index_buffer
++            || !backend_ops->create_input_layout
++            || !backend_ops->destroy_input_layout
++            || !backend_ops->set_input_layout
+             || !backend_ops->create_wrapped_resource
+             || !backend_ops->release_wrapped_resources
+             || !backend_ops->acquire_wrapped_resources
+diff --git a/dlls/d3d11/inputlayout.c b/dlls/d3d11/inputlayout.c
+index b13e5577..4aca0571 100644
+--- a/dlls/d3d11/inputlayout.c
++++ b/dlls/d3d11/inputlayout.c
+@@ -161,7 +161,8 @@ static ULONG STDMETHODCALLTYPE d3d11_input_layout_AddRef(ID3D11InputLayout *ifac
+     if (refcount == 1)
+     {
+         ID3D11Device5_AddRef(layout->device);
+-        wined3d_vertex_declaration_incref(layout->wined3d_decl);
++        if (layout->wined3d_decl)
++            wined3d_vertex_declaration_incref(layout->wined3d_decl);
+     }
+ 
+     return refcount;
+@@ -177,7 +178,16 @@ static ULONG STDMETHODCALLTYPE d3d11_input_layout_Release(ID3D11InputLayout *ifa
+     if (!refcount)
+     {
+         ID3D11Device5 *device = layout->device;
+-        wined3d_vertex_declaration_decref(layout->wined3d_decl);
++        struct d3d_device *device_impl = impl_from_ID3D11Device5(device);
++        if (device_impl->backend_ops->destroy_input_layout)
++            device_impl->backend_ops->destroy_input_layout(device_impl, layout);
++        if (layout->wined3d_decl)
++            wined3d_vertex_declaration_decref(layout->wined3d_decl);
++        else
++        {
++            wined3d_private_store_cleanup(&layout->private_store);
++            free(layout);
++        }
+         ID3D11Device5_Release(device);
+     }
+ 
+@@ -365,8 +375,27 @@ static HRESULT d3d_input_layout_init(struct d3d_input_layout *layout, struct d3d
+         return hr;
+     }
+ 
+-    hr = wined3d_vertex_declaration_create(device->wined3d_device, wined3d_elements, element_count,
+-            layout, &d3d_input_layout_wined3d_parent_ops, &layout->wined3d_decl);
++    if (device->backend_ops->create_input_layout)
++    {
++        UINT *registers;
++        UINT i;
++
++        if (!(registers = malloc(element_count * sizeof(*registers))))
++            hr = E_OUTOFMEMORY;
++        else
++        {
++            for (i = 0; i < element_count; ++i)
++                registers[i] = wined3d_elements[i].output_slot;
++            layout->backend_layout.size = sizeof(layout->backend_layout);
++            hr = device->backend_ops->create_input_layout(device, element_descs,
++                    registers, element_count, layout);
++            free(registers);
++        }
++    }
++    else
++        hr = wined3d_vertex_declaration_create(device->wined3d_device,
++                wined3d_elements, element_count, layout,
++                &d3d_input_layout_wined3d_parent_ops, &layout->wined3d_decl);
+     free(wined3d_elements);
+     if (FAILED(hr))
+     {

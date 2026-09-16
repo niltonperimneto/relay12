@@ -18,6 +18,15 @@ REQUIRED_HEADER = (
     "void (*destroy_buffer)(struct d3d_device *device,",
     "void (*set_vertex_buffers)(struct d3d11_device_context *context,",
     "void (*set_index_buffer)(struct d3d11_device_context *context,",
+    "HRESULT (*create_input_layout)(struct d3d_device *device,",
+    "void (*destroy_input_layout)(struct d3d_device *device,",
+    "void (*set_input_layout)(struct d3d11_device_context *context,",
+    "HRESULT (*create_vertex_shader)(struct d3d_device *device,",
+    "HRESULT (*create_pixel_shader)(struct d3d_device *device,",
+    "void (*destroy_vertex_shader)(struct d3d_device *device,",
+    "void (*destroy_pixel_shader)(struct d3d_device *device,",
+    "void (*set_vertex_shader)(struct d3d11_device_context *context,",
+    "void (*set_pixel_shader)(struct d3d11_device_context *context,",
     "const struct d3d11_backend_ops *backend_ops;",
     "void *backend_private;",
     "BOOL standalone_allocation;",
@@ -38,11 +47,24 @@ REQUIRED_DEVICE = (
     "context->device->backend_ops->set_primitive_topology(context, topology);",
     "context->device->backend_ops->set_vertex_buffers(context, start_slot,",
     "context->device->backend_ops->set_index_buffer(context, buffer, format,",
+    "context->device->backend_ops->set_input_layout(context, input_layout);",
+    "device->backend_ops->set_input_layout(&device->immediate_context,",
+    "context->device->backend_ops->set_vertex_shader(context, shader);",
+    "context->device->backend_ops->set_pixel_shader(context, shader);",
     "device->backend_ops->get_feature_level(device)",
     "device->backend_ops->get_creation_flags(device)",
     "device->backend_ops->get_device_removed_reason(device)",
     "device->backend_ops->destroy_device(device);",
     "device->backend_ops = &wined3d_backend_ops;",
+    "|| !backend_ops->create_input_layout",
+    "|| !backend_ops->destroy_input_layout",
+    "|| !backend_ops->set_input_layout",
+    "|| !backend_ops->create_vertex_shader",
+    "|| !backend_ops->create_pixel_shader",
+    "|| !backend_ops->destroy_vertex_shader",
+    "|| !backend_ops->destroy_pixel_shader",
+    "|| !backend_ops->set_vertex_shader",
+    "|| !backend_ops->set_pixel_shader",
     "static const struct ID3D11On12Device1Vtbl d3d11_on12_device_vtbl",
     "return IUnknown_QueryInterface(device->outer_unk, iid, out);",
     "*out = &device->ID3D11On12Device1_iface;",
@@ -60,6 +82,14 @@ REQUIRED_BUFFER = (
     "buffer->backend_buffer.size = sizeof(buffer->backend_buffer);",
 )
 
+REQUIRED_SHADER = (
+    "device->backend_ops->create_vertex_shader(device,",
+    "device_impl->backend_ops->destroy_vertex_shader(device_impl, shader);",
+    "device->backend_ops->create_pixel_shader(device,",
+    "device_impl->backend_ops->destroy_pixel_shader(device_impl, shader);",
+    "shader->backend_shader.size = sizeof(shader->backend_shader);",
+)
+
 REQUIRED_MAIN = (
     "static const struct d3d11_backend_ops d3d11_on12_backend_ops",
     "WineD3D11On12OpenAdapterV1",
@@ -72,6 +102,19 @@ REQUIRED_MAIN = (
     "backend->create_buffer(&backend->adapter, desc, data,",
     "backend->set_vertex_buffers(&backend->adapter, start_slot,",
     "backend->set_index_buffer(&backend->adapter,",
+    "backend->create_input_layout(&backend->adapter, elements, registers,",
+    "backend->destroy_input_layout(",
+    "backend->set_input_layout(&backend->adapter,",
+    "backend->create_vertex_shader(&backend->adapter, byte_code,",
+    "backend->create_pixel_shader(&backend->adapter, byte_code,",
+    "backend->destroy_shader((struct wine_d3d11on12_shader *)",
+    "backend->set_vertex_shader(&backend->adapter,",
+    "backend->set_pixel_shader(&backend->adapter,",
+    '"WineD3D11On12CreateVertexShaderV1"',
+    '"WineD3D11On12CreatePixelShaderV1"',
+    '"WineD3D11On12DestroyShaderV1"',
+    '"WineD3D11On12SetVertexShaderV1"',
+    '"WineD3D11On12SetPixelShaderV1"',
 )
 
 
@@ -80,6 +123,7 @@ def check_tree(root):
     header = (root / "dlls/d3d11/d3d11_private.h").read_text()
     device = (root / "dlls/d3d11/device.c").read_text()
     buffer = (root / "dlls/d3d11/buffer.c").read_text()
+    shader = (root / "dlls/d3d11/shader.c").read_text()
     main = (root / "dlls/d3d11/d3d11_main.c").read_text()
     configure = (root / "configure.ac").read_text()
     host_makefile = root / "dlls/d3d11on12host/Makefile.in"
@@ -95,6 +139,9 @@ def check_tree(root):
     for marker in REQUIRED_BUFFER:
         if marker not in buffer:
             errors.append(f"buffer.c is missing: {marker}")
+    for marker in REQUIRED_SHADER:
+        if marker not in shader:
+            errors.append(f"shader.c is missing: {marker}")
     for marker in REQUIRED_MAIN:
         if marker not in main:
             errors.append(f"d3d11_main.c is missing: {marker}")

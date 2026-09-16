@@ -355,6 +355,29 @@ OPENRESOURCE = Struct(
     ],
 )
 
+# Group: input element and element-layout creation arguments
+# Specifications: D3D10DDIARG_INPUT_ELEMENT_DESC and
+# D3D10DDIARG_CREATEELEMENTLAYOUT public DDI pages.
+INPUT_ELEMENT_DESC = Struct(
+    "D3D10DDIARG_INPUT_ELEMENT_DESC",
+    [
+        Field("InputSlot", "UINT", *UINT),
+        Field("AlignedByteOffset", "UINT", *UINT),
+        Field("Format", "DXGI_FORMAT", *UINT),
+        Field("InputSlotClass", "D3D10_DDI_INPUT_CLASSIFICATION", *UINT),
+        Field("InstanceDataStepRate", "UINT", *UINT),
+        Field("InputRegister", "UINT", *UINT),
+    ],
+)
+
+CREATEELEMENTLAYOUT = Struct(
+    "D3D10DDIARG_CREATEELEMENTLAYOUT",
+    [
+        Field("pVertexElements", "const D3D10DDIARG_INPUT_ELEMENT_DESC *"),
+        Field("NumElements", "UINT", *UINT),
+    ],
+)
+
 # Group: shader resource view and render target view creation arguments
 # Specification:
 #   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3dwddm2_0ddiarg_createshaderresourceview
@@ -1253,6 +1276,8 @@ GROUPS = HANDLES + [
     CREATERESOURCE,
     CREATE11RESOURCE,
     OPENRESOURCE,
+    INPUT_ELEMENT_DESC,
+    CREATEELEMENTLAYOUT,
     BUFFER_SRV,
     TEX1D_SRV,
     TEX2D_SRV,
