@@ -451,8 +451,16 @@ jobs:
           x86_64-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
             -Irelay12-d3d11 -c -o d3d11on12openadapter.o \
             tests/d3d11on12openadapter.c
+          # The shader lifecycle, which the pinned driver reaches only through
+          # the ID3D11On12DDIDevice sub-object rather than the DDI table.
+          x86_64-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
+            -Irelay12-d3d11 -c -o d3d11on12shaderlifecycle.o \
+            tests/d3d11on12shaderlifecycle.c
+          # -Irelay12-d3d11 as well as ddi: the mock takes the sub-object slot
+          # indices from d3d11on12core.h instead of transcribing the interface
+          # a second time.
           x86_64-w64-mingw32-gcc -shared -std=gnu11 -O2 \
-            -Wall -Wextra -Werror -Irelay12-d3d11/ddi \
+            -Wall -Wextra -Werror -Irelay12-d3d11 -Irelay12-d3d11/ddi \
             -o d3d11on12.dll tests/d3d11on12mockdriver.c \
             -ldxgi
           # Linking with the C driver keeps the no-C++-runtime rule honest: if
@@ -470,6 +478,10 @@ jobs:
             d3d11on12openadapter.o d3d11on12core.o wine_d3d11_diag.o \
             -ld3d12 -ldxgi -ldxguid -luuid
           WINEDLLOVERRIDES=d3d11on12=n wine d3d11on12openadapter.exe
+          x86_64-w64-mingw32-gcc -o d3d11on12shaderlifecycle.exe \
+            d3d11on12shaderlifecycle.o d3d11on12core.o wine_d3d11_diag.o \
+            -ld3d12 -ldxgi -ldxguid -luuid
+          WINEDLLOVERRIDES=d3d11on12=n wine d3d11on12shaderlifecycle.exe
 
       - name: Run the D3D11-on-12 concurrency stress
         run: |

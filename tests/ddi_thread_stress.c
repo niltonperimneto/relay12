@@ -178,13 +178,17 @@ static DWORD WINAPI stress_thread(void *parameter)
                 || iface.version != WINE_D3D11ON12_ABI_VERSION
                 || iface.capabilities != (WINE_D3D11ON12_CAP_VALIDATION
                         | WINE_D3D11ON12_CAP_D3DMETAL_BOOTSTRAP
-                        | WINE_D3D11ON12_CAP_DEVICE_LIFECYCLE)
+                        | WINE_D3D11ON12_CAP_DEVICE_LIFECYCLE
+                        | WINE_D3D11ON12_CAP_SHADER_LIFECYCLE)
                 || iface.createDevice != WineD3D11On12CreateDeviceV1
                 || iface.createDirectDevice != WineD3D11CreateDeviceV2
                 || iface.createDirectDeviceAndSwapChain
                         != WineD3D11CreateDeviceAndSwapChainV2
                 || iface.closeAdapterDevice
-                        != WineD3D11On12CloseAdapterDeviceV1)
+                        != WineD3D11On12CloseAdapterDeviceV1
+                || iface.createShader != WineD3D11On12CreateShaderV1
+                || iface.destroyShader != WineD3D11On12DestroyShaderV1
+                || iface.setShader != WineD3D11On12SetShaderV1)
             fail("GetInterface", "the interface table was filled wrongly");
         for (reserved_index = 0; reserved_index < ARRAYSIZE(iface.reserved);
                 ++reserved_index)
