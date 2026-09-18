@@ -1172,6 +1172,7 @@ PROMOTED_SLOTS = {
     "PFND3D11_1DDI_CREATEVERTEXSHADER",
     "PFND3D11_1DDI_CREATEPIXELSHADER",
     "PFND3D10DDI_DESTROYSHADER",
+    "PFND3D11_1DDI_CALCPRIVATETESSELLATIONSHADERSIZE",
     # The element-layout, binding and draw group.  PFND3D10DDI_SETSHADER is
     # one typedef over six slots -- every stage's SetShader takes the same
     # parameter list -- so this set of 14 names promotes 19 slots.

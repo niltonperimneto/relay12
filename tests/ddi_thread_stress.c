@@ -179,7 +179,8 @@ static DWORD WINAPI stress_thread(void *parameter)
                 || iface.capabilities != (WINE_D3D11ON12_CAP_VALIDATION
                         | WINE_D3D11ON12_CAP_D3DMETAL_BOOTSTRAP
                         | WINE_D3D11ON12_CAP_DEVICE_LIFECYCLE
-                        | WINE_D3D11ON12_CAP_SHADER_LIFECYCLE)
+                        | WINE_D3D11ON12_CAP_SHADER_LIFECYCLE
+                        | WINE_D3D11ON12_CAP_EXTENDED_SHADER_STAGES)
                 || iface.createDevice != WineD3D11On12CreateDeviceV1
                 || iface.createDirectDevice != WineD3D11CreateDeviceV2
                 || iface.createDirectDeviceAndSwapChain

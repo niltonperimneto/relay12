@@ -77,6 +77,26 @@ struct SHADER_DESC
     ID3D11ClassLinkage *pLinkage;
 };
 
+/* What CreateGeometryShader takes instead.
+ *
+ * Its first two and last members are SHADER_DESC's, and on the path this host
+ * uses they are the only ones read: CreateUnderlyingShader takes pFunction,
+ * SizeInBytes and pLinkage, and the five stream-output members are consulted
+ * only by StreamOutShader, which is reached when the separate stream-output
+ * argument is non-null.  This host always passes null there, so those members
+ * are zeroed rather than populated -- see the create path below. */
+struct GEOMETRY_SHADER_DESC
+{
+    const BYTE *pFunction;
+    UINT SizeInBytes;
+    const D3D11_SO_DECLARATION_ENTRY *pDeclaration;
+    UINT NumElements;
+    const UINT *pBufferStrides;
+    UINT NumStrides;
+    UINT RasterizedStream;
+    ID3D11ClassLinkage *pLinkage;
+};
+
 /* Transcribed rather than approximated, because it is passed by value in a
  * vtable slot this host must lay out exactly even though it never calls it. */
 enum class WrapReason
@@ -121,26 +141,37 @@ struct SOpenAdapterArgs
  * a mock, instead of resting on two compilers emitting the same vtable for a
  * class neither of them can see the definition of.
  *
- * Every method up to CreatePixelShader is declared, in order, because a slot
+ * Every method up to CreateComputeShader is declared, in order, because a slot
  * this host never calls still determines the index of the two it does.  The
  * arguments of those unused slots are transcribed to the right size and no
  * further: D3DKMT_PRESENT, ResourceInfo, ID3D11On12DDIResource and
  * ID3D11On12DDIFence are pointer-only and stay incomplete, which is the same
  * treatment the clean-room header gives D3D11_1DDIARG_STAGE_IO_SIGNATURES.
  *
- * Methods after CreatePixelShader are deliberately absent.  Nothing indexes
+ * Methods after CreateComputeShader are deliberately absent.  Nothing indexes
  * past it, and transcribing slots to no purpose would be more surface for
  * scripts/check_adapter_args.py to police than the host needs.
  *
  * Provenance: third_party/D3D11On12/interface/D3D11On12DDI.h, MIT, pinned.
  * That gate compares this declaration to it on every run -- an upstream
- * insertion anywhere above CreateVertexShader silently renumbers the two
- * slots this host calls, and nothing in the build would otherwise notice. */
+ * insertion anywhere above CreateVertexShader silently renumbers every
+ * shader slot this host calls, and nothing in the build would otherwise
+ * notice. */
 typedef UINT32 D3DKMT_HANDLE;
 struct D3DKMT_PRESENT;
 struct ID3D11On12DDIResource;
 struct ID3D11On12DDIFence;
 struct ID3D11On12DDIDevice;
+/* Incomplete on purpose, and it is what keeps geometry shaders in scope.
+ *
+ * CreateGeometryShader's stream-output argument is documented optional, and
+ * the driver branches on it: non-null selects StreamOutShader, null selects
+ * the ordinary geometry shader.  This host only ever passes null, so the
+ * structure is never dereferenced on either side of the boundary and needs no
+ * authored layout -- the same treatment the clean-room header gives
+ * D3D11_1DDIARG_STAGE_IO_SIGNATURES.  Authoring it is what a future
+ * stream-output phase would have to do. */
+struct D3D11DDIARG_CREATEGEOMETRYSHADERWITHSTREAMOUTPUT;
 
 struct ID3D11On12DDIDeviceVtbl
 {
@@ -186,6 +217,16 @@ struct ID3D11On12DDIDeviceVtbl
             D3D10DDI_HSHADER hShader, D3D11On12::SHADER_DESC const *pDesc);
     HRESULT (STDMETHODCALLTYPE *CreatePixelShader)(ID3D11On12DDIDevice *This,
             D3D10DDI_HSHADER hShader, D3D11On12::SHADER_DESC const *pDesc);
+    HRESULT (STDMETHODCALLTYPE *CreateGeometryShader)(
+            ID3D11On12DDIDevice *This, D3D10DDI_HSHADER hShader,
+            D3D11On12::GEOMETRY_SHADER_DESC const *pDesc,
+            D3D11DDIARG_CREATEGEOMETRYSHADERWITHSTREAMOUTPUT const *pCGSWSOArgs);
+    HRESULT (STDMETHODCALLTYPE *CreateHullShader)(ID3D11On12DDIDevice *This,
+            D3D10DDI_HSHADER hShader, D3D11On12::SHADER_DESC const *pDesc);
+    HRESULT (STDMETHODCALLTYPE *CreateDomainShader)(ID3D11On12DDIDevice *This,
+            D3D10DDI_HSHADER hShader, D3D11On12::SHADER_DESC const *pDesc);
+    HRESULT (STDMETHODCALLTYPE *CreateComputeShader)(ID3D11On12DDIDevice *This,
+            D3D10DDI_HSHADER hShader, D3D11On12::SHADER_DESC const *pDesc);
 };
 
 struct ID3D11On12DDIDevice
@@ -202,15 +243,42 @@ WINE_D3D11ON12_ASSERT(offsetof(ID3D11On12DDIDeviceVtbl, CreateVertexShader)
         == WINE_D3D11ON12_DDIDEVICE_SLOT_CREATEVERTEXSHADER * sizeof(void *));
 WINE_D3D11ON12_ASSERT(offsetof(ID3D11On12DDIDeviceVtbl, CreatePixelShader)
         == WINE_D3D11ON12_DDIDEVICE_SLOT_CREATEPIXELSHADER * sizeof(void *));
+WINE_D3D11ON12_ASSERT(offsetof(ID3D11On12DDIDeviceVtbl, CreateGeometryShader)
+        == WINE_D3D11ON12_DDIDEVICE_SLOT_CREATEGEOMETRYSHADER * sizeof(void *));
+WINE_D3D11ON12_ASSERT(offsetof(ID3D11On12DDIDeviceVtbl, CreateHullShader)
+        == WINE_D3D11ON12_DDIDEVICE_SLOT_CREATEHULLSHADER * sizeof(void *));
+WINE_D3D11ON12_ASSERT(offsetof(ID3D11On12DDIDeviceVtbl, CreateDomainShader)
+        == WINE_D3D11ON12_DDIDEVICE_SLOT_CREATEDOMAINSHADER * sizeof(void *));
+WINE_D3D11ON12_ASSERT(offsetof(ID3D11On12DDIDeviceVtbl, CreateComputeShader)
+        == WINE_D3D11ON12_DDIDEVICE_SLOT_CREATECOMPUTESHADER * sizeof(void *));
 /* Every slot is one pointer wide, which is what makes an index an offset at
  * all.  A method returning a class by value could break that on some ABIs. */
 WINE_D3D11ON12_ASSERT(sizeof(ID3D11On12DDIDeviceVtbl)
-        == (WINE_D3D11ON12_DDIDEVICE_SLOT_CREATEPIXELSHADER + 1)
+        == (WINE_D3D11ON12_DDIDEVICE_SLOT_CREATECOMPUTESHADER + 1)
                 * sizeof(void *));
 WINE_D3D11ON12_ASSERT(sizeof(D3D11On12::SHADER_DESC)
         == WINE_D3D11ON12_SHADER_DESC_SIZE);
 WINE_D3D11ON12_ASSERT(offsetof(D3D11On12::SHADER_DESC, SizeInBytes) == 8);
 WINE_D3D11ON12_ASSERT(offsetof(D3D11On12::SHADER_DESC, pLinkage) == 16);
+WINE_D3D11ON12_ASSERT(sizeof(D3D11On12::GEOMETRY_SHADER_DESC)
+        == WINE_D3D11ON12_GEOMETRY_SHADER_DESC_SIZE);
+/* The three members the create path fills sit where SHADER_DESC's do not, so
+ * the two structures are not interchangeable and each is asserted. */
+WINE_D3D11ON12_ASSERT(offsetof(D3D11On12::GEOMETRY_SHADER_DESC, pFunction) == 0);
+WINE_D3D11ON12_ASSERT(offsetof(D3D11On12::GEOMETRY_SHADER_DESC,
+        SizeInBytes) == 8);
+WINE_D3D11ON12_ASSERT(offsetof(D3D11On12::GEOMETRY_SHADER_DESC,
+        pDeclaration) == 16);
+WINE_D3D11ON12_ASSERT(offsetof(D3D11On12::GEOMETRY_SHADER_DESC,
+        NumElements) == 24);
+WINE_D3D11ON12_ASSERT(offsetof(D3D11On12::GEOMETRY_SHADER_DESC,
+        pBufferStrides) == 32);
+WINE_D3D11ON12_ASSERT(offsetof(D3D11On12::GEOMETRY_SHADER_DESC,
+        NumStrides) == 40);
+WINE_D3D11ON12_ASSERT(offsetof(D3D11On12::GEOMETRY_SHADER_DESC,
+        RasterizedStream) == 44);
+WINE_D3D11ON12_ASSERT(offsetof(D3D11On12::GEOMETRY_SHADER_DESC,
+        pLinkage) == 48);
 
 namespace
 {
@@ -574,7 +642,94 @@ AdapterState *openedAdapterState(
 bool isKnownShaderStage(UINT stage) noexcept
 {
     return stage == WINE_D3D11ON12_SHADER_VERTEX
-            || stage == WINE_D3D11ON12_SHADER_PIXEL;
+            || stage == WINE_D3D11ON12_SHADER_PIXEL
+            || stage == WINE_D3D11ON12_SHADER_GEOMETRY
+            || stage == WINE_D3D11ON12_SHADER_HULL
+            || stage == WINE_D3D11ON12_SHADER_DOMAIN
+            || stage == WINE_D3D11ON12_SHADER_COMPUTE;
+}
+
+/* How large a private block this stage's shader object needs.
+ *
+ * Which sizing slot answers is a property of the DDI, not a choice. The table
+ * carries exactly three shader sizing slots and no compute-specific one, so:
+ *
+ *   - hull and domain take pfnCalcPrivateTessellationShaderSize, because
+ *     their signature argument is the tessellation kind and that is the slot
+ *     documented to take it;
+ *   - vertex, pixel, geometry and compute take pfnCalcPrivateShaderSize.
+ *
+ * That the one slot serves four differently-typed driver objects is the
+ * driver's own invariant rather than an assumption here. Its shader class is
+ * a template over the pipeline interface, but the only member whose type
+ * varies is the pipeline-state cache key -- and the key is never stored, only
+ * named inside a weak_ptr's pointee, so every instantiation has identical
+ * layout. It has to: with no compute sizing slot in the table, the runtime
+ * can only have sized a compute shader through pfnCalcPrivateShaderSize while
+ * the driver constructed a compute object in the result.
+ *
+ * pfnCalcPrivateGeometryShaderWithStreamOutput is deliberately never used. It
+ * sizes StreamOutShader, which derives from the ordinary geometry shader and
+ * adds four vectors -- a larger object this host never asks the driver to
+ * build, because it always passes a null stream-output argument.
+ *
+ * The size is returned rather than the slot, because the two slots have
+ * deliberately different types -- their signatures arguments are the
+ * tessellation and stage kinds -- and tests/d3d11ddishaderpromotednegative.c
+ * requires that they stay incompatible. Each is therefore called through its
+ * own type here, which is what makes "sized by the wrong slot" a compile
+ * error rather than a convention. */
+bool shaderPrivateSize(const AdapterState *state, UINT stage,
+        SIZE_T *sizeOut) noexcept
+{
+    /* Both arguments null in either branch, and not because they are
+     * unknown.
+     *
+     * The sizing slots take the DDI's driver bytecode -- a token stream whose
+     * length is its own second word -- while the creation path takes a DXBC
+     * container. The two cannot be the same pointer, so offering the
+     * container here would be offering a length that is really part of a
+     * hash. The pinned driver reads neither argument: its CalcPrivateSize
+     * ignores both and returns a fixed sizeof. A driver that did read them
+     * could not be served by this pairing at all, which is the driver's own
+     * inconsistency and is recorded in docs/CLEANROOM-DDI.md. */
+    if (stage == WINE_D3D11ON12_SHADER_HULL
+            || stage == WINE_D3D11ON12_SHADER_DOMAIN)
+    {
+        if (!state->deviceFuncs.pfnCalcPrivateTessellationShaderSize)
+            return false;
+        *sizeOut = state->deviceFuncs.pfnCalcPrivateTessellationShaderSize(
+                state->hDevice, nullptr, nullptr);
+        return true;
+    }
+
+    if (!state->deviceFuncs.pfnCalcPrivateShaderSize)
+        return false;
+    *sizeOut = state->deviceFuncs.pfnCalcPrivateShaderSize(state->hDevice,
+            nullptr, nullptr);
+    return true;
+}
+
+/* The binding slot for a stage.  One typedef covers all six, which is why
+ * these are a lookup rather than six wrappers. */
+PFND3D10DDI_SETSHADER setShaderSlot(const AdapterState *state,
+        UINT stage) noexcept
+{
+    switch (stage)
+    {
+    case WINE_D3D11ON12_SHADER_VERTEX:
+        return state->deviceFuncs.pfnVsSetShader;
+    case WINE_D3D11ON12_SHADER_PIXEL:
+        return state->deviceFuncs.pfnPsSetShader;
+    case WINE_D3D11ON12_SHADER_GEOMETRY:
+        return state->deviceFuncs.pfnGsSetShader;
+    case WINE_D3D11ON12_SHADER_HULL:
+        return state->deviceFuncs.pfnHsSetShader;
+    case WINE_D3D11ON12_SHADER_DOMAIN:
+        return state->deviceFuncs.pfnDsSetShader;
+    default:
+        return state->deviceFuncs.pfnCsSetShader;
+    }
 }
 
 void linkShader(AdapterState *state, ShaderState *shader) noexcept
@@ -840,7 +995,8 @@ extern "C" HRESULT WINAPI WineD3D11On12GetInterface(UINT requestedVersion,
     interfaceOut->capabilities = WINE_D3D11ON12_CAP_VALIDATION
             | WINE_D3D11ON12_CAP_D3DMETAL_BOOTSTRAP
             | WINE_D3D11ON12_CAP_DEVICE_LIFECYCLE
-            | WINE_D3D11ON12_CAP_SHADER_LIFECYCLE;
+            | WINE_D3D11ON12_CAP_SHADER_LIFECYCLE
+            | WINE_D3D11ON12_CAP_EXTENDED_SHADER_STAGES;
     interfaceOut->createDevice = WineD3D11On12CreateDeviceV1;
     interfaceOut->createDirectDevice = WineD3D11CreateDeviceV2;
     interfaceOut->createDirectDeviceAndSwapChain =
@@ -1085,13 +1241,11 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateShaderV1(
     if (bytecodeSize > UINT_MAX)
         return E_INVALIDARG;
 
-    if (!state->deviceFuncs.pfnCalcPrivateShaderSize
-            || !state->deviceFuncs.pfnDestroyShader)
+    if (!state->deviceFuncs.pfnDestroyShader)
     {
         wineD3D11DiagReportOnce(&reportedShaderSlotsMissing,
-                "d3d11on12core: the driver filled no shader sizing or "
-                "destruction slot, so no shader can be owned for its "
-                "lifetime.\n");
+                "d3d11on12core: the driver filled no shader destruction "
+                "slot, so no shader can be owned for its lifetime.\n");
         return DXGI_ERROR_UNSUPPORTED;
     }
 
@@ -1105,12 +1259,34 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateShaderV1(
         return DXGI_ERROR_UNSUPPORTED;
     }
 
+    /* Geometry is the one stage whose creation method takes a different
+     * argument structure, so it is dispatched separately below rather than
+     * through this pointer. */
     HRESULT (STDMETHODCALLTYPE *createShader)(ID3D11On12DDIDevice *,
-            D3D10DDI_HSHADER, D3D11On12::SHADER_DESC const *) =
-            stage == WINE_D3D11ON12_SHADER_VERTEX
-            ? ddiDevice->lpVtbl->CreateVertexShader
-            : ddiDevice->lpVtbl->CreatePixelShader;
-    if (!createShader)
+            D3D10DDI_HSHADER, D3D11On12::SHADER_DESC const *) = nullptr;
+    switch (stage)
+    {
+    case WINE_D3D11ON12_SHADER_VERTEX:
+        createShader = ddiDevice->lpVtbl->CreateVertexShader;
+        break;
+    case WINE_D3D11ON12_SHADER_PIXEL:
+        createShader = ddiDevice->lpVtbl->CreatePixelShader;
+        break;
+    case WINE_D3D11ON12_SHADER_HULL:
+        createShader = ddiDevice->lpVtbl->CreateHullShader;
+        break;
+    case WINE_D3D11ON12_SHADER_DOMAIN:
+        createShader = ddiDevice->lpVtbl->CreateDomainShader;
+        break;
+    case WINE_D3D11ON12_SHADER_COMPUTE:
+        createShader = ddiDevice->lpVtbl->CreateComputeShader;
+        break;
+    default:
+        break;
+    }
+    if (stage == WINE_D3D11ON12_SHADER_GEOMETRY
+            ? !ddiDevice->lpVtbl->CreateGeometryShader
+            : !createShader)
     {
         wineD3D11DiagReportOnce(&reportedShaderInterfaceMissing,
                 "d3d11on12core: the driver's ID3D11On12DDIDevice leaves the "
@@ -1118,18 +1294,16 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateShaderV1(
         return DXGI_ERROR_UNSUPPORTED;
     }
 
-    /* Both arguments null, and not because they are unknown.
-     *
-     * The sizing slot takes the DDI's driver bytecode -- a token stream whose
-     * length is its own second word -- while the creation path above takes a
-     * DXBC container.  The two cannot be the same pointer, so offering the
-     * container here would be offering a length that is really part of a
-     * hash.  The pinned driver reads neither argument: its CalcPrivateSize
-     * ignores both and returns a fixed sizeof.  A driver that did read them
-     * could not be served by this pairing at all, which is the driver's own
-     * inconsistency and is recorded in docs/CLEANROOM-DDI.md. */
-    const SIZE_T privateSize = state->deviceFuncs.pfnCalcPrivateShaderSize(
-            state->hDevice, nullptr, nullptr);
+    /* Sized by the slot that describes this stage's shader object -- see
+     * shaderPrivateSize, where which slot that is, and why, is set out. */
+    SIZE_T privateSize = 0;
+    if (!shaderPrivateSize(state, stage, &privateSize))
+    {
+        wineD3D11DiagReportOnce(&reportedShaderSlotsMissing,
+                "d3d11on12core: the driver filled no sizing slot for the "
+                "requested stage, so its private block cannot be sized.\n");
+        return DXGI_ERROR_UNSUPPORTED;
+    }
     if (!privateSize)
         return E_FAIL;
     /* The size came from the driver, so the addition below is arithmetic on a
@@ -1150,12 +1324,34 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateShaderV1(
      * class-instance interfaces; the pfn*SetShaderWithIfaces family that
      * would need them is unpromoted, so a non-null linkage here would promise
      * a binding path that does not exist. */
-    D3D11On12::SHADER_DESC desc = {};
-    desc.pFunction = static_cast<const BYTE *>(bytecode);
-    desc.SizeInBytes = static_cast<UINT>(bytecodeSize);
-    desc.pLinkage = nullptr;
+    HRESULT hr;
+    if (stage == WINE_D3D11ON12_SHADER_GEOMETRY)
+    {
+        /* Zero-initialised, so the five stream-output members are null and
+         * zero rather than merely unset.  The driver reads them only through
+         * StreamOutShader, which the null final argument below keeps it from
+         * constructing, but a geometry shader that reached that path with
+         * uninitialised declaration pointers would be a crash rather than an
+         * error. */
+        D3D11On12::GEOMETRY_SHADER_DESC desc = {};
+        desc.pFunction = static_cast<const BYTE *>(bytecode);
+        desc.SizeInBytes = static_cast<UINT>(bytecodeSize);
+        desc.pLinkage = nullptr;
 
-    const HRESULT hr = createShader(ddiDevice, shader->hShader, &desc);
+        /* The null that selects an ordinary geometry shader.  See the
+         * incomplete-type note on the stream-output structure above. */
+        hr = ddiDevice->lpVtbl->CreateGeometryShader(ddiDevice,
+                shader->hShader, &desc, nullptr);
+    }
+    else
+    {
+        D3D11On12::SHADER_DESC desc = {};
+        desc.pFunction = static_cast<const BYTE *>(bytecode);
+        desc.SizeInBytes = static_cast<UINT>(bytecodeSize);
+        desc.pLinkage = nullptr;
+
+        hr = createShader(ddiDevice, shader->hShader, &desc);
+    }
     if (FAILED(hr))
     {
         wineD3D11DiagReportOnce(&reportedShaderCreateFailed,
@@ -1228,10 +1424,7 @@ extern "C" HRESULT WINAPI WineD3D11On12SetShaderV1(
         hShader = shader->hShader;
     }
 
-    PFND3D10DDI_SETSHADER setShader =
-            stage == WINE_D3D11ON12_SHADER_VERTEX
-            ? state->deviceFuncs.pfnVsSetShader
-            : state->deviceFuncs.pfnPsSetShader;
+    const PFND3D10DDI_SETSHADER setShader = setShaderSlot(state, stage);
     if (!setShader)
     {
         wineD3D11DiagReportOnce(&reportedSetShaderMissing,

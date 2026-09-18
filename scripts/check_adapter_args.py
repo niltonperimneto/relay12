@@ -40,7 +40,7 @@ import re
 import sys
 
 STRUCTS = ("PrivateCallbacks", "PrivateCallbacks2", "SOpenAdapterArgs",
-           "SHADER_DESC")
+           "SHADER_DESC", "GEOMETRY_SHADER_DESC")
 VERSION_CONSTANT = "c_CurrentD3D11On12InterfaceVersion"
 
 # The interface whose vtable order the core depends on, and the last slot it
@@ -49,7 +49,7 @@ VERSION_CONSTANT = "c_CurrentD3D11On12InterfaceVersion"
 # core deliberately does not transcribe what it never calls.
 INTERFACE = "ID3D11On12DDIDevice"
 INTERFACE_VTBL = "ID3D11On12DDIDeviceVtbl"
-LAST_SLOT = "CreatePixelShader"
+LAST_SLOT = "CreateComputeShader"
 # The self parameter an explicit vtable needs and a C++ method does not.
 THIS_PARAM = f"{INTERFACE}*This"
 

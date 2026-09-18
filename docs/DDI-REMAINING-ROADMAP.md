@@ -99,7 +99,7 @@ Below is the structured roadmap of what is yet to be done.
 ## 3. Core DDI Function Implementations
 
 **3.1. Removing Placeholders**
-* **Status:** Ongoing — 58 of 138 PFN typedefs promoted, covering 74 of 178 slots
+* **Status:** Ongoing — 59 of 138 PFN typedefs promoted, covering 76 of 178 slots
 * **Done:** the device lifecycle family — `pfnCalcPrivateDeviceSize` and `pfnDestroyDevice`. These complete the entry and exit points for the device state, unblocked by the `D3D10DDIARG_CALCPRIVATEDEVICESIZE` full structure.
 * **Done:** the command-list family — `pfnAbandonCommandList`,
   `pfnCommandListExecute`,
@@ -209,7 +209,8 @@ makes the worklist a dependency order on structure groups, not a list of slots:
 | SRV/RTV creation arguments (`D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW`, `D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW`) — **done** | `pfnCalcPrivateShaderResourceViewSize`, `pfnCreateShaderResourceView`, `pfnDestroyShaderResourceView`, `pfnCalcPrivateRenderTargetViewSize`, `pfnCreateRenderTargetView`, `pfnDestroyRenderTargetView` |
 | DSV/UAV creation arguments | every remaining `pfnCalcPrivate*ViewSize`/`pfnCreate*View`/`pfnDestroy*View`, `pfnClearRenderTargetView`, `pfnClearDepthStencilView`, `pfnClearView`, `pfnClearUnorderedAccessView*` |
 | Vertex/pixel shader creation (`D3D10DDI_H(RT)SHADER`) — **done**, but see §3.3: these declare the contract, and `pfnCreateVertexShader`/`pfnCreatePixelShader` are never filled by the pinned driver on the immediate device. Creation runs through `ID3D11On12DDIDevice` instead | `pfnCalcPrivateShaderSize`, `pfnCreateVertexShader`, `pfnCreatePixelShader`, `pfnDestroyShader` |
-| Stream-output and tessellation shader structures | `pfnCreateGeometryShader`, `pfnCalcPrivateGeometryShaderWithStreamOutput`, `pfnCreateGeometryShaderWithStreamOutput`, `pfnCreateHullShader`, `pfnCreateDomainShader`, `pfnCreateComputeShader`, `pfnCalcPrivateTessellationShaderSize`, `pfnCreateElementLayout`, the `pfn*SetShaderWithIfaces` family, `pfnRetrieveShaderComment`, `pfnAssignDebugBinary` |
+| Tessellation IO signatures — **done**, pointer-only so incomplete | `pfnCalcPrivateTessellationShaderSize` — **done** |
+| Stream-output structures | `pfnCalcPrivateGeometryShaderWithStreamOutput`, `pfnCreateGeometryShaderWithStreamOutput`, the `pfn*SetShaderWithIfaces` family, `pfnRetrieveShaderComment`, `pfnAssignDebugBinary`. The six `pfnCreate*Shader` slots stay unpromoted **by choice, not blockage**: the pinned driver never fills them on the immediate device, so a promoted signature there would declare a contract nothing implements — see §3.3 |
 | State structures (blend, depth-stencil, rasterizer, sampler) — **done** | `pfnSetBlendState`, `pfnSetDepthStencilState`, `pfnSetRasterizerState` — **done**; `pfnPsSetSamplers` and the rest of the `pfn*SetSamplers` family remain, an untextured frame not needing them |
 | Element layout and input assembly — **done** | `pfnCalcPrivateElementLayoutSize`, `pfnCreateElementLayout`, `pfnDestroyElementLayout`, `pfnIaSetInputLayout`, `pfnIaSetVertexBuffers`, `pfnIaSetTopology` |
 | Depth-stencil and unordered-access view *handles* — **done** | `pfnSetRenderTargets`. The handles are declared; nothing promoted can create either kind of view, which is the MVP state |
@@ -264,11 +265,32 @@ implementation.
   abandoned destroys them through the driver first rather than leaking a block
   per shader. The list is unlocked, which the D3D11 immediate context's own
   single-threaded contract is what justifies.
-* **Remaining:** `hs` and `ds` have no creation path at all yet — their
-  argument types (tessellation IO signatures) are unauthored, and the
-  sub-object's `CreateHullShader`/`CreateDomainShader` sit below
-  `CreatePixelShader` in the vtable, so reaching them means transcribing the
-  slots between. Neither stage is needed for the MVP frame.
+* **Done:** all six stages. The transcription now runs through
+  `CreateComputeShader` (slot 21), and geometry, hull, domain and compute have
+  the same owned lifecycle as vertex and pixel.
+  `WINE_D3D11ON12_CAP_EXTENDED_SHADER_STAGES` advertises them; the ABI stays
+  at v4 because the interface table's shape did not change — the new stages
+  are new accepted values of an argument that was already a `UINT`.
+* **The sizing rule, which is the safety-critical part:** hull and domain size
+  through `pfnCalcPrivateTessellationShaderSize` — newly promoted for this,
+  since the placeholder alias is `void(*)(void)` and deliberately uncallable —
+  and the other four through `pfnCalcPrivateShaderSize`. The two signatures
+  differ only in the type of their signatures argument, and
+  `tests/d3d11ddishaderpromotednegative.c` now requires that difference to
+  make each slot reject the other's argument, so sizing a stage through the
+  wrong slot is a compile error rather than a heap overflow. One slot serving four differently-typed driver
+  objects is the driver's own invariant — its shader template's only
+  stage-dependent member is a cache key that is never stored — and it must
+  hold, because the table has no compute sizing slot at all. See
+  `docs/CLEANROOM-DDI.md`.
+* **Out of scope, and why it is a scope line rather than a gap:** a geometry
+  shader *with stream output* is a different, strictly larger driver object
+  (`StreamOutShader`, which adds four vectors). Reaching it means authoring
+  `D3D11DDIARG_CREATEGEOMETRYSHADERWITHSTREAMOUTPUT` and sizing through
+  `pfnCalcPrivateGeometryShaderWithStreamOutput`. The host always passes a
+  null stream-output argument, which is what selects the ordinary geometry
+  shader, so the structure stays an incomplete type and no stage constant can
+  ask for one.
 
 **3.4. CI & End-to-End Test Harness**
 * **Status:** Framework Drafted
