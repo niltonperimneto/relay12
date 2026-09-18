@@ -1139,6 +1139,20 @@ static SIZE_T stub_calc_private_shader_size(D3D10DDI_HDEVICE hDevice,
     return 64;
 }
 
+/* The tessellation sizing slot takes the tessellation signatures type, not
+ * the stage one.  Declaring the stub with that type is what proves the
+ * promoted signature is the distinct one it claims to be. */
+static SIZE_T stub_calc_private_tessellation_shader_size(
+        D3D10DDI_HDEVICE hDevice, const UINT *shader_code,
+        const D3D11_1DDIARG_TESSELLATION_IO_SIGNATURES *signatures)
+{
+    (void)hDevice;
+    (void)shader_code;
+    (void)signatures;
+    ++command_list_calls;
+    return 64;
+}
+
 static VOID stub_create_vertex_shader(D3D10DDI_HDEVICE hDevice,
         const UINT *shader_code, D3D10DDI_HSHADER shader,
         D3D10DDI_HRTSHADER rt_shader,
@@ -1697,6 +1711,8 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     funcs->pfnCreateRenderTargetView = stub_create_render_target_view;
     funcs->pfnDestroyRenderTargetView = stub_destroy_render_target_view;
     funcs->pfnCalcPrivateShaderSize = stub_calc_private_shader_size;
+    funcs->pfnCalcPrivateTessellationShaderSize =
+            stub_calc_private_tessellation_shader_size;
     funcs->pfnCreateVertexShader = stub_create_vertex_shader;
     funcs->pfnCreatePixelShader = stub_create_pixel_shader;
     funcs->pfnDestroyShader = stub_destroy_shader;
@@ -1830,6 +1846,9 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
             funcs->pfnDestroyRenderTargetView(device, rtv));
     CHECK_STACK("PFND3D11_1DDI_CALCPRIVATESHADERSIZE",
             (void)funcs->pfnCalcPrivateShaderSize(device, NULL, NULL));
+    CHECK_CALL("pfnCalcPrivateTessellationShaderSize",
+            (void)funcs->pfnCalcPrivateTessellationShaderSize(device,
+                    NULL, NULL));
     CHECK_STACK("PFND3D11_1DDI_CREATEVERTEXSHADER",
             funcs->pfnCreateVertexShader(device, NULL, shader, rt_shader, NULL));
     CHECK_STACK("PFND3D11_1DDI_CREATEPIXELSHADER",
@@ -2044,6 +2063,8 @@ static void check_device_funcs(void)
     CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateRasterizerState);
     CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyRasterizerState);
     CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateShaderSize);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS,
+            pfnCalcPrivateTessellationShaderSize);
     CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateVertexShader);
     CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateGeometryShader);
     CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreatePixelShader);

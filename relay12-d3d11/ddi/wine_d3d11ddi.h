@@ -2323,6 +2323,30 @@ typedef VOID (*PFND3D10DDI_DESTROYSHADER)(
         D3D10DDI_HDEVICE hDevice,
         D3D10DDI_HSHADER hShader);
 
+/* The sizing slot for the two tessellation stages.
+ *
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11_1ddi_calcprivatetessellationshadersize
+ * Source mirror: https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs-ddi/staging/wdk-ddi-src/content/d3d10umddi/nc-d3d10umddi-pfnd3d11_1ddi_calcprivatetessellationshadersize.md
+ * Retrieved: 2026-09-16
+ *
+ * Its parameter list is pfnCalcPrivateShaderSize's with one type changed: the
+ * signatures argument is the tessellation kind rather than the stage kind.
+ * That difference is the whole reason the slot exists, and it is why a host
+ * must not size a hull or domain shader through the other slot -- the driver
+ * placement-constructs its shader object into the block the runtime sized, so
+ * the two are a matched pair.
+ *
+ * D3D11_1DDIARG_TESSELLATION_IO_SIGNATURES stays an incomplete forward
+ * declaration, on the same terms as D3D11_1DDIARG_STAGE_IO_SIGNATURES above:
+ * no promoted slot dereferences it. */
+typedef struct D3D11_1DDIARG_TESSELLATION_IO_SIGNATURES
+        D3D11_1DDIARG_TESSELLATION_IO_SIGNATURES;
+
+typedef SIZE_T (*PFND3D11_1DDI_CALCPRIVATETESSELLATIONSHADERSIZE)(
+        D3D10DDI_HDEVICE hDevice,
+        const UINT *pShaderCode,
+        const D3D11_1DDIARG_TESSELLATION_IO_SIGNATURES *pSignatures);
+
 /*
  * Group: element layout, binding, and draw callbacks
  * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddi_devicefuncs
@@ -2521,7 +2545,6 @@ typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_DRAWINDEXEDINSTANCEDINDIRECT;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_DRAWINSTANCEDINDIRECT;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CREATEHULLSHADER;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CREATEDOMAINSHADER;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CALCPRIVATETESSELLATIONSHADERSIZE;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_SETSHADER_WITH_IFACES;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CREATECOMPUTESHADER;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_CALCPRIVATEUNORDEREDACCESSVIEWSIZE;

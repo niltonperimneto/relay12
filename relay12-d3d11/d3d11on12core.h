@@ -27,6 +27,14 @@
 #define WINE_D3D11ON12_CAP_D3DMETAL_BOOTSTRAP 0x0000000000000002ull
 #define WINE_D3D11ON12_CAP_DEVICE_LIFECYCLE 0x0000000000000004ull
 #define WINE_D3D11ON12_CAP_SHADER_LIFECYCLE 0x0000000000000008ull
+/* Geometry (without stream output), hull, domain and compute creation, on top
+ * of the vertex and pixel stages the lifecycle bit alone promises.
+ *
+ * A capability bit and not an ABI bump, because nothing about the interface
+ * table's shape changed: the new stages are new accepted values of an
+ * argument that was already a UINT. Growing the bitmask is what the bitmask
+ * is for, and a caller learns what it may ask for by testing it. */
+#define WINE_D3D11ON12_CAP_EXTENDED_SHADER_STAGES 0x0000000000000010ull
 
 typedef UINT (WINAPI *WineD3D11On12GetABIVersionFn)(void);
 typedef HRESULT (WINAPI *WineD3D11On12CreateDeviceFn)(IUnknown *, UINT,
@@ -148,18 +156,32 @@ typedef HRESULT (WINAPI *WineD3D11On12OpenAdapterFn)(IUnknown *,
  * against the pinned driver header. */
 #define WINE_D3D11ON12_DDIDEVICE_SLOT_CREATEVERTEXSHADER 16u
 #define WINE_D3D11ON12_DDIDEVICE_SLOT_CREATEPIXELSHADER 17u
+#define WINE_D3D11ON12_DDIDEVICE_SLOT_CREATEGEOMETRYSHADER 18u
+#define WINE_D3D11ON12_DDIDEVICE_SLOT_CREATEHULLSHADER 19u
+#define WINE_D3D11ON12_DDIDEVICE_SLOT_CREATEDOMAINSHADER 20u
+#define WINE_D3D11ON12_DDIDEVICE_SLOT_CREATECOMPUTESHADER 21u
 /* sizeof(D3D11On12::SHADER_DESC): a container pointer, a UINT with its tail
  * padding, and a class-linkage pointer. */
 #define WINE_D3D11ON12_SHADER_DESC_SIZE 24u
+/* sizeof(D3D11On12::GEOMETRY_SHADER_DESC), which geometry shaders take
+ * instead: the same three members plus five stream-output ones this host
+ * leaves zeroed. */
+#define WINE_D3D11ON12_GEOMETRY_SHADER_DESC_SIZE 56u
 
 /* Which pipeline stage a shader was created for.
  *
- * Only the two stages the pinned driver can create from a bytecode container
- * are named.  Geometry, hull, domain and compute creation take argument types
- * this host has not authored, so naming them here would advertise a stage
- * CreateShader would have to refuse. */
+ * All six stages the driver's sub-object can create from a bytecode
+ * container. Geometry is the ordinary kind only: a geometry shader with
+ * stream output is a different driver object reached by passing the
+ * stream-output argument, which this host does not author and always passes
+ * as null. CreateShader has no way to be asked for one, which is why there is
+ * no stage constant for it rather than a constant that fails. */
 #define WINE_D3D11ON12_SHADER_VERTEX 0u
 #define WINE_D3D11ON12_SHADER_PIXEL 1u
+#define WINE_D3D11ON12_SHADER_GEOMETRY 2u
+#define WINE_D3D11ON12_SHADER_HULL 3u
+#define WINE_D3D11ON12_SHADER_DOMAIN 4u
+#define WINE_D3D11ON12_SHADER_COMPUTE 5u
 
 /* What a successful CreateShader leaves behind.
  *
@@ -216,15 +238,19 @@ WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12OpenAdapterV1(IUnknown *,
         WINE_D3D11ON12_NOEXCEPT;
 WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12CloseAdapterDeviceV1(
         WineD3D11On12AdapterDevice *) WINE_D3D11ON12_NOEXCEPT;
-/* Creates a vertex or pixel shader on an opened adapter/device pair, from a
- * DXBC container and its length.
+/* Creates a shader for one of the six named stages on an opened
+ * adapter/device pair, from a DXBC container and its length.
  *
  * The container, not the driver bytecode the DDI's own CreateVertexShader
- * slot takes.  That is not a preference: the pinned driver never fills
- * pfnCreateVertexShader or pfnCreatePixelShader on the immediate device -- its
- * only creation path is the ID3D11On12DDIDevice sub-object, whose own comment
+ * slot takes.  That is not a preference: the pinned driver never fills any of
+ * the table's six create-shader slots on the immediate device -- its only
+ * creation path is the ID3D11On12DDIDevice sub-object, whose own comment
  * calls these "shader creates which take the full containers instead of
  * driver bytecode".  See docs/CLEANROOM-DDI.md.
+ *
+ * Which sizing slot backs each stage is decided there too, and matters: an
+ * undersized private block is heap corruption inside the driver, not a
+ * failed call.
  *
  * The caller's bytecode is not retained.  The driver copies it inside the
  * call, which tests/d3d11on12shaderlifecycle.c pins by overwriting the

@@ -27,3 +27,28 @@ void destroy_shader_with_the_wrong_handle_type(
 {
     funcs->pfnDestroyShader(hDevice, hRenderTargetView);
 }
+
+/* The two sizing slots are not interchangeable, and this is the mistake that
+ * would matter most: the driver placement-constructs its shader object into
+ * the block the caller sized, so sizing a tessellation stage through the
+ * stage-signature slot -- or the reverse -- is a heap overflow rather than a
+ * type error at run time.  Making the signatures distinct types is what turns
+ * it into one at compile time. */
+void size_a_tessellation_shader_with_the_stage_signatures(
+        D3DWDDM2_6DDI_DEVICEFUNCS *funcs,
+        D3D10DDI_HDEVICE hDevice,
+        const UINT *pShaderCode,
+        const D3D11_1DDIARG_STAGE_IO_SIGNATURES *pSignatures)
+{
+    (void)funcs->pfnCalcPrivateTessellationShaderSize(hDevice, pShaderCode,
+            pSignatures);
+}
+
+void size_a_stage_shader_with_the_tessellation_signatures(
+        D3DWDDM2_6DDI_DEVICEFUNCS *funcs,
+        D3D10DDI_HDEVICE hDevice,
+        const UINT *pShaderCode,
+        const D3D11_1DDIARG_TESSELLATION_IO_SIGNATURES *pSignatures)
+{
+    (void)funcs->pfnCalcPrivateShaderSize(hDevice, pShaderCode, pSignatures);
+}

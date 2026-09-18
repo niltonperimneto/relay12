@@ -25,11 +25,23 @@ static unsigned char adapter_private;
 #define MOCK_SHADER_MAGIC 0x5ADE12u
 
 static LONG shader_size_calls;
+static LONG tessellation_size_calls;
 static LONG vertex_create_calls;
 static LONG pixel_create_calls;
+static LONG geometry_create_calls;
+static LONG hull_create_calls;
+static LONG domain_create_calls;
+static LONG compute_create_calls;
 static LONG shader_destroy_calls;
 static LONG vertex_set_calls;
 static LONG pixel_set_calls;
+static LONG geometry_set_calls;
+static LONG hull_set_calls;
+static LONG domain_set_calls;
+static LONG compute_set_calls;
+/* Set if the host ever described a stream this mock cannot build.  Latched
+ * rather than counted: one occurrence is already a failure. */
+static LONG last_geometry_stream_output_requested;
 
 /* What the driver was shown, so the test can assert the host passed the
  * caller's own container through rather than a copy of its own. */
@@ -46,6 +58,28 @@ struct mock_shader_desc
     UINT SizeInBytes;
     void *pLinkage;
 };
+
+/* GEOMETRY_SHADER_DESC, which the geometry stage takes instead.  The five
+ * stream-output members are here so the mock can assert the host left them
+ * zeroed: it always passes a null stream-output argument, and a host that
+ * populated them would be describing a driver object nobody asked for. */
+struct mock_geometry_shader_desc
+{
+    const BYTE *pFunction;
+    UINT SizeInBytes;
+    const void *pDeclaration;
+    UINT NumElements;
+    const UINT *pBufferStrides;
+    UINT NumStrides;
+    UINT RasterizedStream;
+    void *pLinkage;
+};
+
+_Static_assert(sizeof(struct mock_geometry_shader_desc)
+        == WINE_D3D11ON12_GEOMETRY_SHADER_DESC_SIZE,
+        "the mock's GEOMETRY_SHADER_DESC must match the core's");
+_Static_assert(offsetof(struct mock_geometry_shader_desc, pLinkage) == 48,
+        "the mock's GEOMETRY_SHADER_DESC must match the core's");
 
 _Static_assert(sizeof(struct mock_shader_desc)
         == WINE_D3D11ON12_SHADER_DESC_SIZE,
@@ -70,10 +104,31 @@ struct mock_ddi_device_vtbl
             D3D10DDI_HSHADER, const struct mock_shader_desc *);
     HRESULT (STDMETHODCALLTYPE *CreatePixelShader)(struct mock_ddi_device *,
             D3D10DDI_HSHADER, const struct mock_shader_desc *);
+    HRESULT (STDMETHODCALLTYPE *CreateGeometryShader)(
+            struct mock_ddi_device *, D3D10DDI_HSHADER,
+            const struct mock_geometry_shader_desc *, const void *);
+    HRESULT (STDMETHODCALLTYPE *CreateHullShader)(struct mock_ddi_device *,
+            D3D10DDI_HSHADER, const struct mock_shader_desc *);
+    HRESULT (STDMETHODCALLTYPE *CreateDomainShader)(struct mock_ddi_device *,
+            D3D10DDI_HSHADER, const struct mock_shader_desc *);
+    HRESULT (STDMETHODCALLTYPE *CreateComputeShader)(struct mock_ddi_device *,
+            D3D10DDI_HSHADER, const struct mock_shader_desc *);
 };
 
 _Static_assert(offsetof(struct mock_ddi_device_vtbl, CreatePixelShader)
         == WINE_D3D11ON12_DDIDEVICE_SLOT_CREATEPIXELSHADER * sizeof(void *),
+        "the mock's shader slots must land where the core will call them");
+_Static_assert(offsetof(struct mock_ddi_device_vtbl, CreateGeometryShader)
+        == WINE_D3D11ON12_DDIDEVICE_SLOT_CREATEGEOMETRYSHADER * sizeof(void *),
+        "the mock's shader slots must land where the core will call them");
+_Static_assert(offsetof(struct mock_ddi_device_vtbl, CreateHullShader)
+        == WINE_D3D11ON12_DDIDEVICE_SLOT_CREATEHULLSHADER * sizeof(void *),
+        "the mock's shader slots must land where the core will call them");
+_Static_assert(offsetof(struct mock_ddi_device_vtbl, CreateDomainShader)
+        == WINE_D3D11ON12_DDIDEVICE_SLOT_CREATEDOMAINSHADER * sizeof(void *),
+        "the mock's shader slots must land where the core will call them");
+_Static_assert(offsetof(struct mock_ddi_device_vtbl, CreateComputeShader)
+        == WINE_D3D11ON12_DDIDEVICE_SLOT_CREATECOMPUTESHADER * sizeof(void *),
         "the mock's shader slots must land where the core will call them");
 
 struct mock_ddi_device
@@ -129,10 +184,80 @@ static HRESULT STDMETHODCALLTYPE mock_create_pixel_shader(
     return mock_record_shader(shader, desc, WINE_D3D11ON12_SHADER_PIXEL);
 }
 
+/* The geometry stage, which takes its own descriptor and an optional
+ * stream-output argument.
+ *
+ * Both halves are checked. A non-null stream-output argument would mean the
+ * host asked for a StreamOutShader, which is a larger object than the private
+ * block it sized -- so refusing it here is refusing a heap overflow. The five
+ * stream-output descriptor members must likewise be zero, since nothing may
+ * describe a stream this host cannot request. */
+static HRESULT STDMETHODCALLTYPE mock_create_geometry_shader(
+        struct mock_ddi_device *device, D3D10DDI_HSHADER shader,
+        const struct mock_geometry_shader_desc *desc,
+        const void *stream_output_args)
+{
+    struct mock_shader_desc plain;
+
+    (void)device;
+    InterlockedIncrement(&geometry_create_calls);
+    if (!desc)
+        return E_INVALIDARG;
+    if (stream_output_args)
+    {
+        last_geometry_stream_output_requested = 1;
+        return E_INVALIDARG;
+    }
+    if (desc->pDeclaration || desc->NumElements || desc->pBufferStrides
+            || desc->NumStrides || desc->RasterizedStream)
+    {
+        last_geometry_stream_output_requested = 1;
+        return E_INVALIDARG;
+    }
+
+    /* The three members the driver actually reads, in the shape the shared
+     * recorder expects. */
+    plain.pFunction = desc->pFunction;
+    plain.SizeInBytes = desc->SizeInBytes;
+    plain.pLinkage = desc->pLinkage;
+    return mock_record_shader(shader, &plain, WINE_D3D11ON12_SHADER_GEOMETRY);
+}
+
+static HRESULT STDMETHODCALLTYPE mock_create_hull_shader(
+        struct mock_ddi_device *device, D3D10DDI_HSHADER shader,
+        const struct mock_shader_desc *desc)
+{
+    (void)device;
+    InterlockedIncrement(&hull_create_calls);
+    return mock_record_shader(shader, desc, WINE_D3D11ON12_SHADER_HULL);
+}
+
+static HRESULT STDMETHODCALLTYPE mock_create_domain_shader(
+        struct mock_ddi_device *device, D3D10DDI_HSHADER shader,
+        const struct mock_shader_desc *desc)
+{
+    (void)device;
+    InterlockedIncrement(&domain_create_calls);
+    return mock_record_shader(shader, desc, WINE_D3D11ON12_SHADER_DOMAIN);
+}
+
+static HRESULT STDMETHODCALLTYPE mock_create_compute_shader(
+        struct mock_ddi_device *device, D3D10DDI_HSHADER shader,
+        const struct mock_shader_desc *desc)
+{
+    (void)device;
+    InterlockedIncrement(&compute_create_calls);
+    return mock_record_shader(shader, desc, WINE_D3D11ON12_SHADER_COMPUTE);
+}
+
 static const struct mock_ddi_device_vtbl mock_ddi_device_vtable =
 {
     .CreateVertexShader = mock_create_vertex_shader,
     .CreatePixelShader = mock_create_pixel_shader,
+    .CreateGeometryShader = mock_create_geometry_shader,
+    .CreateHullShader = mock_create_hull_shader,
+    .CreateDomainShader = mock_create_domain_shader,
+    .CreateComputeShader = mock_create_compute_shader,
 };
 
 static SIZE_T mock_private_shader_size(D3D10DDI_HDEVICE device,
@@ -145,6 +270,24 @@ static SIZE_T mock_private_shader_size(D3D10DDI_HDEVICE device,
     if (code || signatures)
         return 0;
     InterlockedIncrement(&shader_size_calls);
+    return sizeof(struct mock_shader);
+}
+
+/* The tessellation sizing slot, which hull and domain shaders must use.
+ *
+ * It returns the same size as the slot above, mirroring the pinned driver,
+ * whose shader class has one layout for every pipeline stage because the only
+ * stage-dependent member -- the pipeline-state cache key -- is never stored.
+ * Counted separately so the test can prove the host asked the right slot per
+ * stage rather than the convenient one. */
+static SIZE_T mock_private_tessellation_shader_size(D3D10DDI_HDEVICE device,
+        const UINT *code,
+        const D3D11_1DDIARG_TESSELLATION_IO_SIGNATURES *signatures)
+{
+    (void)device;
+    if (code || signatures)
+        return 0;
+    InterlockedIncrement(&tessellation_size_calls);
     return sizeof(struct mock_shader);
 }
 
@@ -175,6 +318,38 @@ static void mock_ps_set_shader(D3D10DDI_HDEVICE device,
     (void)device;
     InterlockedIncrement(&pixel_set_calls);
     last_bound_pixel_shader = shader.pDrvPrivate;
+}
+
+static void mock_gs_set_shader(D3D10DDI_HDEVICE device,
+        D3D10DDI_HSHADER shader)
+{
+    (void)device;
+    (void)shader;
+    InterlockedIncrement(&geometry_set_calls);
+}
+
+static void mock_hs_set_shader(D3D10DDI_HDEVICE device,
+        D3D10DDI_HSHADER shader)
+{
+    (void)device;
+    (void)shader;
+    InterlockedIncrement(&hull_set_calls);
+}
+
+static void mock_ds_set_shader(D3D10DDI_HDEVICE device,
+        D3D10DDI_HSHADER shader)
+{
+    (void)device;
+    (void)shader;
+    InterlockedIncrement(&domain_set_calls);
+}
+
+static void mock_cs_set_shader(D3D10DDI_HDEVICE device,
+        D3D10DDI_HSHADER shader)
+{
+    (void)device;
+    (void)shader;
+    InterlockedIncrement(&compute_set_calls);
 }
 
 static HRESULT mock_get_versions(D3D10DDI_HADAPTER adapter, UINT32 *count,
@@ -218,9 +393,19 @@ static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
      * among them, for the reason given at the top of this file. */
     args->pWDDM2_6DeviceFuncs->pfnCalcPrivateShaderSize =
             mock_private_shader_size;
+    args->pWDDM2_6DeviceFuncs->pfnCalcPrivateTessellationShaderSize =
+            mock_private_tessellation_shader_size;
     args->pWDDM2_6DeviceFuncs->pfnDestroyShader = mock_destroy_shader;
     args->pWDDM2_6DeviceFuncs->pfnVsSetShader = mock_vs_set_shader;
     args->pWDDM2_6DeviceFuncs->pfnPsSetShader = mock_ps_set_shader;
+    args->pWDDM2_6DeviceFuncs->pfnGsSetShader = mock_gs_set_shader;
+    args->pWDDM2_6DeviceFuncs->pfnHsSetShader = mock_hs_set_shader;
+    args->pWDDM2_6DeviceFuncs->pfnDsSetShader = mock_ds_set_shader;
+    args->pWDDM2_6DeviceFuncs->pfnCsSetShader = mock_cs_set_shader;
+    /* pfnCalcPrivateGeometryShaderWithStreamOutput stays null for the same
+     * reason the table's create-shader slots do: the host must never reach
+     * for it, because it sizes a stream-output object this host cannot ask
+     * the driver to build. */
 
     /* The sub-object vtable, published the way the driver publishes it: by
      * constructing an object at the head of the private device block the host
@@ -278,11 +463,21 @@ struct WineD3D11On12MockShaderReport
 {
     UINT size;
     LONG sizeCalls;
+    LONG tessellationSizeCalls;
     LONG vertexCreateCalls;
     LONG pixelCreateCalls;
+    LONG geometryCreateCalls;
+    LONG hullCreateCalls;
+    LONG domainCreateCalls;
+    LONG computeCreateCalls;
     LONG destroyCalls;
     LONG vertexSetCalls;
     LONG pixelSetCalls;
+    LONG geometrySetCalls;
+    LONG hullSetCalls;
+    LONG domainSetCalls;
+    LONG computeSetCalls;
+    LONG streamOutputRequested;
     const void *lastBytecode;
     UINT lastBytecodeSize;
     const void *lastLinkage;
@@ -297,11 +492,21 @@ __declspec(dllexport) HRESULT WINAPI WineD3D11On12MockDriverGetShaderReport(
         return E_INVALIDARG;
 
     report->sizeCalls = shader_size_calls;
+    report->tessellationSizeCalls = tessellation_size_calls;
     report->vertexCreateCalls = vertex_create_calls;
     report->pixelCreateCalls = pixel_create_calls;
+    report->geometryCreateCalls = geometry_create_calls;
+    report->hullCreateCalls = hull_create_calls;
+    report->domainCreateCalls = domain_create_calls;
+    report->computeCreateCalls = compute_create_calls;
     report->destroyCalls = shader_destroy_calls;
     report->vertexSetCalls = vertex_set_calls;
     report->pixelSetCalls = pixel_set_calls;
+    report->geometrySetCalls = geometry_set_calls;
+    report->hullSetCalls = hull_set_calls;
+    report->domainSetCalls = domain_set_calls;
+    report->computeSetCalls = compute_set_calls;
+    report->streamOutputRequested = last_geometry_stream_output_requested;
     report->lastBytecode = last_bytecode;
     report->lastBytecodeSize = last_bytecode_size;
     report->lastLinkage = last_linkage;
