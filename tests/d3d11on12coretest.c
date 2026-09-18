@@ -158,6 +158,9 @@ static void test_get_interface(void)
     if (!(iface.capabilities & WINE_D3D11ON12_CAP_SHADER_LIFECYCLE))
         fail("get interface publishes the current version",
                 "the shader lifecycle capability bit is missing");
+    if (!(iface.capabilities & WINE_D3D11ON12_CAP_EXTENDED_SHADER_STAGES))
+        fail("get interface publishes the current version",
+                "the extended shader stages capability bit is missing");
     /* The shader trio is the only way a caller reaches shader creation: the
      * three entry points are deliberately not in the export table, on the
      * same terms as closeAdapterDevice. */

@@ -122,6 +122,18 @@ struct SHADER_DESC
     ID3D11ClassLinkage* pLinkage;
 };
 
+struct GEOMETRY_SHADER_DESC
+{
+    const BYTE *pFunction;
+    UINT SizeInBytes;
+    const D3D11_SO_DECLARATION_ENTRY *pDeclaration;
+    UINT NumElements;
+    const UINT *pBufferStrides;
+    UINT NumStrides;
+    UINT RasterizedStream;
+    ID3D11ClassLinkage* pLinkage;
+};
+
 interface ID3D11On12DDIDevice
 {
     static ID3D11On12DDIDevice* CastFrom(D3D10DDI_HDEVICE hDevice) { return reinterpret_cast<ID3D11On12DDIDevice*>(hDevice.pDrvPrivate); }
@@ -132,6 +144,10 @@ interface ID3D11On12DDIDevice
     STDMETHOD(CreateFence)(UINT64 InitialValue, UINT Flags, _COM_Outptr_ ID3D11On12DDIFence** ppFence) = 0;
     STDMETHOD(CreateVertexShader)(D3D10DDI_HSHADER hShader, _In_ D3D11On12::SHADER_DESC const* pDesc) = 0;
     STDMETHOD(CreatePixelShader)(D3D10DDI_HSHADER hShader, _In_ D3D11On12::SHADER_DESC const* pDesc) = 0;
+    STDMETHOD(CreateGeometryShader)(D3D10DDI_HSHADER hShader, _In_ D3D11On12::GEOMETRY_SHADER_DESC const* pDesc, _In_opt_ D3D11DDIARG_CREATEGEOMETRYSHADERWITHSTREAMOUTPUT const* pCGSWSOArgs) = 0;
+    STDMETHOD(CreateHullShader)(D3D10DDI_HSHADER hShader, _In_ D3D11On12::SHADER_DESC const* pDesc) = 0;
+    STDMETHOD(CreateDomainShader)(D3D10DDI_HSHADER hShader, _In_ D3D11On12::SHADER_DESC const* pDesc) = 0;
+    STDMETHOD(CreateComputeShader)(D3D10DDI_HSHADER hShader, _In_ D3D11On12::SHADER_DESC const* pDesc) = 0;
     STDMETHOD_(void, SetMarker)(_In_opt_z_ const wchar_t* name) = 0;
 };
 """
@@ -173,6 +189,18 @@ struct SHADER_DESC
     ID3D11ClassLinkage *pLinkage;
 };
 
+struct GEOMETRY_SHADER_DESC
+{
+    const BYTE *pFunction;
+    UINT SizeInBytes;
+    const D3D11_SO_DECLARATION_ENTRY *pDeclaration;
+    UINT NumElements;
+    const UINT *pBufferStrides;
+    UINT NumStrides;
+    UINT RasterizedStream;
+    ID3D11ClassLinkage *pLinkage;
+};
+
 struct ID3D11On12DDIDeviceVtbl
 {
     HRESULT (STDMETHODCALLTYPE *GetD3D12Device)(ID3D11On12DDIDevice *This,
@@ -188,6 +216,16 @@ struct ID3D11On12DDIDeviceVtbl
     HRESULT (STDMETHODCALLTYPE *CreateVertexShader)(ID3D11On12DDIDevice *This,
             D3D10DDI_HSHADER hShader, D3D11On12::SHADER_DESC const *pDesc);
     HRESULT (STDMETHODCALLTYPE *CreatePixelShader)(ID3D11On12DDIDevice *This,
+            D3D10DDI_HSHADER hShader, D3D11On12::SHADER_DESC const *pDesc);
+    HRESULT (STDMETHODCALLTYPE *CreateGeometryShader)(
+            ID3D11On12DDIDevice *This, D3D10DDI_HSHADER hShader,
+            D3D11On12::GEOMETRY_SHADER_DESC const *pDesc,
+            D3D11DDIARG_CREATEGEOMETRYSHADERWITHSTREAMOUTPUT const *pCGSWSOArgs);
+    HRESULT (STDMETHODCALLTYPE *CreateHullShader)(ID3D11On12DDIDevice *This,
+            D3D10DDI_HSHADER hShader, D3D11On12::SHADER_DESC const *pDesc);
+    HRESULT (STDMETHODCALLTYPE *CreateDomainShader)(ID3D11On12DDIDevice *This,
+            D3D10DDI_HSHADER hShader, D3D11On12::SHADER_DESC const *pDesc);
+    HRESULT (STDMETHODCALLTYPE *CreateComputeShader)(ID3D11On12DDIDevice *This,
             D3D10DDI_HSHADER hShader, D3D11On12::SHADER_DESC const *pDesc);
 };
 """
@@ -339,8 +377,11 @@ class DDIDeviceVtableTranscription(unittest.TestCase):
         self.assertNotEqual(retyped, CORE_ADAPTER_ARGS)
         errors = check_adapter_args.check_interface(DRIVER_ADAPTER_ARGS,
                                                     retyped)
-        self.assertTrue(any("CreatePixelShader" in error for error in errors),
-                        errors)
+        # The last slot before the closing brace, whichever stage that is:
+        # the point is that a dropped const is caught, not which method.
+        self.assertTrue(
+            any(check_adapter_args.LAST_SLOT in error for error in errors),
+            errors)
 
     def test_a_missing_self_parameter_is_rejected(self):
         """An explicit vtable has to carry the `this` a C++ method implies;
@@ -397,9 +438,15 @@ class DDIDeviceVtableTranscription(unittest.TestCase):
                              r"\s+(\d+)u", line)
             if match:
                 published[match.group(1)] = int(match.group(2))
-        self.assertEqual(published,
-                         {"CREATEVERTEXSHADER": names.index("CreateVertexShader"),
-                          "CREATEPIXELSHADER": names.index("CreatePixelShader")})
+        # Derived from the transcription rather than restated, so adding a
+        # stage cannot make this test stale while still passing.
+        # A macro naming a slot that does not exist is absent from expected,
+        # so the dicts differ and the mismatch is reported either way.
+        expected = {name.upper(): index
+                    for index, name in enumerate(names)
+                    if name.upper() in published}
+        self.assertEqual(published, expected)
+        self.assertTrue(published, "no slot indices are published")
 
 
 class DtlPortabilityInventory(unittest.TestCase):

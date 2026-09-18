@@ -119,7 +119,7 @@ must not have that path, so it takes the declarations it needs.
 
 `relay12-d3d11/d3d11on12core.cpp` therefore carries the interface as an
 explicit vtable structure, every slot from `GetD3D12Device` through
-`CreatePixelShader`, with the unused slots' pointer-only arguments left
+`CreateComputeShader`, with the unused slots' pointer-only arguments left
 incomplete. Two facts make that safe to do:
 
 - the interface has no `IUnknown` base and no virtual destructor, so slot
@@ -554,6 +554,32 @@ declaration nothing yet needs.
   instead of driver bytecode". Promoting the two table typedefs was still
   right — they are part of the frozen contract and a different driver may fill
   them — but promotion was never what unblocked shader creation.
+- **Which sizing slot each shader stage must use**: the table carries exactly
+  three shader sizing slots and no compute-specific one. Hull and domain take
+  `pfnCalcPrivateTessellationShaderSize`, whose signature argument is the
+  tessellation kind; vertex, pixel, geometry and compute take
+  `pfnCalcPrivateShaderSize`. Getting this wrong is not a cosmetic error — the
+  driver placement-constructs its shader object into the block the host sized,
+  so an undersized block is heap corruption inside the driver.
+
+  That one slot can serve four differently-typed driver objects is the
+  *driver's own invariant*, not an assumption here. Its shader class is a
+  template over the pipeline interface, and the only member whose type varies
+  with that parameter is the pipeline-state cache key
+  (`PSOCacheKeyType<TIface>`, which specialises for compute). The key is never
+  stored: `PipelineStateCacheKeyComponent<Key>` holds only a
+  `std::vector<std::weak_ptr<CacheEntry<Key>>>`, which is one size whatever
+  `Key` is. So every instantiation has identical layout — and it has to,
+  because with no compute sizing slot in the table the runtime can only ever
+  have sized a compute shader through `pfnCalcPrivateShaderSize` while the
+  driver built a compute object in the result.
+
+  `pfnCalcPrivateGeometryShaderWithStreamOutput` is deliberately never called.
+  It sizes `StreamOutShader`, which derives from the ordinary geometry shader
+  and adds four vectors and a `UINT` — a strictly larger object. The host
+  always passes a null stream-output argument, so the driver never builds one;
+  the mock driver leaves that sizing slot null and latches any attempt to
+  describe a stream, so the two facts cannot drift apart.
 - **Whether the driver retains the caller's shader bytecode**: it does not.
   `CreateUnderlyingShader` in `include/Shader.inl` copies the container into
   its own `unique_ptr<BYTE[]>` before doing anything with it, on both the

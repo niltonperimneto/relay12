@@ -55,11 +55,21 @@ struct mock_shader_report
 {
     UINT size;
     LONG sizeCalls;
+    LONG tessellationSizeCalls;
     LONG vertexCreateCalls;
     LONG pixelCreateCalls;
+    LONG geometryCreateCalls;
+    LONG hullCreateCalls;
+    LONG domainCreateCalls;
+    LONG computeCreateCalls;
     LONG destroyCalls;
     LONG vertexSetCalls;
     LONG pixelSetCalls;
+    LONG geometrySetCalls;
+    LONG hullSetCalls;
+    LONG domainSetCalls;
+    LONG computeSetCalls;
+    LONG streamOutputRequested;
     const void *lastBytecode;
     UINT lastBytecodeSize;
     const void *lastLinkage;
@@ -174,7 +184,9 @@ int main(void)
     before = report();
 
     initialize_shader(&strayShader);
-    hr = WineD3D11On12CreateShaderV1(&adapterDevice, 2u, vertex_bytecode,
+    /* One past the last named stage.  Six stages are named, so this is the
+     * first value no stage constant covers. */
+    hr = WineD3D11On12CreateShaderV1(&adapterDevice, 6u, vertex_bytecode,
             sizeof(vertex_bytecode), &strayShader);
     check(hr == E_INVALIDARG, "create rejects an unnamed stage");
 
@@ -272,7 +284,7 @@ int main(void)
     check(hr == E_INVALIDARG,
           "a vertex shader is refused on the pixel stage");
 
-    hr = WineD3D11On12SetShaderV1(&adapterDevice, 2u, &vertexShader);
+    hr = WineD3D11On12SetShaderV1(&adapterDevice, 6u, &vertexShader);
     check(hr == E_INVALIDARG, "binding to an unnamed stage is refused");
 
     initialize_shader(&strayShader);
@@ -336,6 +348,147 @@ int main(void)
             WINE_D3D11ON12_SHADER_VERTEX, vertex_bytecode,
             sizeof(vertex_bytecode), &strayShader);
     check(hr == E_INVALIDARG, "create refuses a closed adapter/device pair");
+
+    /* The four stages beyond vertex and pixel.
+     *
+     * Reopened, because the pair above is closed. Each stage is asserted to
+     * reach its own creation method and -- the part that matters for memory
+     * safety -- its own sizing slot: hull and domain must size through
+     * pfnCalcPrivateTessellationShaderSize, the rest through
+     * pfnCalcPrivateShaderSize. The mock counts the two separately, so a host
+     * that used whichever was convenient fails here. */
+    memset(&adapterDevice, 0, sizeof(adapterDevice));
+    adapterDevice.size = sizeof(adapterDevice);
+    hr = WineD3D11On12OpenAdapterV1((IUnknown *)&device.ID3D12Device_iface,
+            queue_objects, 1, 0, &adapterDevice);
+    check(hr == S_OK, "the adapter reopens for the extended stages");
+
+    {
+        static const struct
+        {
+            UINT stage;
+            const char *name;
+            int tessellation;
+        } stages[] = {
+            { WINE_D3D11ON12_SHADER_GEOMETRY, "geometry", 0 },
+            { WINE_D3D11ON12_SHADER_HULL, "hull", 1 },
+            { WINE_D3D11ON12_SHADER_DOMAIN, "domain", 1 },
+            { WINE_D3D11ON12_SHADER_COMPUTE, "compute", 0 },
+        };
+        static BYTE stage_bytecode[32];
+        WineD3D11On12Shader staged;
+        size_t which;
+
+        for (which = 0; which < sizeof(stage_bytecode); ++which)
+            stage_bytecode[which] = (BYTE)(which ^ 0x5a);
+
+        for (which = 0; which < ARRAYSIZE(stages); ++which)
+        {
+            char detail[128];
+            LONG creates_before;
+            LONG creates_after;
+
+            before = report();
+
+            initialize_shader(&staged);
+            hr = WineD3D11On12CreateShaderV1(&adapterDevice,
+                    stages[which].stage, stage_bytecode,
+                    sizeof(stage_bytecode), &staged);
+            snprintf(detail, sizeof(detail), "a %s shader is created",
+                     stages[which].name);
+            check(hr == S_OK, detail);
+            if (FAILED(hr))
+                continue;
+
+            after = report();
+
+            /* The sizing slot, which is the memory-safety assertion: the
+             * private block must have been sized by the slot that describes
+             * this stage's shader object. */
+            snprintf(detail, sizeof(detail),
+                     "the %s stage sizes through its own sizing slot",
+                     stages[which].name);
+            if (stages[which].tessellation)
+                check(after.tessellationSizeCalls
+                                == before.tessellationSizeCalls + 1
+                        && after.sizeCalls == before.sizeCalls, detail);
+            else
+                check(after.sizeCalls == before.sizeCalls + 1
+                        && after.tessellationSizeCalls
+                                == before.tessellationSizeCalls, detail);
+
+            /* Exactly this stage's creation method, and no other. */
+            creates_before = before.geometryCreateCalls + before.hullCreateCalls
+                    + before.domainCreateCalls + before.computeCreateCalls
+                    + before.vertexCreateCalls + before.pixelCreateCalls;
+            creates_after = after.geometryCreateCalls + after.hullCreateCalls
+                    + after.domainCreateCalls + after.computeCreateCalls
+                    + after.vertexCreateCalls + after.pixelCreateCalls;
+            snprintf(detail, sizeof(detail),
+                     "creating a %s shader reaches exactly one create method",
+                     stages[which].name);
+            check(creates_after == creates_before + 1, detail);
+
+            snprintf(detail, sizeof(detail),
+                     "the %s container is passed through unchanged",
+                     stages[which].name);
+            check(after.lastBytecode == (const void *)stage_bytecode
+                    && after.lastBytecodeSize == sizeof(stage_bytecode),
+                  detail);
+
+            /* Binding, through this stage's own DDI slot. */
+            before = report();
+            hr = WineD3D11On12SetShaderV1(&adapterDevice, stages[which].stage,
+                    &staged);
+            snprintf(detail, sizeof(detail), "a %s shader binds",
+                     stages[which].name);
+            check(hr == S_OK, detail);
+            after = report();
+            snprintf(detail, sizeof(detail),
+                     "binding a %s shader reaches exactly one bind slot",
+                     stages[which].name);
+            check(after.geometrySetCalls + after.hullSetCalls
+                            + after.domainSetCalls + after.computeSetCalls
+                    == before.geometrySetCalls + before.hullSetCalls
+                            + before.domainSetCalls + before.computeSetCalls
+                            + 1, detail);
+
+            /* No stage may be bound to a stage it was not created for. */
+            hr = WineD3D11On12SetShaderV1(&adapterDevice,
+                    WINE_D3D11ON12_SHADER_VERTEX, &staged);
+            snprintf(detail, sizeof(detail),
+                     "a %s shader is refused on the vertex stage",
+                     stages[which].name);
+            check(hr == E_INVALIDARG, detail);
+
+            before = report();
+            hr = WineD3D11On12DestroyShaderV1(&adapterDevice, &staged);
+            snprintf(detail, sizeof(detail), "a %s shader is destroyed",
+                     stages[which].name);
+            check(hr == S_OK, detail);
+            after = report();
+            snprintf(detail, sizeof(detail),
+                     "destroying a %s shader reaches the driver once",
+                     stages[which].name);
+            check(after.destroyCalls == before.destroyCalls + 1, detail);
+        }
+
+        /* The latch that would have fired if the host had ever described a
+         * stream-output geometry shader -- an object larger than the private
+         * block it sized. */
+        after = report();
+        check(after.streamOutputRequested == 0,
+              "no geometry shader ever requested stream output");
+    }
+
+    /* An unnamed stage is still refused now that six are named. */
+    initialize_shader(&strayShader);
+    hr = WineD3D11On12CreateShaderV1(&adapterDevice, 6u, vertex_bytecode,
+            sizeof(vertex_bytecode), &strayShader);
+    check(hr == E_INVALIDARG, "a stage past the last named one is rejected");
+
+    hr = WineD3D11On12CloseAdapterDeviceV1(&adapterDevice);
+    check(hr == S_OK, "the extended-stage lifecycle closes");
 
     /* Closing a lifecycle whose shaders the caller never released. The host
      * owns those blocks, so it is the one that must release them -- and it
