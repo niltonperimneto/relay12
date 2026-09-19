@@ -9,6 +9,45 @@ through D3D11On12, D3D12TranslationLayer, and D3DMetal.
 Each pipeline area should land as an independently testable Wine patch. Avoid
 combining all remaining callbacks into one large change.
 
+## Current implementation status
+
+Status as of 2026-09-19. This table distinguishes code present in the working
+tree from functionality proven on the real D3DMetal path.
+
+| Milestone | Working-tree status | Completion evidence still required |
+| :--- | :--- | :--- |
+| Input-layout lifecycle and `IASetInputLayout` | Implemented as patch 0013 | MinGW PE build in CI |
+| Vertex/pixel shader lifecycle and binding | Implemented as patch 0014 | MinGW PE build in CI |
+| Texture2D core lifecycle | Implemented as patch 0015 | MinGW PE build in CI, and the mock-driver run under Wine |
+| Render-target views | Not started | Patch 0016 and lifecycle tests |
+| Output merger, viewport, and clear | Not started | Patch 0017 and exact DDI-dispatch tests |
+| Copy, map, unmap, and readback | Not started | Patch 0018 and byte-exact readback tests |
+| D3D11 device/context publication | Deliberately disabled | Complete readiness check and COM publication tests |
+| Real D3DMetal triangle | Not proven | Apple Silicon hardware execution with pixel readback |
+
+The branch tip does not yet contain patches 0013 to 0015. A clean status or a
+green Python gate alone must not be interpreted as first-frame completion: no
+part of the Texture2D slice has been compiled, because the MinGW toolchain is
+CI-only.
+
+### Verified baseline
+
+After the shader slice and the initial Texture2D core changes, the following
+portable checks pass:
+
+```text
+96 Python CI-gate tests
+DDI layout model: 53 structures and 463 fields
+DDI header provenance gate
+Interface-acquisition audit
+Shared-state audit
+Wine patch-series application and frontend lifecycle audit through patch 0014
+```
+
+These checks prove structural consistency and fail-closed lifetime behavior.
+They do not prove PE compilation, GPU command execution, synchronization,
+Metal rendering, or pixel correctness.
+
 ## 1. Basic shader lifecycle and binding — complete
 
 Implemented by `0014-d3d11-route-shaders.patch`.
@@ -52,26 +91,68 @@ length before any driver callback, copies bytecode into aligned temporary
 storage, supports both D3D11 and D3D10 vertex/pixel binding entry points, and
 keeps WineD3D's existing shader path unchanged.
 
-## 2. Texture2D resource lifecycle
+## 2. Texture2D resource lifecycle — complete
 
-Create `0015-d3d11-route-texture2d-resources.patch`.
+Implemented by `0015-d3d11-route-texture2d-resources.patch`.
 
-Extend the existing `ResourceState` and resource registry instead of creating
-an unrelated texture ownership model.
+### Core boundary
 
-- Add a resource-kind field to the public resource handle.
-- Support buffers and Texture2D resources through the same registry.
-- Translate `D3D11_TEXTURE2D_DESC` into `D3D11DDIARG_CREATERESOURCE`.
-- Construct the complete mip-information array.
-- Translate every supplied initial subresource.
-- Check all allocation and multiplication operations for overflow.
-- Preserve usage, bind flags, CPU access, miscellaneous flags, format, sample
-  description, mip count, and array size.
-- Continue servicing resource-flags callbacks from the shared resource
-  registry.
+- The C-compatible `WineD3D11On12Texture2D` opaque handle.
+- Core create/destroy exports at ordinals 17 and 18.
+- The publicly documented `D3D10DDIRESOURCE_TYPE` values for Texture2D.
+- A resource-kind discriminator on the shared `ResourceState` registry, so
+  buffers and textures keep one driver-handle identity.
+- Mip information for every mip and array slice, translated initial
+  subresource data, and allocation/subresource-count overflow checks.
+- Usage, bind, CPU-access/map, miscellaneous, format, sample, mip and array
+  metadata forwarded to `D3D11DDIARG_CREATERESOURCE`.
 
-A common resource identity is required for views, copies, mappings, and
-wrapped resources.
+### Wine frontend
+
+- `d3d_texture2d` embeds the backend handle; `d3d11_backend_ops` gains
+  `create_texture2d` and `destroy_texture2d`, both mandatory for a backend
+  device.
+- D3D11 and D3D10 Texture2D creation route through Relay12 for the On12
+  backend only. A caller-supplied `wined3d_texture` is the swapchain case and
+  stays on the WineD3D path.
+- A backend texture owns no WineD3D object and no DXGI resource, so
+  `QueryInterface`, the three private-data methods, `GetDesc`, `AddRef`,
+  `Release`, and the D3D10 `Map`/`Unmap` pair each test for it and report an
+  honest result rather than dereferencing NULL.
+- `MipLevels` of zero is resolved at creation so `GetDesc` reports what the
+  application actually received.
+
+### Defect found and fixed while landing this
+
+Both `d3d11_backend_ops` tables were positional initialisers. Adding
+`create_texture2d` and `destroy_texture2d` to the struct shifted every
+WineD3D entry after `destroy_buffer`: `destroy_vertex_shader` received
+`wined3d_backend_set_vertex_shader`, the two shader binding ops became NULL,
+and the last two members were left uninitialised. Releasing a vertex shader
+on the **ordinary WineD3D path** would have called a binding function through
+a destroy signature.
+
+Both tables are now designated initialisers, and
+`scripts/check_wine_d3d11_backend.py` requires them to stay that way.
+
+### Coverage
+
+`tests/d3d11on12openadapter.c` drives the core against the mock driver for
+mip-chain correctness across array slices, zero-`MipLevels` resolution,
+format and bind-flag forwarding, initial data, initial data with a null
+pointer, double destruction, five rejected-argument cases, and survival to
+device teardown. `tests/d3d11on12mockdriver.c` checks the full mip array
+rather than its first entry, because the core derives that array itself.
+
+### Known gaps
+
+- A backend texture does not answer `IDXGISurface`: `d3d_device_create_dxgi_resource`
+  needs a wined3d resource to wrap and there is none.
+- Mapping a backend texture returns an error; it belongs to the readback
+  milestone, which needs per-subresource mapped state and map-mode validation.
+- Cross-device rejection is not tested for textures. `DestroyTexture2DV1`
+  takes only a handle, so the check the binding entry points can make is not
+  expressible here.
 
 ## 3. Render-target-view ownership
 
