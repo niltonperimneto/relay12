@@ -16,6 +16,8 @@ REQUIRED_HEADER = (
     "void (*set_primitive_topology)(struct d3d11_device_context *context,",
     "HRESULT (*create_buffer)(struct d3d_device *device,",
     "void (*destroy_buffer)(struct d3d_device *device,",
+    "HRESULT (*create_texture2d)(struct d3d_device *device,",
+    "void (*destroy_texture2d)(struct d3d_device *device,",
     "void (*set_vertex_buffers)(struct d3d11_device_context *context,",
     "void (*set_index_buffer)(struct d3d11_device_context *context,",
     "HRESULT (*create_input_layout)(struct d3d_device *device,",
@@ -39,6 +41,9 @@ REQUIRED_HEADER = (
 
 REQUIRED_DEVICE = (
     "static const struct d3d11_backend_ops wined3d_backend_ops",
+    ".destroy_device = wined3d_backend_destroy_device,",
+    ".set_vertex_shader = wined3d_backend_set_vertex_shader,",
+    ".set_pixel_shader = wined3d_backend_set_pixel_shader,",
     "context->device->backend_ops->flush(context);",
     "context->device->backend_ops->draw(context, vertex_count,",
     "context->device->backend_ops->draw_indexed(context, index_count,",
@@ -56,6 +61,8 @@ REQUIRED_DEVICE = (
     "device->backend_ops->get_device_removed_reason(device)",
     "device->backend_ops->destroy_device(device);",
     "device->backend_ops = &wined3d_backend_ops;",
+    "|| !backend_ops->create_texture2d",
+    "|| !backend_ops->destroy_texture2d",
     "|| !backend_ops->create_input_layout",
     "|| !backend_ops->destroy_input_layout",
     "|| !backend_ops->set_input_layout",
@@ -82,6 +89,14 @@ REQUIRED_BUFFER = (
     "buffer->backend_buffer.size = sizeof(buffer->backend_buffer);",
 )
 
+REQUIRED_TEXTURE = (
+    "device->backend_ops->get_feature_level(device)",
+    "d3d_texture2d_is_backend(texture)",
+    "texture->backend_texture.size = sizeof(texture->backend_texture);",
+    "device->backend_ops->create_texture2d(device, desc,",
+    "device_impl->backend_ops->destroy_texture2d(device_impl, texture);",
+)
+
 REQUIRED_SHADER = (
     "device->backend_ops->create_vertex_shader(device,",
     "device_impl->backend_ops->destroy_vertex_shader(device_impl, shader);",
@@ -92,6 +107,12 @@ REQUIRED_SHADER = (
 
 REQUIRED_MAIN = (
     "static const struct d3d11_backend_ops d3d11_on12_backend_ops",
+    ".create_texture2d = d3d11_on12_backend_create_texture2d,",
+    ".destroy_texture2d = d3d11_on12_backend_destroy_texture2d,",
+    "backend->create_texture2d(&backend->adapter, desc, data,",
+    "backend->destroy_texture2d(",
+    '"WineD3D11On12CreateTexture2DV1"',
+    '"WineD3D11On12DestroyTexture2DV1"',
     "WineD3D11On12OpenAdapterV1",
     "d3d_device_create_backend(&d3d11_on12_backend_ops,",
     "IUnknown_Release(&d3d_device->IUnknown_inner);",
@@ -124,6 +145,7 @@ def check_tree(root):
     device = (root / "dlls/d3d11/device.c").read_text()
     buffer = (root / "dlls/d3d11/buffer.c").read_text()
     shader = (root / "dlls/d3d11/shader.c").read_text()
+    texture = (root / "dlls/d3d11/texture.c").read_text()
     main = (root / "dlls/d3d11/d3d11_main.c").read_text()
     configure = (root / "configure.ac").read_text()
     host_makefile = root / "dlls/d3d11on12host/Makefile.in"
@@ -139,6 +161,9 @@ def check_tree(root):
     for marker in REQUIRED_BUFFER:
         if marker not in buffer:
             errors.append(f"buffer.c is missing: {marker}")
+    for marker in REQUIRED_TEXTURE:
+        if marker not in texture:
+            errors.append(f"texture.c is missing: {marker}")
     for marker in REQUIRED_SHADER:
         if marker not in shader:
             errors.append(f"shader.c is missing: {marker}")

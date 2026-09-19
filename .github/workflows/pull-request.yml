@@ -372,6 +372,8 @@ jobs:
           grep -q 'WineD3D11On12DestroyShaderV1' <<<"$core_exports"
           grep -q 'WineD3D11On12SetVertexShaderV1' <<<"$core_exports"
           grep -q 'WineD3D11On12SetPixelShaderV1' <<<"$core_exports"
+          grep -q 'WineD3D11On12CreateTexture2DV1' <<<"$core_exports"
+          grep -q 'WineD3D11On12DestroyTexture2DV1' <<<"$core_exports"
           exports="$(x86_64-w64-mingw32-objdump -p d3d11shim.dll)"
           grep -q 'D3D11CreateDevice' <<<"$exports"
           grep -q 'D3D11CreateDeviceAndSwapChain' <<<"$exports"
@@ -409,6 +411,8 @@ jobs:
         14: "WineD3D11On12DestroyShaderV1",
         15: "WineD3D11On12SetVertexShaderV1",
         16: "WineD3D11On12SetPixelShaderV1",
+        17: "WineD3D11On12CreateTexture2DV1",
+        18: "WineD3D11On12DestroyTexture2DV1",
     },
           }
           for path, wanted in expected.items():

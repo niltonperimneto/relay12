@@ -20,6 +20,21 @@ static INT last_topology;
 static LONG resource_create_calls;
 static LONG resource_destroy_calls;
 static int bad_resource_description;
+/* What the last Texture2D creation actually carried into the DDI.
+ *
+ * Recorded rather than asserted in place: the mip array is the part of
+ * D3D11DDIARG_CREATERESOURCE the core builds itself, so the test has to see
+ * the whole of it -- a stub that only checked the first entry would pass on
+ * a core that got every later mip wrong. */
+static LONG texture_create_calls;
+static UINT last_texture_width;
+static UINT last_texture_height;
+static UINT last_texture_mip_levels;
+static UINT last_texture_array_size;
+static DXGI_FORMAT last_texture_format;
+static UINT last_texture_bind_flags;
+static int last_texture_had_initial_data;
+static int bad_texture_mip_chain;
 static LONG vertex_buffer_bind_calls;
 static LONG index_buffer_bind_calls;
 static void *last_vertex_buffer;
@@ -130,7 +145,9 @@ static SIZE_T mock_calc_private_resource_size(D3D10DDI_HDEVICE device,
 {
     (void)device;
     if (!description || !description->pMipInfoList
-            || description->ResourceDimension != D3D10DDIRESOURCE_BUFFER)
+            || (description->ResourceDimension != D3D10DDIRESOURCE_BUFFER
+                    && description->ResourceDimension
+                            != D3D10DDIRESOURCE_TEXTURE2D))
         bad_resource_description = 1;
     return 32;
 }
@@ -140,13 +157,55 @@ static void mock_create_resource(D3D10DDI_HDEVICE device,
         D3D10DDI_HRESOURCE resource, D3D10DDI_HRTRESOURCE runtime_resource)
 {
     (void)device;
-    if (!description || !description->pMipInfoList
+    if (!description || !description->pMipInfoList || !resource.pDrvPrivate
+            || !runtime_resource.handle)
+    {
+        bad_resource_description = 1;
+        InterlockedIncrement(&resource_create_calls);
+        return;
+    }
+
+    if (description->ResourceDimension == D3D10DDIRESOURCE_TEXTURE2D)
+    {
+        UINT array_slice, mip;
+
+        last_texture_width = description->pMipInfoList->TexelWidth;
+        last_texture_height = description->pMipInfoList->TexelHeight;
+        last_texture_mip_levels = description->MipLevels;
+        last_texture_array_size = description->ArraySize;
+        last_texture_format = description->Format;
+        last_texture_bind_flags = description->BindFlags;
+        last_texture_had_initial_data = description->pInitialDataUP != NULL;
+
+        /* Every slice must carry a halving chain that clamps at one.  This
+         * is the arithmetic the core does on its own, so it is the part a
+         * mock is actually useful for checking. */
+        for (array_slice = 0; array_slice < description->ArraySize; ++array_slice)
+        {
+            for (mip = 0; mip < description->MipLevels; ++mip)
+            {
+                const D3D10DDI_MIPINFO *info = &description->pMipInfoList[
+                        array_slice * description->MipLevels + mip];
+                UINT want_width = description->pMipInfoList->TexelWidth >> mip;
+                UINT want_height = description->pMipInfoList->TexelHeight >> mip;
+
+                if (!want_width) want_width = 1;
+                if (!want_height) want_height = 1;
+                if (info->TexelWidth != want_width
+                        || info->TexelHeight != want_height
+                        || info->TexelDepth != 1)
+                    bad_texture_mip_chain = 1;
+            }
+        }
+        InterlockedIncrement(&texture_create_calls);
+    }
+    else if (description->ResourceDimension != D3D10DDIRESOURCE_BUFFER
             || description->pMipInfoList->TexelWidth != 256
             || description->pMipInfoList->TexelHeight != 1
-            || description->pMipInfoList->TexelDepth != 1
-            || description->ResourceDimension != D3D10DDIRESOURCE_BUFFER
-            || !resource.pDrvPrivate || !runtime_resource.handle)
+            || description->pMipInfoList->TexelDepth != 1)
+    {
         bad_resource_description = 1;
+    }
     InterlockedIncrement(&resource_create_calls);
 }
 
@@ -378,6 +437,22 @@ __declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetResourceCounts(
     if (created) *created = resource_create_calls;
     if (destroyed) *destroyed = resource_destroy_calls;
     if (bad_description) *bad_description = bad_resource_description;
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetTexture2DRecord(
+        LONG *calls, UINT *width, UINT *height, UINT *mip_levels,
+        UINT *array_size, DXGI_FORMAT *format, UINT *bind_flags,
+        int *had_initial_data, int *bad_mip_chain)
+{
+    if (calls) *calls = texture_create_calls;
+    if (width) *width = last_texture_width;
+    if (height) *height = last_texture_height;
+    if (mip_levels) *mip_levels = last_texture_mip_levels;
+    if (array_size) *array_size = last_texture_array_size;
+    if (format) *format = last_texture_format;
+    if (bind_flags) *bind_flags = last_texture_bind_flags;
+    if (had_initial_data) *had_initial_data = last_texture_had_initial_data;
+    if (bad_mip_chain) *bad_mip_chain = bad_texture_mip_chain;
 }
 
 __declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetIABufferBindings(

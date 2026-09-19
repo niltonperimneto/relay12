@@ -71,6 +71,8 @@ class WineD3D11BackendGate(unittest.TestCase):
             check_wine_d3d11_backend.REQUIRED_BUFFER))
         (source / "shader.c").write_text("\n".join(
             check_wine_d3d11_backend.REQUIRED_SHADER))
+        (source / "texture.c").write_text("\n".join(
+            check_wine_d3d11_backend.REQUIRED_TEXTURE))
         (source / "d3d11_main.c").write_text("\n".join(
             check_wine_d3d11_backend.REQUIRED_MAIN))
         (root / "configure.ac").write_text(
@@ -116,6 +118,32 @@ class WineD3D11BackendGate(unittest.TestCase):
             ""))
         errors = check_wine_d3d11_backend.check_tree(root)
         self.assertTrue(any("destroy_vertex_shader" in error for error in errors))
+
+
+    def test_texture2d_lifecycle_regression_is_rejected(self):
+        root = self.make_tree("\n".join(
+            check_wine_d3d11_backend.REQUIRED_HEADER), "\n".join(
+            check_wine_d3d11_backend.REQUIRED_DEVICE))
+        texture = root / "dlls/d3d11/texture.c"
+        texture.write_text(texture.read_text().replace(
+            "device_impl->backend_ops->destroy_texture2d(device_impl, texture);",
+            ""))
+        errors = check_wine_d3d11_backend.check_tree(root)
+        self.assertTrue(any("destroy_texture2d" in error for error in errors))
+
+    def test_positional_wined3d_backend_table_is_rejected(self):
+        """The table must stay designated.
+
+        A positional table already shifted every WineD3D entry after
+        destroy_buffer once, when create_texture2d and destroy_texture2d were
+        added to the ops struct. The gate has to catch a return to that form.
+        """
+        markers = list(check_wine_d3d11_backend.REQUIRED_DEVICE)
+        markers.remove(".set_vertex_shader = wined3d_backend_set_vertex_shader,")
+        root = self.make_tree("\n".join(
+            check_wine_d3d11_backend.REQUIRED_HEADER), "\n".join(markers))
+        errors = check_wine_d3d11_backend.check_tree(root)
+        self.assertTrue(any("set_vertex_shader" in error for error in errors))
 
 
 class D3D11On12PortGate(unittest.TestCase):

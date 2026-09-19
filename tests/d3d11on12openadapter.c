@@ -111,6 +111,8 @@ int main(void)
     typedef void (WINAPI *get_shader_counts_fn)(LONG *, LONG *, LONG *, LONG *,
             LONG *, void **, void **, int *);
     typedef void (WINAPI *fail_next_shader_fn)(void);
+    typedef void (WINAPI *get_texture2d_record_fn)(LONG *, UINT *, UINT *,
+            UINT *, UINT *, DXGI_FORMAT *, UINT *, int *, int *);
     WineD3D11On12AdapterDevice out;
     struct mock_device device;
     struct mock_queue queue;
@@ -132,6 +134,16 @@ int main(void)
     fail_next_input_layout_fn fail_next_input_layout;
     get_shader_counts_fn get_shader_counts;
     fail_next_shader_fn fail_next_shader;
+    get_texture2d_record_fn get_texture2d_record;
+    D3D11_TEXTURE2D_DESC texture_desc;
+    D3D11_SUBRESOURCE_DATA texture_initial_data;
+    WineD3D11On12Texture2D texture_handle;
+    unsigned char texture_pixels[32 * 4];
+    LONG texture_created;
+    UINT texture_width, texture_height, texture_mip_levels;
+    UINT texture_array_size, texture_bind_flags;
+    DXGI_FORMAT texture_format;
+    int texture_had_initial_data, bad_texture_mip_chain;
     LONG opened, created, destroyed, closed;
     LONG indexed, instanced, indexed_instanced;
     INT topology;
@@ -271,6 +283,9 @@ int main(void)
     fail_next_shader = mock_driver
             ? (fail_next_shader_fn)(void *)GetProcAddress(mock_driver,
                     "WineD3D11On12MockDriverFailNextShader") : NULL;
+    get_texture2d_record = mock_driver
+            ? (get_texture2d_record_fn)(void *)GetProcAddress(mock_driver,
+                    "WineD3D11On12MockDriverGetTexture2DRecord") : NULL;
     check(get_counts != NULL, "the lifecycle mock driver is loaded");
     check(get_flush_count != NULL, "the flush counter is exported");
     check(get_draw_count != NULL, "the draw counter is exported");
@@ -285,11 +300,14 @@ int main(void)
           "the input-layout failure injector is exported");
     check(get_shader_counts != NULL, "the shader lifecycle recorder is exported");
     check(fail_next_shader != NULL, "the shader failure injector is exported");
+    check(get_texture2d_record != NULL,
+          "the Texture2D creation recorder is exported");
     if (get_counts && get_flush_count && get_draw_count
             && get_extended_draw_counts && get_topology
             && get_resource_counts && get_ia_bindings
             && get_input_layout_counts && fail_next_input_layout
-            && get_shader_counts && fail_next_shader)
+            && get_shader_counts && fail_next_shader
+            && get_texture2d_record)
     {
         device.support_device1 = 1;
         initialize_out(&out);
@@ -569,6 +587,117 @@ int main(void)
         hr = WineD3D11On12DestroyBufferV1(&index_buffer_handle);
         check(hr == S_OK, "the bound index buffer can be destroyed safely");
 
+        /* Texture2D lifecycle.
+         *
+         * The mip chain is the part worth checking hardest: the core derives
+         * it rather than receiving it, so every slice and level is compared
+         * against a halving chain that clamps at one, across an array. */
+        memset(&texture_desc, 0, sizeof(texture_desc));
+        texture_desc.Width = 8;
+        texture_desc.Height = 4;
+        texture_desc.MipLevels = 0;
+        texture_desc.ArraySize = 2;
+        texture_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        texture_desc.SampleDesc.Count = 1;
+        texture_desc.Usage = D3D11_USAGE_DEFAULT;
+        texture_desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+        memset(&texture_handle, 0, sizeof(texture_handle));
+        texture_handle.size = sizeof(texture_handle);
+        hr = WineD3D11On12CreateTexture2DV1(&out, &texture_desc, NULL,
+                &texture_handle);
+        check(hr == S_OK && texture_handle.hDrvResource
+                && texture_handle.runtimeState,
+              "Texture2D creation publishes an owned DDI resource handle");
+        get_texture2d_record(&texture_created, &texture_width, &texture_height,
+                &texture_mip_levels, &texture_array_size, &texture_format,
+                &texture_bind_flags, &texture_had_initial_data,
+                &bad_texture_mip_chain);
+        check(texture_created == 1 && texture_width == 8 && texture_height == 4
+                && texture_array_size == 2 && !bad_texture_mip_chain,
+              "Texture2D creation carries an exact mip chain for every slice");
+        /* 8x4 resolves to four levels: 8x4, 4x2, 2x1, 1x1. */
+        check(texture_mip_levels == 4,
+              "a zero mip count resolves to the full chain");
+        check(texture_format == DXGI_FORMAT_R8G8B8A8_UNORM
+                && texture_bind_flags == D3D11_BIND_RENDER_TARGET,
+              "Texture2D creation forwards format and bind flags");
+        check(!texture_had_initial_data,
+              "a Texture2D created without initial data forwards none");
+
+        hr = WineD3D11On12DestroyTexture2DV1(&texture_handle);
+        check(hr == S_OK && !texture_handle.hDrvResource
+                && !texture_handle.runtimeState,
+              "Texture2D destruction clears the public handle");
+        hr = WineD3D11On12DestroyTexture2DV1(&texture_handle);
+        check(hr == E_INVALIDARG,
+              "a destroyed Texture2D handle cannot be destroyed twice");
+
+        /* Initial data, one entry per subresource. */
+        texture_desc.MipLevels = 1;
+        texture_desc.ArraySize = 1;
+        memset(texture_pixels, 0x5a, sizeof(texture_pixels));
+        memset(&texture_initial_data, 0, sizeof(texture_initial_data));
+        texture_initial_data.pSysMem = texture_pixels;
+        texture_initial_data.SysMemPitch = 32;
+        memset(&texture_handle, 0, sizeof(texture_handle));
+        texture_handle.size = sizeof(texture_handle);
+        hr = WineD3D11On12CreateTexture2DV1(&out, &texture_desc,
+                &texture_initial_data, &texture_handle);
+        check(hr == S_OK, "a Texture2D accepts initial subresource data");
+        get_texture2d_record(&texture_created, NULL, NULL, NULL, NULL, NULL,
+                NULL, &texture_had_initial_data, &bad_texture_mip_chain);
+        check(texture_created == 2 && texture_had_initial_data
+                && !bad_texture_mip_chain,
+              "initial data reaches the DDI as an upload array");
+        hr = WineD3D11On12DestroyTexture2DV1(&texture_handle);
+        check(hr == S_OK, "an initialised Texture2D destroys cleanly");
+
+        /* Initial data with a null pointer must be refused, and must not
+         * leave a half-created resource behind. */
+        memset(&texture_initial_data, 0, sizeof(texture_initial_data));
+        memset(&texture_handle, 0, sizeof(texture_handle));
+        texture_handle.size = sizeof(texture_handle);
+        hr = WineD3D11On12CreateTexture2DV1(&out, &texture_desc,
+                &texture_initial_data, &texture_handle);
+        check(hr == E_INVALIDARG && !texture_handle.hDrvResource,
+              "initial data without memory is refused before the DDI");
+        get_texture2d_record(&texture_created, NULL, NULL, NULL, NULL, NULL,
+                NULL, NULL, NULL);
+        check(texture_created == 2,
+              "a refused Texture2D never reaches the DDI");
+
+        /* Argument validation, each rejected before the driver is touched. */
+        memset(&texture_handle, 0, sizeof(texture_handle));
+        texture_handle.size = sizeof(texture_handle);
+        texture_desc.Width = 0;
+        hr = WineD3D11On12CreateTexture2DV1(&out, &texture_desc, NULL,
+                &texture_handle);
+        check(hr == E_INVALIDARG, "a zero-width Texture2D is refused");
+        texture_desc.Width = 8;
+        texture_desc.Format = DXGI_FORMAT_UNKNOWN;
+        hr = WineD3D11On12CreateTexture2DV1(&out, &texture_desc, NULL,
+                &texture_handle);
+        check(hr == E_INVALIDARG, "an unknown Texture2D format is refused");
+        texture_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        texture_desc.MipLevels = 9;
+        hr = WineD3D11On12CreateTexture2DV1(&out, &texture_desc, NULL,
+                &texture_handle);
+        check(hr == E_INVALIDARG,
+              "a mip count deeper than the full chain is refused");
+        texture_desc.MipLevels = 1;
+        hr = WineD3D11On12CreateTexture2DV1(NULL, &texture_desc, NULL,
+                &texture_handle);
+        check(hr == E_INVALIDARG, "a null adapter device is refused");
+        texture_handle.size = 0;
+        hr = WineD3D11On12CreateTexture2DV1(&out, &texture_desc, NULL,
+                &texture_handle);
+        check(hr == E_INVALIDARG, "a Texture2D handle of the wrong size is refused");
+        texture_handle.size = sizeof(texture_handle);
+        get_texture2d_record(&texture_created, NULL, NULL, NULL, NULL, NULL,
+                NULL, NULL, NULL);
+        check(texture_created == 2,
+              "no rejected Texture2D argument reaches the DDI");
+
         buffer_handle.size = sizeof(buffer_handle);
         hr = WineD3D11On12CreateBufferV1(&out, &buffer_desc, NULL,
                 &buffer_handle);
@@ -582,6 +711,12 @@ int main(void)
         hr = WineD3D11On12CreateVertexShaderV1(&out, shader_byte_code,
                 sizeof(shader_byte_code), &vertex_shader);
         check(hr == S_OK, "a shader can remain owned until device teardown");
+        memset(&texture_handle, 0, sizeof(texture_handle));
+        texture_handle.size = sizeof(texture_handle);
+        hr = WineD3D11On12CreateTexture2DV1(&out, &texture_desc, NULL,
+                &texture_handle);
+        check(hr == S_OK,
+              "a Texture2D can remain owned until device teardown");
 
         hr = WineD3D11On12CloseAdapterDeviceV1(&out);
         check(hr == S_OK, "the complete driver lifecycle closes successfully");
@@ -591,9 +726,11 @@ int main(void)
               "device teardown invalidates every surviving input layout");
         check(!vertex_shader.hDrvShader && !vertex_shader.runtimeState,
               "device teardown invalidates every surviving shader");
+        check(!texture_handle.hDrvResource && !texture_handle.runtimeState,
+              "device teardown invalidates every surviving Texture2D handle");
         get_resource_counts(&resource_created, &resource_destroyed,
                 &bad_resource_description);
-        check(resource_created == 3 && resource_destroyed == 3,
+        check(resource_created == 6 && resource_destroyed == 6,
               "device teardown destroys each surviving DDI resource");
         get_input_layout_counts(&layout_created, &layout_destroyed,
                 &layout_bound, &bound_layout, &bad_layout_description);
