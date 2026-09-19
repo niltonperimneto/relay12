@@ -347,6 +347,8 @@ jobs:
             -Ithird_party/D3D11On12/interface \
             -o d3d11on12core.dll relay12-d3d11/d3d11on12core.cpp \
             relay12-d3d11/wine_d3d11_diag.cpp \
+            relay12-d3d11/wine_d3d11_host.cpp \
+            relay12-d3d11/wine_d3d11_context.cpp \
             relay12-d3d11/d3d11on12core.def -ld3d12 -ldxgi -luuid
           x86_64-w64-mingw32-g++ -shared -std=c++17 -O2 \
             -Wall -Wextra -Werror -fno-exceptions -fno-rtti \
