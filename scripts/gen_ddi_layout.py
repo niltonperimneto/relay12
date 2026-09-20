@@ -40,6 +40,7 @@ HEADER = pathlib.Path("relay12-d3d11/ddi/wine_d3d11ddi.h")
 # these groups is a pointer, a handle wrapping one, or a 4-byte integer.
 POINTER = (8, 8)
 UINT = (4, 4)
+FLOAT = (4, 4)
 
 
 def align_up(value, alignment):
@@ -375,6 +376,23 @@ CREATEELEMENTLAYOUT = Struct(
     [
         Field("pVertexElements", "const D3D10DDIARG_INPUT_ELEMENT_DESC *"),
         Field("NumElements", "UINT", *UINT),
+    ],
+)
+
+# Group: viewport description
+# Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10_ddi_viewport
+# Source mirror: https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs-ddi/staging/wdk-ddi-src/content/d3d10umddi/ns-d3d10umddi-d3d10_ddi_viewport.md
+# Retrieved: 2026-09-20
+
+VIEWPORT = Struct(
+    "D3D10_DDI_VIEWPORT",
+    [
+        Field("TopLeftX", "FLOAT", *FLOAT),
+        Field("TopLeftY", "FLOAT", *FLOAT),
+        Field("Width", "FLOAT", *FLOAT),
+        Field("Height", "FLOAT", *FLOAT),
+        Field("MinDepth", "FLOAT", *FLOAT),
+        Field("MaxDepth", "FLOAT", *FLOAT),
     ],
 )
 
@@ -1279,6 +1297,7 @@ GROUPS = HANDLES + [
     OPENRESOURCE,
     INPUT_ELEMENT_DESC,
     CREATEELEMENTLAYOUT,
+    VIEWPORT,
     BUFFER_SRV,
     TEX1D_SRV,
     TEX2D_SRV,
