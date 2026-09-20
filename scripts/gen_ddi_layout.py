@@ -286,6 +286,27 @@ MAPPED_SUBRESOURCE = Struct(
 #   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_openresource
 # Retrieved: 2026-09-08
 
+MIPINFO = Struct(
+    "D3D10DDI_MIPINFO",
+    [
+        Field("TexelWidth", "UINT", *UINT),
+        Field("TexelHeight", "UINT", *UINT),
+        Field("TexelDepth", "UINT", *UINT),
+        Field("PhysicalWidth", "UINT", *UINT),
+        Field("PhysicalHeight", "UINT", *UINT),
+        Field("PhysicalDepth", "UINT", *UINT),
+    ],
+)
+
+SUBRESOURCE_UP = Struct(
+    "D3D10_DDIARG_SUBRESOURCE_UP",
+    [
+        Field("pSysMem", "const void *"),
+        Field("SysMemPitch", "UINT", *UINT),
+        Field("SysMemSlicePitch", "UINT", *UINT),
+    ],
+)
+
 CREATERESOURCE = Struct(
     "D3D10DDIARG_CREATERESOURCE",
     [
@@ -331,6 +352,29 @@ OPENRESOURCE = Struct(
         Field("hKMResource", "D3D10DDI_HKMRESOURCE"),
         Field("pPrivateDriverData", "VOID *"),
         Field("PrivateDriverDataSize", "UINT", *UINT),
+    ],
+)
+
+# Group: input element and element-layout creation arguments
+# Specifications: D3D10DDIARG_INPUT_ELEMENT_DESC and
+# D3D10DDIARG_CREATEELEMENTLAYOUT public DDI pages.
+INPUT_ELEMENT_DESC = Struct(
+    "D3D10DDIARG_INPUT_ELEMENT_DESC",
+    [
+        Field("InputSlot", "UINT", *UINT),
+        Field("AlignedByteOffset", "UINT", *UINT),
+        Field("Format", "DXGI_FORMAT", *UINT),
+        Field("InputSlotClass", "D3D10_DDI_INPUT_CLASSIFICATION", *UINT),
+        Field("InstanceDataStepRate", "UINT", *UINT),
+        Field("InputRegister", "UINT", *UINT),
+    ],
+)
+
+CREATEELEMENTLAYOUT = Struct(
+    "D3D10DDIARG_CREATEELEMENTLAYOUT",
+    [
+        Field("pVertexElements", "const D3D10DDIARG_INPUT_ELEMENT_DESC *"),
+        Field("NumElements", "UINT", *UINT),
     ],
 )
 
@@ -1181,15 +1225,20 @@ PROMOTED_SLOTS = {
     "PFND3D10DDI_DESTROYELEMENTLAYOUT",
     "PFND3D10DDI_SETINPUTLAYOUT",
     "PFND3D10DDI_IA_SETVERTEXBUFFERS",
+    "PFND3D10DDI_IA_SETINDEXBUFFER",
     "PFND3D10DDI_IA_SETTOPOLOGY",
     "PFND3D10DDI_SETSHADER",
     "PFND3D11DDI_SETRENDERTARGETS",
     "PFND3D10DDI_SETVIEWPORTS",
     "PFND3D10DDI_CLEARRENDERTARGETVIEW",
     "PFND3D10DDI_DRAW",
+    "PFND3D10DDI_DRAWINDEXED",
+    "PFND3D10DDI_DRAWINSTANCED",
+    "PFND3D10DDI_DRAWINDEXEDINSTANCED",
     "PFND3D10DDI_SETBLENDSTATE",
     "PFND3D10DDI_SETDEPTHSTENCILSTATE",
     "PFND3D10DDI_SETRASTERIZERSTATE",
+    "PFND3DWDDM2_0DDI_FLUSH",
     "PFND3DWDDM2_6DDI_QUERY_SCANOUT_CAPS",
 }
 
@@ -1223,9 +1272,13 @@ GROUPS = HANDLES + [
     HANDLESIZE,
     CREATEDEFERREDCONTEXT,
     MAPPED_SUBRESOURCE,
+    MIPINFO,
+    SUBRESOURCE_UP,
     CREATERESOURCE,
     CREATE11RESOURCE,
     OPENRESOURCE,
+    INPUT_ELEMENT_DESC,
+    CREATEELEMENTLAYOUT,
     BUFFER_SRV,
     TEX1D_SRV,
     TEX2D_SRV,
