@@ -1,0 +1,514 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Relay12 <relay12@example.invalid>
+Date: Fri, 19 Sep 2026 12:00:00 -0300
+Subject: [PATCH] d3d11: route Texture2D resources through the On12 backend
+
+Embed the core's Texture2D handle in d3d_texture2d, add the create and
+destroy backend operations, and route D3D11 and D3D10 Texture2D creation
+through Relay12 for the On12 backend only.  Swapchain-owned textures, which
+arrive with a caller-supplied wined3d_texture, stay on the WineD3D path.
+
+A backend texture owns no WineD3D object and no DXGI resource, so every
+ID3D11Texture2D and ID3D10Texture2D method that would reach one now tests
+for it and reports an honest result instead of dereferencing NULL.
+
+Both backend operation tables also become designated initialisers.  They
+were positional, and adding create_texture2d and destroy_texture2d to
+struct d3d11_backend_ops shifted every WineD3D entry after destroy_buffer:
+destroy_vertex_shader received wined3d_backend_set_vertex_shader, the two
+shader binding ops became NULL, and the last two members were left
+uninitialised.  That is a defect on the ordinary WineD3D path, not only on
+the On12 one, and naming each member prevents the next insertion repeating
+it.
+--- a/dlls/d3d11/d3d11_private.h
++++ b/dlls/d3d11/d3d11_private.h
+@@ -144,6 +144,13 @@
+     struct wined3d_swapchain *swapchain;
+     D3D11_TEXTURE2D_DESC desc;
+     ID3D11Device5 *device;
++    struct
++    {
++        UINT size;
++        UINT reserved;
++        void *driver_resource;
++        void *runtime_state;
++    } backend_texture;
+ };
+ 
+ static inline struct d3d_texture2d *impl_from_ID3D11Texture2D(ID3D11Texture2D *iface)
+@@ -619,6 +626,12 @@
+             const D3D11_SUBRESOURCE_DATA *data, struct d3d_buffer *buffer);
+     void (*destroy_buffer)(struct d3d_device *device,
+             struct d3d_buffer *buffer);
++    HRESULT (*create_texture2d)(struct d3d_device *device,
++            const D3D11_TEXTURE2D_DESC *desc,
++            const D3D11_SUBRESOURCE_DATA *data,
++            struct d3d_texture2d *texture);
++    void (*destroy_texture2d)(struct d3d_device *device,
++            struct d3d_texture2d *texture);
+     void (*set_vertex_buffers)(struct d3d11_device_context *context,
+             UINT start_slot, UINT buffer_count,
+             ID3D11Buffer *const *buffers, const UINT *strides,
+--- a/dlls/d3d11/device.c
++++ b/dlls/d3d11/device.c
+@@ -145,35 +145,38 @@
+             shader_impl ? shader_impl->wined3d_shader : NULL);
+ }
+ 
++/* Designated rather than positional, and deliberately so.
++ *
++ * This table was positional, and two members were then added to
++ * struct d3d11_backend_ops without adding two entries here.  Every
++ * initialiser past destroy_buffer shifted by one pair: create_texture2d
++ * received wined3d_backend_set_vertex_buffers, destroy_vertex_shader
++ * received wined3d_backend_set_vertex_shader, set_vertex_shader and
++ * set_pixel_shader became NULL, and the last two members were left
++ * uninitialised.  Releasing a vertex shader on the ordinary WineD3D path
++ * would have called a binding function through a destroy signature.
++ *
++ * Naming each member makes a future insertion inert here instead of
++ * silently rebinding every slot after it.  Members WineD3D does not
++ * implement stay absent: C zero-initialises them, and a NULL op is how a
++ * backend says "use the WineD3D path", which the call sites already test
++ * for. */
+ static const struct d3d11_backend_ops wined3d_backend_ops =
+ {
+-    wined3d_backend_destroy_device,
+-    wined3d_backend_get_feature_level,
+-    wined3d_backend_get_creation_flags,
+-    wined3d_backend_get_device_removed_reason,
+-    wined3d_backend_flush,
+-    wined3d_backend_draw,
+-    wined3d_backend_draw_indexed,
+-    wined3d_backend_draw_instanced,
+-    wined3d_backend_draw_indexed_instanced,
+-    wined3d_backend_set_primitive_topology,
+-    NULL,
+-    NULL,
+-    wined3d_backend_set_vertex_buffers,
+-    wined3d_backend_set_index_buffer,
+-    NULL,
+-    NULL,
+-    NULL,
+-    NULL,
+-    NULL,
+-    NULL,
+-    NULL,
+-    wined3d_backend_set_vertex_shader,
+-    wined3d_backend_set_pixel_shader,
+-    NULL,
+-    NULL,
+-    NULL,
+-    NULL,
++    .destroy_device = wined3d_backend_destroy_device,
++    .get_feature_level = wined3d_backend_get_feature_level,
++    .get_creation_flags = wined3d_backend_get_creation_flags,
++    .get_device_removed_reason = wined3d_backend_get_device_removed_reason,
++    .flush = wined3d_backend_flush,
++    .draw = wined3d_backend_draw,
++    .draw_indexed = wined3d_backend_draw_indexed,
++    .draw_instanced = wined3d_backend_draw_instanced,
++    .draw_indexed_instanced = wined3d_backend_draw_indexed_instanced,
++    .set_primitive_topology = wined3d_backend_set_primitive_topology,
++    .set_vertex_buffers = wined3d_backend_set_vertex_buffers,
++    .set_index_buffer = wined3d_backend_set_index_buffer,
++    .set_vertex_shader = wined3d_backend_set_vertex_shader,
++    .set_pixel_shader = wined3d_backend_set_pixel_shader,
+ };
+ 
+ static BOOL d3d_array_reserve(void **elements, SIZE_T *capacity, SIZE_T count, SIZE_T size)
+@@ -8438,6 +8441,8 @@
+             || !backend_ops->draw_instanced
+             || !backend_ops->draw_indexed_instanced
+             || !backend_ops->set_primitive_topology
++            || !backend_ops->create_texture2d
++            || !backend_ops->destroy_texture2d
+             || !backend_ops->set_vertex_buffers
+             || !backend_ops->set_index_buffer
+             || !backend_ops->create_input_layout
+--- a/dlls/d3d11/d3d11_main.c
++++ b/dlls/d3d11/d3d11_main.c
+@@ -400,6 +400,18 @@
+ };
+ 
+ struct wine_d3d11on12_buffer
++{
++    UINT size;
++    UINT reserved;
++    void *driver_resource;
++    void *runtime_state;
++};
++
++/* Laid out identically to the buffer handle because the core keeps both in
++ * one resource registry, but kept a distinct type so that a texture handle
++ * cannot be passed to a buffer entry point.  The core checks the kind again
++ * on its side; this is the half of that check the compiler can make. */
++struct wine_d3d11on12_texture2d
+ {
+     UINT size;
+     UINT reserved;
+@@ -441,6 +453,11 @@
+         const D3D11_SUBRESOURCE_DATA *, struct wine_d3d11on12_buffer *);
+ typedef HRESULT (WINAPI *wine_d3d11on12_destroy_buffer_fn)(
+         struct wine_d3d11on12_buffer *);
++typedef HRESULT (WINAPI *wine_d3d11on12_create_texture2d_fn)(
++        struct wine_d3d11on12_adapter_device *, const D3D11_TEXTURE2D_DESC *,
++        const D3D11_SUBRESOURCE_DATA *, struct wine_d3d11on12_texture2d *);
++typedef HRESULT (WINAPI *wine_d3d11on12_destroy_texture2d_fn)(
++        struct wine_d3d11on12_texture2d *);
+ typedef HRESULT (WINAPI *wine_d3d11on12_set_vertex_buffers_fn)(
+         struct wine_d3d11on12_adapter_device *, UINT, UINT,
+         struct wine_d3d11on12_buffer *const *, const UINT *, const UINT *);
+@@ -494,6 +511,8 @@
+     UINT creation_flags;
+     wine_d3d11on12_create_buffer_fn create_buffer;
+     wine_d3d11on12_destroy_buffer_fn destroy_buffer;
++    wine_d3d11on12_create_texture2d_fn create_texture2d;
++    wine_d3d11on12_destroy_texture2d_fn destroy_texture2d;
+     wine_d3d11on12_set_vertex_buffers_fn set_vertex_buffers;
+     wine_d3d11on12_set_index_buffer_fn set_index_buffer;
+     wine_d3d11on12_create_input_layout_fn create_input_layout;
+@@ -630,6 +649,30 @@
+             (struct wine_d3d11on12_buffer *)&buffer->backend_buffer);
+     if (FAILED(hr))
+         WARN("D3D11On12 buffer destruction failed, hr %#lx.\n", hr);
++}
++
++static HRESULT d3d11_on12_backend_create_texture2d(struct d3d_device *device,
++        const D3D11_TEXTURE2D_DESC *desc, const D3D11_SUBRESOURCE_DATA *data,
++        struct d3d_texture2d *texture)
++{
++    struct d3d11_on12_backend *backend = device->backend_private;
++    return backend->create_texture2d(&backend->adapter, desc, data,
++            (struct wine_d3d11on12_texture2d *)&texture->backend_texture);
++}
++
++/* Destruction cannot report a failure to the application: ID3D11Texture2D
++ * has no failing release.  The warning is the whole remedy, which is why the
++ * core is responsible for staying consistent when it refuses -- a refused
++ * destroy leaves the driver object owned by the core's registry and freed at
++ * device teardown, not leaked. */
++static void d3d11_on12_backend_destroy_texture2d(struct d3d_device *device,
++        struct d3d_texture2d *texture)
++{
++    struct d3d11_on12_backend *backend = device->backend_private;
++    HRESULT hr = backend->destroy_texture2d(
++            (struct wine_d3d11on12_texture2d *)&texture->backend_texture);
++    if (FAILED(hr))
++        WARN("D3D11On12 texture destruction failed, hr %#lx.\n", hr);
+ }
+ 
+ static void d3d11_on12_backend_set_vertex_buffers(
+@@ -808,35 +851,41 @@
+             (void **)device12);
+ }
+ 
++/* Designated, for the reason the WineD3D table in device.c records.  This is
++ * the table where a shifted entry would be least visible, because every op
++ * here is implemented and none is NULL, so nothing would crash -- each call
++ * would simply reach the wrong function through the wrong signature. */
+ static const struct d3d11_backend_ops d3d11_on12_backend_ops =
+ {
+-    d3d11_on12_backend_destroy,
+-    d3d11_on12_backend_get_feature_level,
+-    d3d11_on12_backend_get_creation_flags,
+-    d3d11_on12_backend_get_removed_reason,
+-    d3d11_on12_backend_flush,
+-    d3d11_on12_backend_draw,
+-    d3d11_on12_backend_draw_indexed,
+-    d3d11_on12_backend_draw_instanced,
+-    d3d11_on12_backend_draw_indexed_instanced,
+-    d3d11_on12_backend_set_primitive_topology,
+-    d3d11_on12_backend_create_buffer,
+-    d3d11_on12_backend_destroy_buffer,
+-    d3d11_on12_backend_set_vertex_buffers,
+-    d3d11_on12_backend_set_index_buffer,
+-    d3d11_on12_backend_create_input_layout,
+-    d3d11_on12_backend_destroy_input_layout,
+-    d3d11_on12_backend_set_input_layout,
+-    d3d11_on12_backend_create_vertex_shader,
+-    d3d11_on12_backend_create_pixel_shader,
+-    d3d11_on12_backend_destroy_vertex_shader,
+-    d3d11_on12_backend_destroy_pixel_shader,
+-    d3d11_on12_backend_set_vertex_shader,
+-    d3d11_on12_backend_set_pixel_shader,
+-    d3d11_on12_backend_create_wrapped_resource,
+-    d3d11_on12_backend_release_wrapped_resources,
+-    d3d11_on12_backend_acquire_wrapped_resources,
+-    d3d11_on12_backend_get_d3d12_device,
++    .destroy_device = d3d11_on12_backend_destroy,
++    .get_feature_level = d3d11_on12_backend_get_feature_level,
++    .get_creation_flags = d3d11_on12_backend_get_creation_flags,
++    .get_device_removed_reason = d3d11_on12_backend_get_removed_reason,
++    .flush = d3d11_on12_backend_flush,
++    .draw = d3d11_on12_backend_draw,
++    .draw_indexed = d3d11_on12_backend_draw_indexed,
++    .draw_instanced = d3d11_on12_backend_draw_instanced,
++    .draw_indexed_instanced = d3d11_on12_backend_draw_indexed_instanced,
++    .set_primitive_topology = d3d11_on12_backend_set_primitive_topology,
++    .create_buffer = d3d11_on12_backend_create_buffer,
++    .destroy_buffer = d3d11_on12_backend_destroy_buffer,
++    .create_texture2d = d3d11_on12_backend_create_texture2d,
++    .destroy_texture2d = d3d11_on12_backend_destroy_texture2d,
++    .set_vertex_buffers = d3d11_on12_backend_set_vertex_buffers,
++    .set_index_buffer = d3d11_on12_backend_set_index_buffer,
++    .create_input_layout = d3d11_on12_backend_create_input_layout,
++    .destroy_input_layout = d3d11_on12_backend_destroy_input_layout,
++    .set_input_layout = d3d11_on12_backend_set_input_layout,
++    .create_vertex_shader = d3d11_on12_backend_create_vertex_shader,
++    .create_pixel_shader = d3d11_on12_backend_create_pixel_shader,
++    .destroy_vertex_shader = d3d11_on12_backend_destroy_vertex_shader,
++    .destroy_pixel_shader = d3d11_on12_backend_destroy_pixel_shader,
++    .set_vertex_shader = d3d11_on12_backend_set_vertex_shader,
++    .set_pixel_shader = d3d11_on12_backend_set_pixel_shader,
++    .create_wrapped_resource = d3d11_on12_backend_create_wrapped_resource,
++    .release_wrapped_resources = d3d11_on12_backend_release_wrapped_resources,
++    .acquire_wrapped_resources = d3d11_on12_backend_acquire_wrapped_resources,
++    .get_d3d12_device = d3d11_on12_backend_get_d3d12_device,
+ };
+ 
+ static HRESULT d3d11_on12_create_unpublished_backend(IUnknown *device,
+@@ -898,6 +947,14 @@
+     memcpy(&backend->destroy_buffer, &address,
+             sizeof(backend->destroy_buffer));
+     address = GetProcAddress(backend->core_module,
++            "WineD3D11On12CreateTexture2DV1");
++    memcpy(&backend->create_texture2d, &address,
++            sizeof(backend->create_texture2d));
++    address = GetProcAddress(backend->core_module,
++            "WineD3D11On12DestroyTexture2DV1");
++    memcpy(&backend->destroy_texture2d, &address,
++            sizeof(backend->destroy_texture2d));
++    address = GetProcAddress(backend->core_module,
+             "WineD3D11On12SetVertexBuffersV1");
+     memcpy(&backend->set_vertex_buffers, &address,
+             sizeof(backend->set_vertex_buffers));
+@@ -938,6 +995,7 @@
+     memcpy(&backend->set_pixel_shader, &address,
+             sizeof(backend->set_pixel_shader));
+     if (!backend->create_buffer || !backend->destroy_buffer
++            || !backend->create_texture2d || !backend->destroy_texture2d
+             || !backend->set_vertex_buffers || !backend->set_index_buffer
+             || !backend->create_input_layout
+             || !backend->destroy_input_layout || !backend->set_input_layout
+--- a/dlls/d3d11/texture.c
++++ b/dlls/d3d11/texture.c
+@@ -120,6 +120,12 @@
+ 
+     TRACE("iface %p, guid %s, data_size %p, data %p.\n", iface, debugstr_guid(guid), data_size, data);
+ 
++    /* No DXGI resource on a backend texture; see
++     * d3d_texture2d_create.  DXGI_ERROR_NOT_FOUND is what an
++     * absent store returns for every GUID, which is true here. */
++    if (d3d_texture2d_is_backend(texture))
++        return DXGI_ERROR_NOT_FOUND;
++
+     if (SUCCEEDED(hr = IUnknown_QueryInterface(texture->dxgi_resource, &IID_IDXGIResource, (void **)&dxgi_resource)))
+     {
+         hr = IDXGIResource_GetPrivateData(dxgi_resource, guid, data_size, data);
+@@ -138,6 +144,12 @@
+ 
+     TRACE("iface %p, guid %s, data_size %u, data %p.\n", iface, debugstr_guid(guid), data_size, data);
+ 
++    /* No DXGI resource on a backend texture; see
++     * d3d_texture2d_create.  DXGI_ERROR_NOT_FOUND is what an
++     * absent store returns for every GUID, which is true here. */
++    if (d3d_texture2d_is_backend(texture))
++        return DXGI_ERROR_NOT_FOUND;
++
+     if (SUCCEEDED(hr = IUnknown_QueryInterface(texture->dxgi_resource, &IID_IDXGIResource, (void **)&dxgi_resource)))
+     {
+         hr = IDXGIResource_SetPrivateData(dxgi_resource, guid, data_size, data);
+@@ -155,6 +167,12 @@
+     HRESULT hr;
+ 
+     TRACE("iface %p, guid %s, data %p.\n", iface, debugstr_guid(guid), data);
++
++    /* No DXGI resource on a backend texture; see
++     * d3d_texture2d_create.  DXGI_ERROR_NOT_FOUND is what an
++     * absent store returns for every GUID, which is true here. */
++    if (d3d_texture2d_is_backend(texture))
++        return DXGI_ERROR_NOT_FOUND;
+ 
+     if (SUCCEEDED(hr = IUnknown_QueryInterface(texture->dxgi_resource, &IID_IDXGIResource, (void **)&dxgi_resource)))
+     {
+@@ -507,6 +525,17 @@
+     return S_OK;
+ }
+ 
++/* Whether the D3D11On12 backend owns this texture's only resource.
++ *
++ * Set together in d3d_texture2d_create and never afterwards, so the size
++ * field answers the question the rest of this file keeps asking: a backend
++ * texture has no wined3d_texture, no dxgi_resource, and no swapchain, and
++ * every method that would reach one has to say so instead. */
++static inline BOOL d3d_texture2d_is_backend(const struct d3d_texture2d *texture)
++{
++    return texture->backend_texture.size != 0;
++}
++
+ /* ID3D11Texture2D methods */
+ 
+ static HRESULT STDMETHODCALLTYPE d3d11_texture2d_QueryInterface(ID3D11Texture2D *iface, REFIID riid, void **object)
+@@ -532,6 +561,16 @@
+         *object = &texture->ID3D10Texture2D_iface;
+         IUnknown_AddRef((IUnknown *)*object);
+         return S_OK;
++    }
++
++    /* A backend texture has no DXGI resource to forward to; see
++     * d3d_texture2d_create.  Reporting the interface as absent is the
++     * truthful answer and keeps this from dereferencing NULL. */
++    if (d3d_texture2d_is_backend(texture))
++    {
++        WARN("%s not implemented for backend textures.\n", debugstr_guid(riid));
++        *object = NULL;
++        return E_NOINTERFACE;
+     }
+ 
+     TRACE("Forwarding to dxgi resource.\n");
+@@ -555,7 +594,10 @@
+     if (refcount == 1)
+     {
+         ID3D11Device5_AddRef(texture->device);
+-        wined3d_texture_incref(texture->wined3d_texture);
++        /* Paired with the guarded decref in Release: a backend texture has
++         * no wined3d object, and its lifetime is this refcount alone. */
++        if (texture->wined3d_texture)
++            wined3d_texture_incref(texture->wined3d_texture);
+         if (texture->swapchain)
+             wined3d_swapchain_incref(texture->swapchain);
+     }
+@@ -573,11 +615,23 @@
+     if (!refcount)
+     {
+         ID3D11Device5 *device = texture->device;
++        struct d3d_device *device_impl = impl_from_ID3D11Device5(device);
++
++        /* Tested on the texture, not on the device.  Whether this object
++         * owns a driver resource is a property of how it was created, and
++         * a device that merely has the op may still hold textures it did
++         * not create -- a swapchain's, for one. */
++        if (d3d_texture2d_is_backend(texture))
++            device_impl->backend_ops->destroy_texture2d(device_impl, texture);
+         if (texture->swapchain)
+             wined3d_swapchain_decref(texture->swapchain);
+         /* Releasing the texture may free the d3d11 object, so do not access it
+-         * after releasing the texture. */
+-        wined3d_texture_decref(texture->wined3d_texture);
++         * after releasing the texture. A backend texture has no wined3d
++         * object to release; the backend owns the only resource. */
++        if (texture->wined3d_texture)
++            wined3d_texture_decref(texture->wined3d_texture);
++        else
++            free(texture);
+         /* Release the device last, it may cause the wined3d device to be
+          * destroyed. */
+         ID3D11Device5_Release(device);
+@@ -678,6 +732,14 @@
+     TRACE("iface %p, desc %p.\n", iface, desc);
+ 
+     *desc = texture->desc;
++
++    /* The re-read below exists because resizing a swapchain's buffers can
++     * change the description behind this object's back.  A backend texture
++     * has no swapchain and no wined3d resource to re-read, so the stored
++     * description -- with MipLevels already resolved at creation -- is
++     * already the whole answer. */
++    if (d3d_texture2d_is_backend(texture))
++        return;
+ 
+     wined3d_mutex_lock();
+     wined3d_resource_get_desc(wined3d_texture_get_resource(texture->wined3d_texture), &wined3d_desc);
+@@ -841,6 +903,18 @@
+     if (map_flags)
+         FIXME("Ignoring map_flags %#x.\n", map_flags);
+ 
++    /* Mapping a backend texture is the readback milestone's work, not this
++     * one's: it needs the core to track a mapped state per subresource and
++     * to validate the map mode against the resource's usage and CPU-access
++     * flags.  Until then this reports an error rather than handing back a
++     * pointer into nothing. */
++    if (d3d_texture2d_is_backend(texture))
++    {
++        WARN("Mapping a D3D11On12 backend texture is not implemented.\n");
++        memset(mapped_texture, 0, sizeof(*mapped_texture));
++        return E_INVALIDARG;
++    }
++
+     if (SUCCEEDED(hr = wined3d_resource_map(wined3d_texture_get_resource(texture->wined3d_texture), sub_resource_idx,
+             &wined3d_map_desc, NULL, wined3d_map_flags_from_d3d10_map_type(map_type))))
+     {
+@@ -857,6 +931,11 @@
+ 
+     TRACE("iface %p, sub_resource_idx %u.\n", iface, sub_resource_idx);
+ 
++    /* Nothing can be mapped on a backend texture, so there is nothing to
++     * unmap; see d3d10_texture2d_Map. */
++    if (d3d_texture2d_is_backend(texture))
++        return;
++
+     wined3d_resource_unmap(wined3d_texture_get_resource(texture->wined3d_texture), sub_resource_idx);
+ }
+ 
+@@ -967,7 +1046,8 @@
+     DWORD flags = 0;
+     HRESULT hr;
+ 
+-    if (!validate_texture2d_desc(desc, device->state->feature_level))
++    if (!validate_texture2d_desc(desc,
++            device->backend_ops->get_feature_level(device)))
+     {
+         WARN("Failed to validate texture desc.\n");
+         return E_INVALIDARG;
+@@ -979,9 +1059,47 @@
+     texture->ID3D11Texture2D_iface.lpVtbl = &d3d11_texture2d_vtbl;
+     texture->ID3D10Texture2D_iface.lpVtbl = &d3d10_texture2d_vtbl;
+     texture->refcount = 1;
+-    wined3d_mutex_lock();
+     texture->desc = *desc;
+ 
++    /* Routed before the WineD3D path and outside the mutex, because a
++     * backend texture has no WineD3D object at all: the driver resource is
++     * the only one, and there is no wined3d_texture for the lock to protect.
++     *
++     * A caller-supplied wined3d_texture is the swapchain case and stays on
++     * the WineD3D path unconditionally.  The swapchain owns that texture,
++     * and a backend device that adopted it would be claiming a resource it
++     * did not create, which is why this test comes first. */
++    if (!wined3d_texture && device->backend_ops->create_texture2d)
++    {
++        texture->backend_texture.size = sizeof(texture->backend_texture);
++        if (FAILED(hr = device->backend_ops->create_texture2d(device, desc,
++                data, texture)))
++        {
++            free(texture);
++            return hr;
++        }
++
++        /* MipLevels of zero asks the runtime for the full chain, and the
++         * application reads back what it got through GetDesc.  The WineD3D
++         * path resolves that below; the core resolves it the same way, so
++         * the count is recomputed here rather than left as the zero that
++         * was passed in. */
++        if (!texture->desc.MipLevels)
++            texture->desc.MipLevels
++                    = wined3d_log2i(max(desc->Width, desc->Height)) + 1;
++
++        /* No DXGI resource: d3d_device_create_dxgi_resource wraps a wined3d
++         * resource and this texture has none, so a backend texture does not
++         * answer IDXGISurface yet.  Left as a named gap rather than wrapped
++         * around a null. */
++        ID3D11Device5_AddRef(texture->device = &device->ID3D11Device5_iface);
++        TRACE("Created backend texture %p.\n", texture);
++        *out = texture;
++        return S_OK;
++    }
++
++    wined3d_mutex_lock();
++
+     if (wined3d_texture)
+     {
+         wined3d_resource_set_parent(wined3d_texture_get_resource(wined3d_texture),
+-- 
+2.51.0

@@ -150,10 +150,11 @@ Below is the structured roadmap of what is yet to be done.
 * **Done:** the element-layout, binding, and draw group — the callbacks that
   turn the objects above into a frame. `pfnCalcPrivateElementLayoutSize`,
   `pfnCreateElementLayout`, `pfnDestroyElementLayout`, `pfnIaSetInputLayout`,
-  `pfnIaSetVertexBuffers`, `pfnIaSetTopology`, `pfnSetRenderTargets`,
+  `pfnIaSetVertexBuffers`, `pfnIaSetIndexBuffer`, `pfnIaSetTopology`,
+  `pfnSetRenderTargets`,
   `pfnSetViewports`, `pfnSetBlendState`, `pfnSetDepthStencilState`,
   `pfnSetRasterizerState`, `pfnClearRenderTargetView`, and `pfnDraw`, plus
-  `PFND3D10DDI_SETSHADER`. Fourteen typedefs, nineteen slots: the SetShader
+  `PFND3D10DDI_SETSHADER`. Fifteen typedefs, twenty slots: the SetShader
   typedef covers all six stages, because its page gives one parameter list for
   all of them. That promotes `pfnGsSetShader`, `pfnHsSetShader`,
   `pfnDsSetShader` and `pfnCsSetShader` as a consequence of the shared type
@@ -212,7 +213,15 @@ makes the worklist a dependency order on structure groups, not a list of slots:
 | Tessellation IO signatures — **done**, pointer-only so incomplete | `pfnCalcPrivateTessellationShaderSize` — **done** |
 | Stream-output structures | `pfnCalcPrivateGeometryShaderWithStreamOutput`, `pfnCreateGeometryShaderWithStreamOutput`, the `pfn*SetShaderWithIfaces` family, `pfnRetrieveShaderComment`, `pfnAssignDebugBinary`. The six `pfnCreate*Shader` slots stay unpromoted **by choice, not blockage**: the pinned driver never fills them on the immediate device, so a promoted signature there would declare a contract nothing implements — see §3.3 |
 | State structures (blend, depth-stencil, rasterizer, sampler) — **done** | `pfnSetBlendState`, `pfnSetDepthStencilState`, `pfnSetRasterizerState` — **done**; `pfnPsSetSamplers` and the rest of the `pfn*SetSamplers` family remain, an untextured frame not needing them |
-| Element layout and input assembly — **done** | `pfnCalcPrivateElementLayoutSize`, `pfnCreateElementLayout`, `pfnDestroyElementLayout`, `pfnIaSetInputLayout`, `pfnIaSetVertexBuffers`, `pfnIaSetTopology` |
+| Element layout and input assembly — **done** | `pfnCalcPrivateElementLayoutSize`, `pfnCreateElementLayout`, `pfnDestroyElementLayout`, `pfnIaSetInputLayout`, `pfnIaSetVertexBuffers`, `pfnIaSetIndexBuffer`, `pfnIaSetTopology` |
+
+The Wine host now consumes this family as well: it reuses Wine's DXBC input
+signature parser to resolve semantic names to input registers, creates an owned
+driver element-layout handle, routes `IASetInputLayout`, rejects stale or
+foreign handles, and destroys surviving layouts before device teardown. Its
+lifetime tests also cover null unbinding, injected `pfnSetErrorCb` failure, and
+concurrent binding versus destruction; registry removal drains shared-lock
+binders before the driver handle is destroyed.
 | Depth-stencil and unordered-access view *handles* — **done** | `pfnSetRenderTargets`. The handles are declared; nothing promoted can create either kind of view, which is the MVP state |
 | Shader binding (`D3D10DDI_HSHADER`) — **done** | `pfnVsSetShader`, `pfnPsSetShader`, `pfnGsSetShader`, `pfnHsSetShader`, `pfnDsSetShader`, `pfnCsSetShader` — one typedef |
 | Query structures and `D3D10DDI_QUERY` | `pfnCalcPrivateQuerySize`, `pfnCreateQuery`, `pfnDestroyQuery`, `pfnQueryBegin`, `pfnQueryEnd`, `pfnQueryGetData`, `pfnSetPredication` |
@@ -233,6 +242,26 @@ only because the DestroyCommandList page states the two members may take one
 implementation.
 
 **3.3. WDDM Interface Translation**
+* **Status:** Ongoing — `vs` and `ps` cross the Wine/Relay12 boundary; the
+  six-stage implementation is written but not yet on this branch's ABI.
+* **Done here:** `vs` and `ps` creation, destruction, and immediate-context
+  binding cross the boundary with typed lifetime validation, published as
+  ordinal exports 12 to 16 and consumed by Wine patch 0014.
+* **Written, and waiting on a port:** the `ddi-device-lifecycle` branch
+  carries a single stage-parameterised `WineD3D11On12CreateShaderV1` covering
+  all six stages, with `tests/d3d11on12shaderlifecycle.c` driving it against
+  the mock driver. It reaches the host through the interface table rather
+  than through ordinal exports, and the two mechanisms claimed the same table
+  offsets and capability bits, so it could not come across in the
+  consolidation merge. Porting it onto the ordinal-export mechanism is the
+  action, and it subsumes the one below.
+* **Action:** Complete `hs`, `ds`, geometry, compute, and shader-interface
+  binding, preferably by porting the six-stage work rather than reimplementing
+  it stage by stage.
+
+The findings that shaped that implementation are recorded below and remain
+true regardless of which mechanism publishes it.
+
 * **Status:** Ongoing — `vs` and `ps` lifecycle and binding implemented
 * **Done:** the host now owns vertex and pixel shaders end to end.
   `WineD3D11On12CreateShaderV1`, `WineD3D11On12DestroyShaderV1` and
@@ -291,6 +320,7 @@ implementation.
   null stream-output argument, which is what selects the ordinary geometry
   shader, so the structure stays an incomplete type and no stage constant can
   ask for one.
+
 
 **3.4. CI & End-to-End Test Harness**
 * **Status:** Framework Drafted

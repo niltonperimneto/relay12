@@ -5,9 +5,12 @@ Apple forwarder must be installed beside it as `d3d11mt.dll`.
 
 The shim forwards Apple's ordinary D3D11 entry points unchanged. It resolves
 `WineD3D11On12CreateDeviceV1` from an optional `d3d11on12core.dll` for the
-D3D11-on-12 path. Until that core implements the real D3D11 runtime/DDI host,
-the public entry point returns `DXGI_ERROR_UNSUPPORTED` with initialized output
-parameters.
+D3D11-on-12 path. The core now implements adapter/device lifecycle, flush and
+draw dispatch, input-assembler topology, owned buffers, vertex/index bindings,
+owned input-layout creation and binding, and owned vertex/pixel shader
+creation, destruction, and stage binding. Pipeline areas that have not yet
+crossed the runtime/DDI boundary continue to fail closed with initialized
+outputs.
 
 The core publishes a size/versioned `WineD3D11On12Interface` function table.
 The router rejects unknown versions, unexpected structure sizes and missing

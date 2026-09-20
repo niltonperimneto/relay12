@@ -1,0 +1,105 @@
+diff --git a/dlls/d3d11/d3d11_main.c b/dlls/d3d11/d3d11_main.c
+index 727e7129..382067e8 100644
+--- a/dlls/d3d11/d3d11_main.c
++++ b/dlls/d3d11/d3d11_main.c
+@@ -381,6 +381,7 @@ cleanup:
+ #ifdef WINE_D3D11ON12_HOST
+ #define WINE_D3D11ON12_ABI_VERSION 3u
+ #define WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_FLUSH 0x0000000000000008ull
++#define WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_DRAW 0x0000000000000010ull
+ 
+ struct wine_d3d11on12_adapter_device
+ {
+@@ -399,6 +400,8 @@ typedef HRESULT (WINAPI *wine_d3d11on12_close_adapter_fn)(
+         struct wine_d3d11on12_adapter_device *);
+ typedef HRESULT (WINAPI *wine_d3d11on12_flush_adapter_fn)(
+         struct wine_d3d11on12_adapter_device *, UINT, UINT, BOOL *);
++typedef HRESULT (WINAPI *wine_d3d11on12_draw_adapter_fn)(
++        struct wine_d3d11on12_adapter_device *, UINT, UINT);
+ 
+ struct wine_d3d11on12_core_interface
+ {
+@@ -410,7 +413,8 @@ struct wine_d3d11on12_core_interface
+     void *create_direct_device_and_swapchain;
+     wine_d3d11on12_close_adapter_fn close_adapter_device;
+     wine_d3d11on12_flush_adapter_fn flush_adapter_device;
+-    void *reserved[4];
++    wine_d3d11on12_draw_adapter_fn draw_adapter_device;
++    void *reserved[3];
+ };
+ 
+ typedef HRESULT (WINAPI *wine_d3d11on12_get_interface_fn)(UINT, UINT,
+@@ -475,4 +479,15 @@ static void d3d11_on12_backend_flush(struct d3d11_device_context *context)
+         WARN("D3D11On12 DDI flush failed, hr %#lx.\n", hr);
+ }
+ 
++static void d3d11_on12_backend_draw(struct d3d11_device_context *context,
++        UINT vertex_count, UINT start_vertex_location)
++{
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    HRESULT hr = backend->core.draw_adapter_device(&backend->adapter,
++            vertex_count, start_vertex_location);
++
++    if (FAILED(hr))
++        WARN("D3D11On12 DDI draw failed, hr %#lx.\n", hr);
++}
++
+ static HRESULT d3d11_on12_backend_create_wrapped_resource(
+@@ -521,3 +536,4 @@ static const struct d3d11_backend_ops d3d11_on12_backend_ops =
+     d3d11_on12_backend_get_removed_reason,
+     d3d11_on12_backend_flush,
++    d3d11_on12_backend_draw,
+     d3d11_on12_backend_create_wrapped_resource,
+@@ -562,4 +578,7 @@ static HRESULT d3d11_on12_create_unpublished_backend(IUnknown *device,
+             || !(core.capabilities
+                     & WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_FLUSH)
+-            || !core.close_adapter_device || !core.flush_adapter_device)
++            || !(core.capabilities
++                    & WINE_D3D11ON12_CAP_IMMEDIATE_CONTEXT_DRAW)
++            || !core.close_adapter_device || !core.flush_adapter_device
++            || !core.draw_adapter_device)
+     {
+diff --git a/dlls/d3d11/d3d11_private.h b/dlls/d3d11/d3d11_private.h
+index 1f7ecffc..3149ee1a 100644
+--- a/dlls/d3d11/d3d11_private.h
++++ b/dlls/d3d11/d3d11_private.h
+@@ -574,3 +574,5 @@ struct d3d11_backend_ops
+     HRESULT (*get_device_removed_reason)(struct d3d_device *device);
+     void (*flush)(struct d3d11_device_context *context);
++    void (*draw)(struct d3d11_device_context *context, UINT vertex_count,
++            UINT start_vertex_location);
+     HRESULT (*create_wrapped_resource)(struct d3d_device *device,
+diff --git a/dlls/d3d11/device.c b/dlls/d3d11/device.c
+index 6292dceb..bcfd5ce3 100644
+--- a/dlls/d3d11/device.c
++++ b/dlls/d3d11/device.c
+@@ -49,4 +49,11 @@ static void wined3d_backend_flush(struct d3d11_device_context *context)
+     wined3d_device_context_flush(context->wined3d_context);
+ }
+ 
++static void wined3d_backend_draw(struct d3d11_device_context *context,
++        UINT vertex_count, UINT start_vertex_location)
++{
++    wined3d_device_context_draw(context->wined3d_context,
++            start_vertex_location, vertex_count, 0, 0);
++}
++
+ static const struct d3d11_backend_ops wined3d_backend_ops =
+@@ -56,3 +63,4 @@ static const struct d3d11_backend_ops wined3d_backend_ops =
+     wined3d_backend_get_device_removed_reason,
+     wined3d_backend_flush,
++    wined3d_backend_draw,
+     NULL,
+@@ -828,5 +836,6 @@ static void STDMETHODCALLTYPE d3d11_device_context_Draw(ID3D11DeviceContext4 *if
+     TRACE("iface %p, vertex_count %u, start_vertex_location %u.\n",
+             iface, vertex_count, start_vertex_location);
+ 
+-    wined3d_device_context_draw(context->wined3d_context, start_vertex_location, vertex_count, 0, 0);
++    context->device->backend_ops->draw(context, vertex_count,
++            start_vertex_location);
+ }
+@@ -8337,3 +8346,4 @@ struct d3d_device *d3d_device_create_backend(
+             || !backend_ops->get_device_removed_reason
+             || !backend_ops->flush
++            || !backend_ops->draw
+             || !backend_ops->create_wrapped_resource
