@@ -2034,7 +2034,49 @@ WINE_DDI_ASSERT_ALIGN(D3D10DDIARG_CREATEELEMENTLAYOUT, 8);
 WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEELEMENTLAYOUT, pVertexElements, 0);
 WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEELEMENTLAYOUT, NumElements, 8);
 WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEELEMENTLAYOUT, WinePad0, 12);
-typedef struct D3D10_DDI_VIEWPORT D3D10_DDI_VIEWPORT;
+/*
+ * Group: viewport description
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10_ddi_viewport
+ * Source mirror: https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs-ddi/staging/wdk-ddi-src/content/d3d10umddi/ns-d3d10umddi-d3d10_ddi_viewport.md
+ * Retrieved: 2026-09-20
+ *
+ * The rendered syntax block and its markdown source mirror agree on six
+ * members, all FLOAT, in the order TopLeftX, TopLeftY, Width, Height,
+ * MinDepth, MaxDepth. Unlike D3D10_DDI_MAP and D3D10_DDI_PRIMITIVE_TOPOLOGY
+ * above, this structure carries no unpublished enumerator values -- every
+ * member is a plain FLOAT with a stated meaning -- so there is nothing left
+ * unspecified here and no reason for the type to stay opaque.
+ *
+ * Six FLOATs is 24 bytes with no implicit padding at natural 4-byte
+ * alignment, the same convention D3D10DDI_MIPINFO uses for an all-4-byte
+ * structure elsewhere in this header: the project's 8-byte rule targets the
+ * device function table, whose members are all pointers, not every value
+ * type this header declares.
+ *
+ * pfnSetViewports was promoted while this type was still opaque --
+ * tests/d3d11ddi_triangle.c calls it with a null array, which proves the
+ * slot is reachable but not that its argument is constructible. Completing
+ * this structure is what makes RSSetViewports constructible above the DDI,
+ * not a change to the slot itself. */
+typedef struct D3D10_DDI_VIEWPORT
+{
+    FLOAT TopLeftX;
+    FLOAT TopLeftY;
+    FLOAT Width;
+    FLOAT Height;
+    FLOAT MinDepth;
+    FLOAT MaxDepth;
+} D3D10_DDI_VIEWPORT;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10_DDI_VIEWPORT);
+WINE_DDI_ASSERT_SIZE(D3D10_DDI_VIEWPORT, 24);
+WINE_DDI_ASSERT_ALIGN(D3D10_DDI_VIEWPORT, 4);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_VIEWPORT, TopLeftX, 0);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_VIEWPORT, TopLeftY, 4);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_VIEWPORT, Width, 8);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_VIEWPORT, Height, 12);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_VIEWPORT, MinDepth, 16);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_VIEWPORT, MaxDepth, 20);
 
 /* IaSetTopology takes its topology by value, so the transport type has to be
  * declared -- but the enumeration's page publishes the enumerator names in
