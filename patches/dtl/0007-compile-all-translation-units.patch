@@ -756,7 +756,7 @@ index c1d7ea0..1749738 100644
      PUBLIC ../include
      PRIVATE ./)
  
-@@ -120,7 +121,30 @@ if(MSVC)
+@@ -120,7 +121,29 @@ if(MSVC)
    endif()
    target_link_options(d3d12translationlayer INTERFACE "/ignore:4286")
  else()
@@ -777,18 +777,17 @@ index c1d7ea0..1749738 100644
 +      -Wno-nested-anon-types
 +      -Wno-microsoft-anon-tag
 +      -Wno-gnu-anonymous-struct
-+      -Wno-c2y-extensions
 +      -Wno-extra-semi
 +      -Wno-vla-cxx-extension
 +      -Wno-single-bit-bitfield-constant-conversion
 +      -Wno-assume
-+      -Wno-nontrivial-memcall
++      -Wno-nontrivial-memaccess
 +      -Wno-unused-const-variable
 +      -Wno-deprecated-copy-with-user-provided-copy)
  endif()
  
  if (NOT IMPLEMENT_RECTS)
-@@ -128,9 +152,8 @@ if (NOT IMPLEMENT_RECTS)
+@@ -128,9 +151,8 @@ if (NOT IMPLEMENT_RECTS)
  endif()
  
  if (DTL_ENABLE_WDK_DXBC)
@@ -800,7 +799,7 @@ index c1d7ea0..1749738 100644
          message(FATAL_ERROR
              "DTL_ENABLE_WDK_DXBC requires d3d12TokenizedProgramFormat.hpp")
      endif()
-@@ -145,7 +168,14 @@ if (DTL_ENABLE_WDK_DXBC)
+@@ -145,7 +167,14 @@ if (DTL_ENABLE_WDK_DXBC)
  		../include/DxbcBuilder.hpp
  		../include/ShaderBinary.h
          ../include/SharedResourceHelpers.hpp)
