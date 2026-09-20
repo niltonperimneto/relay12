@@ -1,0 +1,30 @@
+From: relay12 contributors
+Subject: [PATCH] dtl: make the write-state bitmask a portable const
+
+llvm-mingw's winnt.h does not mark the operators DEFINE_ENUM_FLAG_OPERATORS
+generates as constexpr, unlike the MSVC SDK headers this project was
+originally written against. RESOURCE_STATE_ALL_WRITE_BITS combines several
+D3D12_RESOURCE_STATES enumerators through that non-constexpr operator| while
+itself declared constexpr, so Clang rejects the initializer as not a
+constant expression; MSVC's constexpr operator| let this compile unnoticed.
+
+const carries the same implicit internal linkage a namespace-scope
+constexpr variable already had and needs no compile-time-constant
+initializer, only an ordinary one, which is unaffected by whether the
+operator computing it happens to be constexpr. The only other reference to
+this variable is a plain runtime bitwise-AND comparison, so nothing here
+depended on it being a core constant expression.
+---
+diff --git a/include/ResourceState.hpp b/include/ResourceState.hpp
+index 11c2d20..8adf16f 100644
+--- a/include/ResourceState.hpp
++++ b/include/ResourceState.hpp
+@@ -10,7 +10,7 @@ namespace D3D12TranslationLayer
+ #define UNKNOWN_RESOURCE_STATE (D3D12_RESOURCE_STATES)0x8000u
+ #define RESOURCE_STATE_VALID_BITS 0x2f3fff
+ #define RESOURCE_STATE_VALID_INTERNAL_BITS 0x2fffff
+-constexpr D3D12_RESOURCE_STATES RESOURCE_STATE_ALL_WRITE_BITS =
++const D3D12_RESOURCE_STATES RESOURCE_STATE_ALL_WRITE_BITS =
+     D3D12_RESOURCE_STATE_RENDER_TARGET          |
+     D3D12_RESOURCE_STATE_UNORDERED_ACCESS       |
+     D3D12_RESOURCE_STATE_DEPTH_WRITE            |
