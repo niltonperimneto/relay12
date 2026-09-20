@@ -5,352 +5,62 @@
 #include <dxgi.h>
 
 #include "../relay12-d3d11/ddi/wine_d3d11ddi.h"
-#include "../relay12-d3d11/d3d11on12core.h"
 
 static LONG open_calls;
 static LONG create_calls;
 static LONG destroy_calls;
 static LONG close_calls;
-static unsigned char adapter_private;
-
-/* The shader half of the mock, which reproduces the one property of the
- * pinned driver the host's design turns on: the DDI function table's
- * pfnCreateVertexShader and pfnCreatePixelShader are never filled, and
- * creation is reachable only through the ID3D11On12DDIDevice sub-object whose
- * vtable pointer sits at the head of the private device block.
+static LONG flush_calls;
+static LONG draw_calls;
+static LONG indexed_draw_calls;
+static LONG instanced_draw_calls;
+static LONG indexed_instanced_draw_calls;
+static LONG topology_calls;
+static INT last_topology;
+static LONG resource_create_calls;
+static LONG resource_destroy_calls;
+static int bad_resource_description;
+/* What the last Texture2D creation actually carried into the DDI.
  *
- * Leaving those two table slots NULL here is deliberate. A mock that filled
- * them would let a host which called the table pass this suite and then fault
- * against the real driver. */
-#define MOCK_SHADER_MAGIC 0x5ADE12u
-
-static LONG shader_size_calls;
-static LONG tessellation_size_calls;
-static LONG vertex_create_calls;
-static LONG pixel_create_calls;
-static LONG geometry_create_calls;
-static LONG hull_create_calls;
-static LONG domain_create_calls;
-static LONG compute_create_calls;
+ * Recorded rather than asserted in place: the mip array is the part of
+ * D3D11DDIARG_CREATERESOURCE the core builds itself, so the test has to see
+ * the whole of it -- a stub that only checked the first entry would pass on
+ * a core that got every later mip wrong. */
+static LONG texture_create_calls;
+static UINT last_texture_width;
+static UINT last_texture_height;
+static UINT last_texture_mip_levels;
+static UINT last_texture_array_size;
+static DXGI_FORMAT last_texture_format;
+static UINT last_texture_bind_flags;
+static int last_texture_had_initial_data;
+static int bad_texture_mip_chain;
+static LONG vertex_buffer_bind_calls;
+static LONG index_buffer_bind_calls;
+static void *last_vertex_buffer;
+static void *last_index_buffer;
+static UINT last_vertex_stride;
+static UINT last_vertex_offset;
+static UINT last_index_offset;
+static DXGI_FORMAT last_index_format;
+static LONG input_layout_create_calls;
+static LONG input_layout_destroy_calls;
+static LONG input_layout_bind_calls;
+static void *last_input_layout;
+static int bad_input_layout_description;
+static volatile LONG fail_next_input_layout;
+static LONG vertex_shader_create_calls;
+static LONG pixel_shader_create_calls;
 static LONG shader_destroy_calls;
-static LONG vertex_set_calls;
-static LONG pixel_set_calls;
-static LONG geometry_set_calls;
-static LONG hull_set_calls;
-static LONG domain_set_calls;
-static LONG compute_set_calls;
-/* Set if the host ever described a stream this mock cannot build.  Latched
- * rather than counted: one occurrence is already a failure. */
-static LONG last_geometry_stream_output_requested;
-
-/* What the driver was shown, so the test can assert the host passed the
- * caller's own container through rather than a copy of its own. */
-static const void *last_bytecode;
-static UINT last_bytecode_size;
-static const void *last_linkage;
-static void *last_bound_vertex_shader;
-static void *last_bound_pixel_shader;
-
-/* SHADER_DESC, at the layout d3d11on12core.h publishes and this file pins. */
-struct mock_shader_desc
-{
-    const BYTE *pFunction;
-    UINT SizeInBytes;
-    void *pLinkage;
-};
-
-/* GEOMETRY_SHADER_DESC, which the geometry stage takes instead.  The five
- * stream-output members are here so the mock can assert the host left them
- * zeroed: it always passes a null stream-output argument, and a host that
- * populated them would be describing a driver object nobody asked for. */
-struct mock_geometry_shader_desc
-{
-    const BYTE *pFunction;
-    UINT SizeInBytes;
-    const void *pDeclaration;
-    UINT NumElements;
-    const UINT *pBufferStrides;
-    UINT NumStrides;
-    UINT RasterizedStream;
-    void *pLinkage;
-};
-
-_Static_assert(sizeof(struct mock_geometry_shader_desc)
-        == WINE_D3D11ON12_GEOMETRY_SHADER_DESC_SIZE,
-        "the mock's GEOMETRY_SHADER_DESC must match the core's");
-_Static_assert(offsetof(struct mock_geometry_shader_desc, pLinkage) == 48,
-        "the mock's GEOMETRY_SHADER_DESC must match the core's");
-
-_Static_assert(sizeof(struct mock_shader_desc)
-        == WINE_D3D11ON12_SHADER_DESC_SIZE,
-        "the mock's SHADER_DESC must match the core's");
-_Static_assert(offsetof(struct mock_shader_desc, SizeInBytes) == 8,
-        "the mock's SHADER_DESC must match the core's");
-_Static_assert(offsetof(struct mock_shader_desc, pLinkage) == 16,
-        "the mock's SHADER_DESC must match the core's");
-
-struct mock_ddi_device;
-
-/* Only the two slots this mock implements are typed.
- *
- * The leading slots are an opaque array sized by the index the core
- * publishes, rather than a second transcription of the interface: one vtable
- * order in the tree is the whole point, and the core static-asserts that
- * index against its own declaration. */
-struct mock_ddi_device_vtbl
-{
-    void *unimplemented[WINE_D3D11ON12_DDIDEVICE_SLOT_CREATEVERTEXSHADER];
-    HRESULT (STDMETHODCALLTYPE *CreateVertexShader)(struct mock_ddi_device *,
-            D3D10DDI_HSHADER, const struct mock_shader_desc *);
-    HRESULT (STDMETHODCALLTYPE *CreatePixelShader)(struct mock_ddi_device *,
-            D3D10DDI_HSHADER, const struct mock_shader_desc *);
-    HRESULT (STDMETHODCALLTYPE *CreateGeometryShader)(
-            struct mock_ddi_device *, D3D10DDI_HSHADER,
-            const struct mock_geometry_shader_desc *, const void *);
-    HRESULT (STDMETHODCALLTYPE *CreateHullShader)(struct mock_ddi_device *,
-            D3D10DDI_HSHADER, const struct mock_shader_desc *);
-    HRESULT (STDMETHODCALLTYPE *CreateDomainShader)(struct mock_ddi_device *,
-            D3D10DDI_HSHADER, const struct mock_shader_desc *);
-    HRESULT (STDMETHODCALLTYPE *CreateComputeShader)(struct mock_ddi_device *,
-            D3D10DDI_HSHADER, const struct mock_shader_desc *);
-};
-
-_Static_assert(offsetof(struct mock_ddi_device_vtbl, CreatePixelShader)
-        == WINE_D3D11ON12_DDIDEVICE_SLOT_CREATEPIXELSHADER * sizeof(void *),
-        "the mock's shader slots must land where the core will call them");
-_Static_assert(offsetof(struct mock_ddi_device_vtbl, CreateGeometryShader)
-        == WINE_D3D11ON12_DDIDEVICE_SLOT_CREATEGEOMETRYSHADER * sizeof(void *),
-        "the mock's shader slots must land where the core will call them");
-_Static_assert(offsetof(struct mock_ddi_device_vtbl, CreateHullShader)
-        == WINE_D3D11ON12_DDIDEVICE_SLOT_CREATEHULLSHADER * sizeof(void *),
-        "the mock's shader slots must land where the core will call them");
-_Static_assert(offsetof(struct mock_ddi_device_vtbl, CreateDomainShader)
-        == WINE_D3D11ON12_DDIDEVICE_SLOT_CREATEDOMAINSHADER * sizeof(void *),
-        "the mock's shader slots must land where the core will call them");
-_Static_assert(offsetof(struct mock_ddi_device_vtbl, CreateComputeShader)
-        == WINE_D3D11ON12_DDIDEVICE_SLOT_CREATECOMPUTESHADER * sizeof(void *),
-        "the mock's shader slots must land where the core will call them");
-
-struct mock_ddi_device
-{
-    const struct mock_ddi_device_vtbl *lpVtbl;
-};
-
-/* What the mock writes into a shader's private block, so the test can tell a
- * block the driver initialised from one the host merely allocated. */
-struct mock_shader
-{
-    UINT magic;
-    UINT stage;
-};
-
-static HRESULT mock_record_shader(D3D10DDI_HSHADER shader,
-        const struct mock_shader_desc *desc, UINT stage)
-{
-    struct mock_shader *private_shader;
-
-    if (!shader.pDrvPrivate || !desc)
-        return E_INVALIDARG;
-    /* A container with no bytes is not a shader, and the host must not have
-     * reached this far with one. */
-    if (!desc->pFunction || !desc->SizeInBytes)
-        return E_INVALIDARG;
-
-    last_bytecode = desc->pFunction;
-    last_bytecode_size = desc->SizeInBytes;
-    last_linkage = desc->pLinkage;
-
-    private_shader = shader.pDrvPrivate;
-    private_shader->magic = MOCK_SHADER_MAGIC;
-    private_shader->stage = stage;
-    return S_OK;
-}
-
-static HRESULT STDMETHODCALLTYPE mock_create_vertex_shader(
-        struct mock_ddi_device *device, D3D10DDI_HSHADER shader,
-        const struct mock_shader_desc *desc)
-{
-    (void)device;
-    InterlockedIncrement(&vertex_create_calls);
-    return mock_record_shader(shader, desc, WINE_D3D11ON12_SHADER_VERTEX);
-}
-
-static HRESULT STDMETHODCALLTYPE mock_create_pixel_shader(
-        struct mock_ddi_device *device, D3D10DDI_HSHADER shader,
-        const struct mock_shader_desc *desc)
-{
-    (void)device;
-    InterlockedIncrement(&pixel_create_calls);
-    return mock_record_shader(shader, desc, WINE_D3D11ON12_SHADER_PIXEL);
-}
-
-/* The geometry stage, which takes its own descriptor and an optional
- * stream-output argument.
- *
- * Both halves are checked. A non-null stream-output argument would mean the
- * host asked for a StreamOutShader, which is a larger object than the private
- * block it sized -- so refusing it here is refusing a heap overflow. The five
- * stream-output descriptor members must likewise be zero, since nothing may
- * describe a stream this host cannot request. */
-static HRESULT STDMETHODCALLTYPE mock_create_geometry_shader(
-        struct mock_ddi_device *device, D3D10DDI_HSHADER shader,
-        const struct mock_geometry_shader_desc *desc,
-        const void *stream_output_args)
-{
-    struct mock_shader_desc plain;
-
-    (void)device;
-    InterlockedIncrement(&geometry_create_calls);
-    if (!desc)
-        return E_INVALIDARG;
-    if (stream_output_args)
-    {
-        last_geometry_stream_output_requested = 1;
-        return E_INVALIDARG;
-    }
-    if (desc->pDeclaration || desc->NumElements || desc->pBufferStrides
-            || desc->NumStrides || desc->RasterizedStream)
-    {
-        last_geometry_stream_output_requested = 1;
-        return E_INVALIDARG;
-    }
-
-    /* The three members the driver actually reads, in the shape the shared
-     * recorder expects. */
-    plain.pFunction = desc->pFunction;
-    plain.SizeInBytes = desc->SizeInBytes;
-    plain.pLinkage = desc->pLinkage;
-    return mock_record_shader(shader, &plain, WINE_D3D11ON12_SHADER_GEOMETRY);
-}
-
-static HRESULT STDMETHODCALLTYPE mock_create_hull_shader(
-        struct mock_ddi_device *device, D3D10DDI_HSHADER shader,
-        const struct mock_shader_desc *desc)
-{
-    (void)device;
-    InterlockedIncrement(&hull_create_calls);
-    return mock_record_shader(shader, desc, WINE_D3D11ON12_SHADER_HULL);
-}
-
-static HRESULT STDMETHODCALLTYPE mock_create_domain_shader(
-        struct mock_ddi_device *device, D3D10DDI_HSHADER shader,
-        const struct mock_shader_desc *desc)
-{
-    (void)device;
-    InterlockedIncrement(&domain_create_calls);
-    return mock_record_shader(shader, desc, WINE_D3D11ON12_SHADER_DOMAIN);
-}
-
-static HRESULT STDMETHODCALLTYPE mock_create_compute_shader(
-        struct mock_ddi_device *device, D3D10DDI_HSHADER shader,
-        const struct mock_shader_desc *desc)
-{
-    (void)device;
-    InterlockedIncrement(&compute_create_calls);
-    return mock_record_shader(shader, desc, WINE_D3D11ON12_SHADER_COMPUTE);
-}
-
-static const struct mock_ddi_device_vtbl mock_ddi_device_vtable =
-{
-    .CreateVertexShader = mock_create_vertex_shader,
-    .CreatePixelShader = mock_create_pixel_shader,
-    .CreateGeometryShader = mock_create_geometry_shader,
-    .CreateHullShader = mock_create_hull_shader,
-    .CreateDomainShader = mock_create_domain_shader,
-    .CreateComputeShader = mock_create_compute_shader,
-};
-
-static SIZE_T mock_private_shader_size(D3D10DDI_HDEVICE device,
-        const UINT *code, const D3D11_1DDIARG_STAGE_IO_SIGNATURES *signatures)
-{
-    (void)device;
-    /* Both null, and asserted rather than ignored: the host cannot offer
-     * driver bytecode on a path whose creation call takes a container, and
-     * the pinned driver's own sizing function reads neither argument. */
-    if (code || signatures)
-        return 0;
-    InterlockedIncrement(&shader_size_calls);
-    return sizeof(struct mock_shader);
-}
-
-/* The tessellation sizing slot, which hull and domain shaders must use.
- *
- * It returns the same size as the slot above, mirroring the pinned driver,
- * whose shader class has one layout for every pipeline stage because the only
- * stage-dependent member -- the pipeline-state cache key -- is never stored.
- * Counted separately so the test can prove the host asked the right slot per
- * stage rather than the convenient one. */
-static SIZE_T mock_private_tessellation_shader_size(D3D10DDI_HDEVICE device,
-        const UINT *code,
-        const D3D11_1DDIARG_TESSELLATION_IO_SIGNATURES *signatures)
-{
-    (void)device;
-    if (code || signatures)
-        return 0;
-    InterlockedIncrement(&tessellation_size_calls);
-    return sizeof(struct mock_shader);
-}
-
-static void mock_destroy_shader(D3D10DDI_HDEVICE device,
-        D3D10DDI_HSHADER shader)
-{
-    const struct mock_shader *private_shader = shader.pDrvPrivate;
-
-    (void)device;
-    /* Destroying a block the mock never initialised would mean the host
-     * handed back a shader whose creation failed. */
-    if (!private_shader || private_shader->magic != MOCK_SHADER_MAGIC)
-        return;
-    InterlockedIncrement(&shader_destroy_calls);
-}
-
-static void mock_vs_set_shader(D3D10DDI_HDEVICE device,
-        D3D10DDI_HSHADER shader)
-{
-    (void)device;
-    InterlockedIncrement(&vertex_set_calls);
-    last_bound_vertex_shader = shader.pDrvPrivate;
-}
-
-static void mock_ps_set_shader(D3D10DDI_HDEVICE device,
-        D3D10DDI_HSHADER shader)
-{
-    (void)device;
-    InterlockedIncrement(&pixel_set_calls);
-    last_bound_pixel_shader = shader.pDrvPrivate;
-}
-
-static void mock_gs_set_shader(D3D10DDI_HDEVICE device,
-        D3D10DDI_HSHADER shader)
-{
-    (void)device;
-    (void)shader;
-    InterlockedIncrement(&geometry_set_calls);
-}
-
-static void mock_hs_set_shader(D3D10DDI_HDEVICE device,
-        D3D10DDI_HSHADER shader)
-{
-    (void)device;
-    (void)shader;
-    InterlockedIncrement(&hull_set_calls);
-}
-
-static void mock_ds_set_shader(D3D10DDI_HDEVICE device,
-        D3D10DDI_HSHADER shader)
-{
-    (void)device;
-    (void)shader;
-    InterlockedIncrement(&domain_set_calls);
-}
-
-static void mock_cs_set_shader(D3D10DDI_HDEVICE device,
-        D3D10DDI_HSHADER shader)
-{
-    (void)device;
-    (void)shader;
-    InterlockedIncrement(&compute_set_calls);
-}
+static LONG vertex_shader_bind_calls;
+static LONG pixel_shader_bind_calls;
+static void *last_vertex_shader;
+static void *last_pixel_shader;
+static int bad_shader_description;
+static volatile LONG fail_next_shader;
+static D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS *runtime_callbacks;
+static D3D10DDI_HRTCORELAYER runtime_device;
+static unsigned char adapter_private;
 
 static HRESULT mock_get_versions(D3D10DDI_HADAPTER adapter, UINT32 *count,
         UINT64 *versions)
@@ -379,44 +89,421 @@ static void mock_destroy_device(D3D10DDI_HDEVICE device)
     InterlockedIncrement(&destroy_calls);
 }
 
+static BOOL mock_flush(D3D10DDI_HDEVICE device, UINT context_type,
+        UINT flush_flags)
+{
+    (void)device;
+    (void)context_type;
+    (void)flush_flags;
+    InterlockedIncrement(&flush_calls);
+    return TRUE;
+}
+
+static void mock_draw(D3D10DDI_HDEVICE device, UINT vertex_count,
+        UINT start_vertex_location)
+{
+    (void)device;
+    (void)vertex_count;
+    (void)start_vertex_location;
+    InterlockedIncrement(&draw_calls);
+}
+
+static void mock_draw_indexed(D3D10DDI_HDEVICE device, UINT index_count,
+        UINT start_index, INT base_vertex)
+{
+    (void)device; (void)index_count; (void)start_index; (void)base_vertex;
+    InterlockedIncrement(&indexed_draw_calls);
+}
+
+static void mock_draw_instanced(D3D10DDI_HDEVICE device, UINT vertex_count,
+        UINT instance_count, UINT start_vertex, UINT start_instance)
+{
+    (void)device; (void)vertex_count; (void)instance_count;
+    (void)start_vertex; (void)start_instance;
+    InterlockedIncrement(&instanced_draw_calls);
+}
+
+static void mock_draw_indexed_instanced(D3D10DDI_HDEVICE device,
+        UINT index_count, UINT instance_count, UINT start_index,
+        INT base_vertex, UINT start_instance)
+{
+    (void)device; (void)index_count; (void)instance_count; (void)start_index;
+    (void)base_vertex; (void)start_instance;
+    InterlockedIncrement(&indexed_instanced_draw_calls);
+}
+
+static void mock_ia_set_topology(D3D10DDI_HDEVICE device,
+        D3D10_DDI_PRIMITIVE_TOPOLOGY topology)
+{
+    (void)device;
+    last_topology = topology;
+    InterlockedIncrement(&topology_calls);
+}
+
+static SIZE_T mock_calc_private_resource_size(D3D10DDI_HDEVICE device,
+        const D3D11DDIARG_CREATERESOURCE *description)
+{
+    (void)device;
+    if (!description || !description->pMipInfoList
+            || (description->ResourceDimension != D3D10DDIRESOURCE_BUFFER
+                    && description->ResourceDimension
+                            != D3D10DDIRESOURCE_TEXTURE2D))
+        bad_resource_description = 1;
+    return 32;
+}
+
+static void mock_create_resource(D3D10DDI_HDEVICE device,
+        const D3D11DDIARG_CREATERESOURCE *description,
+        D3D10DDI_HRESOURCE resource, D3D10DDI_HRTRESOURCE runtime_resource)
+{
+    (void)device;
+    if (!description || !description->pMipInfoList || !resource.pDrvPrivate
+            || !runtime_resource.handle)
+    {
+        bad_resource_description = 1;
+        InterlockedIncrement(&resource_create_calls);
+        return;
+    }
+
+    if (description->ResourceDimension == D3D10DDIRESOURCE_TEXTURE2D)
+    {
+        UINT array_slice, mip;
+
+        last_texture_width = description->pMipInfoList->TexelWidth;
+        last_texture_height = description->pMipInfoList->TexelHeight;
+        last_texture_mip_levels = description->MipLevels;
+        last_texture_array_size = description->ArraySize;
+        last_texture_format = description->Format;
+        last_texture_bind_flags = description->BindFlags;
+        last_texture_had_initial_data = description->pInitialDataUP != NULL;
+
+        /* Every slice must carry a halving chain that clamps at one.  This
+         * is the arithmetic the core does on its own, so it is the part a
+         * mock is actually useful for checking. */
+        for (array_slice = 0; array_slice < description->ArraySize; ++array_slice)
+        {
+            for (mip = 0; mip < description->MipLevels; ++mip)
+            {
+                const D3D10DDI_MIPINFO *info = &description->pMipInfoList[
+                        array_slice * description->MipLevels + mip];
+                UINT want_width = description->pMipInfoList->TexelWidth >> mip;
+                UINT want_height = description->pMipInfoList->TexelHeight >> mip;
+
+                if (!want_width) want_width = 1;
+                if (!want_height) want_height = 1;
+                if (info->TexelWidth != want_width
+                        || info->TexelHeight != want_height
+                        || info->TexelDepth != 1)
+                    bad_texture_mip_chain = 1;
+            }
+        }
+        InterlockedIncrement(&texture_create_calls);
+    }
+    else if (description->ResourceDimension != D3D10DDIRESOURCE_BUFFER
+            || description->pMipInfoList->TexelWidth != 256
+            || description->pMipInfoList->TexelHeight != 1
+            || description->pMipInfoList->TexelDepth != 1)
+    {
+        bad_resource_description = 1;
+    }
+    InterlockedIncrement(&resource_create_calls);
+}
+
+static void mock_destroy_resource(D3D10DDI_HDEVICE device,
+        D3D10DDI_HRESOURCE resource)
+{
+    (void)device;
+    if (!resource.pDrvPrivate)
+        bad_resource_description = 1;
+    InterlockedIncrement(&resource_destroy_calls);
+}
+
+static void mock_ia_set_vertex_buffers(D3D10DDI_HDEVICE device,
+        UINT start_slot, UINT count, const D3D10DDI_HRESOURCE *buffers,
+        const UINT *strides, const UINT *offsets)
+{
+    (void)device;
+    if (start_slot != 0 || count != 1 || !buffers || !strides || !offsets)
+        bad_resource_description = 1;
+    else
+    {
+        last_vertex_buffer = buffers[0].pDrvPrivate;
+        last_vertex_stride = strides[0];
+        last_vertex_offset = offsets[0];
+    }
+    InterlockedIncrement(&vertex_buffer_bind_calls);
+}
+
+static void mock_ia_set_index_buffer(D3D10DDI_HDEVICE device,
+        D3D10DDI_HRESOURCE buffer, DXGI_FORMAT format, UINT offset)
+{
+    (void)device;
+    last_index_buffer = buffer.pDrvPrivate;
+    last_index_format = format;
+    last_index_offset = offset;
+    InterlockedIncrement(&index_buffer_bind_calls);
+}
+
+static SIZE_T mock_calc_private_element_layout_size(D3D10DDI_HDEVICE device,
+        const D3D10DDIARG_CREATEELEMENTLAYOUT *description)
+{
+    (void)device;
+    if (!description || description->NumElements != 1
+            || !description->pVertexElements)
+        bad_input_layout_description = 1;
+    return 32;
+}
+
+static void mock_create_element_layout(D3D10DDI_HDEVICE device,
+        const D3D10DDIARG_CREATEELEMENTLAYOUT *description,
+        D3D10DDI_HELEMENTLAYOUT layout,
+        D3D10DDI_HRTELEMENTLAYOUT runtime_layout)
+{
+    (void)device;
+    if (!description || description->NumElements != 1
+            || !description->pVertexElements
+            || description->pVertexElements[0].InputSlot != 0
+            || description->pVertexElements[0].AlignedByteOffset != 0
+            || description->pVertexElements[0].Format != DXGI_FORMAT_R32G32_FLOAT
+            || description->pVertexElements[0].InputRegister != 3
+            || !layout.pDrvPrivate || !runtime_layout.handle)
+        bad_input_layout_description = 1;
+    InterlockedIncrement(&input_layout_create_calls);
+    if (InterlockedExchange(&fail_next_input_layout, 0)
+            && runtime_callbacks && runtime_callbacks->pfnSetErrorCb)
+        runtime_callbacks->pfnSetErrorCb(runtime_device, E_OUTOFMEMORY);
+}
+
+static void mock_destroy_element_layout(D3D10DDI_HDEVICE device,
+        D3D10DDI_HELEMENTLAYOUT layout)
+{
+    (void)device;
+    if (!layout.pDrvPrivate)
+        bad_input_layout_description = 1;
+    InterlockedIncrement(&input_layout_destroy_calls);
+}
+
+static void mock_ia_set_input_layout(D3D10DDI_HDEVICE device,
+        D3D10DDI_HELEMENTLAYOUT layout)
+{
+    (void)device;
+    last_input_layout = layout.pDrvPrivate;
+    InterlockedIncrement(&input_layout_bind_calls);
+}
+
+static SIZE_T mock_calc_private_shader_size(D3D10DDI_HDEVICE device,
+        const UINT *code, const D3D11_1DDIARG_STAGE_IO_SIGNATURES *signatures)
+{
+    (void)device;
+    (void)signatures;
+    if (!code || code[0] != 0x43425844)
+        bad_shader_description = 1;
+    return 32;
+}
+
+static void mock_create_vertex_shader(D3D10DDI_HDEVICE device,
+        const UINT *code, D3D10DDI_HSHADER shader,
+        D3D10DDI_HRTSHADER runtime_shader,
+        const D3D11_1DDIARG_STAGE_IO_SIGNATURES *signatures)
+{
+    (void)device;
+    (void)signatures;
+    if (!code || code[0] != 0x43425844 || !shader.pDrvPrivate
+            || !runtime_shader.handle)
+        bad_shader_description = 1;
+    InterlockedIncrement(&vertex_shader_create_calls);
+    if (InterlockedExchange(&fail_next_shader, 0)
+            && runtime_callbacks && runtime_callbacks->pfnSetErrorCb)
+        runtime_callbacks->pfnSetErrorCb(runtime_device, E_OUTOFMEMORY);
+}
+
+static void mock_create_pixel_shader(D3D10DDI_HDEVICE device,
+        const UINT *code, D3D10DDI_HSHADER shader,
+        D3D10DDI_HRTSHADER runtime_shader,
+        const D3D11_1DDIARG_STAGE_IO_SIGNATURES *signatures)
+{
+    (void)device;
+    (void)signatures;
+    if (!code || code[0] != 0x43425844 || !shader.pDrvPrivate
+            || !runtime_shader.handle)
+        bad_shader_description = 1;
+    InterlockedIncrement(&pixel_shader_create_calls);
+    if (InterlockedExchange(&fail_next_shader, 0)
+            && runtime_callbacks && runtime_callbacks->pfnSetErrorCb)
+        runtime_callbacks->pfnSetErrorCb(runtime_device, E_OUTOFMEMORY);
+}
+
+static void mock_destroy_shader(D3D10DDI_HDEVICE device,
+        D3D10DDI_HSHADER shader)
+{
+    (void)device;
+    if (!shader.pDrvPrivate)
+        bad_shader_description = 1;
+    InterlockedIncrement(&shader_destroy_calls);
+}
+
+static void mock_vs_set_shader(D3D10DDI_HDEVICE device,
+        D3D10DDI_HSHADER shader)
+{
+    (void)device;
+    last_vertex_shader = shader.pDrvPrivate;
+    InterlockedIncrement(&vertex_shader_bind_calls);
+}
+
+static void mock_ps_set_shader(D3D10DDI_HDEVICE device,
+        D3D10DDI_HSHADER shader)
+{
+    (void)device;
+    last_pixel_shader = shader.pDrvPrivate;
+    InterlockedIncrement(&pixel_shader_bind_calls);
+}
+
 static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
         D3D10DDIARG_CREATEDEVICE *args)
 {
-    struct mock_ddi_device *ddi_device;
-
     (void)adapter;
     if (!args || !args->pWDDM2_6DeviceFuncs)
         return E_INVALIDARG;
+    if (!runtime_callbacks)
+    {
+        runtime_callbacks = args->pWDDM2_6UMCallbacks;
+        runtime_device = args->hRTCoreLayer;
+    }
     args->pWDDM2_6DeviceFuncs->pfnDestroyDevice = mock_destroy_device;
-    /* The slots the pinned driver does fill for the immediate device.
-     * pfnCreateVertexShader and pfnCreatePixelShader are conspicuously not
-     * among them, for the reason given at the top of this file. */
+    args->pWDDM2_6DeviceFuncs->pfnFlush = mock_flush;
+    args->pWDDM2_6DeviceFuncs->pfnDraw = mock_draw;
+    args->pWDDM2_6DeviceFuncs->pfnDrawIndexed = mock_draw_indexed;
+    args->pWDDM2_6DeviceFuncs->pfnDrawInstanced = mock_draw_instanced;
+    args->pWDDM2_6DeviceFuncs->pfnDrawIndexedInstanced =
+            mock_draw_indexed_instanced;
+    args->pWDDM2_6DeviceFuncs->pfnIaSetTopology = mock_ia_set_topology;
+    args->pWDDM2_6DeviceFuncs->pfnIaSetVertexBuffers =
+            mock_ia_set_vertex_buffers;
+    args->pWDDM2_6DeviceFuncs->pfnIaSetIndexBuffer = mock_ia_set_index_buffer;
+    args->pWDDM2_6DeviceFuncs->pfnCalcPrivateResourceSize =
+            mock_calc_private_resource_size;
+    args->pWDDM2_6DeviceFuncs->pfnCreateResource = mock_create_resource;
+    args->pWDDM2_6DeviceFuncs->pfnDestroyResource = mock_destroy_resource;
+    args->pWDDM2_6DeviceFuncs->pfnCalcPrivateElementLayoutSize =
+            mock_calc_private_element_layout_size;
+    args->pWDDM2_6DeviceFuncs->pfnCreateElementLayout =
+            mock_create_element_layout;
+    args->pWDDM2_6DeviceFuncs->pfnDestroyElementLayout =
+            mock_destroy_element_layout;
+    args->pWDDM2_6DeviceFuncs->pfnIaSetInputLayout =
+            mock_ia_set_input_layout;
     args->pWDDM2_6DeviceFuncs->pfnCalcPrivateShaderSize =
-            mock_private_shader_size;
-    args->pWDDM2_6DeviceFuncs->pfnCalcPrivateTessellationShaderSize =
-            mock_private_tessellation_shader_size;
+            mock_calc_private_shader_size;
+    args->pWDDM2_6DeviceFuncs->pfnCreateVertexShader =
+            mock_create_vertex_shader;
+    args->pWDDM2_6DeviceFuncs->pfnCreatePixelShader =
+            mock_create_pixel_shader;
     args->pWDDM2_6DeviceFuncs->pfnDestroyShader = mock_destroy_shader;
     args->pWDDM2_6DeviceFuncs->pfnVsSetShader = mock_vs_set_shader;
     args->pWDDM2_6DeviceFuncs->pfnPsSetShader = mock_ps_set_shader;
-    args->pWDDM2_6DeviceFuncs->pfnGsSetShader = mock_gs_set_shader;
-    args->pWDDM2_6DeviceFuncs->pfnHsSetShader = mock_hs_set_shader;
-    args->pWDDM2_6DeviceFuncs->pfnDsSetShader = mock_ds_set_shader;
-    args->pWDDM2_6DeviceFuncs->pfnCsSetShader = mock_cs_set_shader;
-    /* pfnCalcPrivateGeometryShaderWithStreamOutput stays null for the same
-     * reason the table's create-shader slots do: the host must never reach
-     * for it, because it sizes a stream-output object this host cannot ask
-     * the driver to build. */
-
-    /* The sub-object vtable, published the way the driver publishes it: by
-     * constructing an object at the head of the private device block the host
-     * allocated and handed over as hDrvDevice. */
-    if (!args->hDrvDevice.pDrvPrivate)
-        return E_INVALIDARG;
-    ddi_device = args->hDrvDevice.pDrvPrivate;
-    ddi_device->lpVtbl = &mock_ddi_device_vtable;
-
     InterlockedIncrement(&create_calls);
     return S_OK;
+}
+
+__declspec(dllexport) LONG WINAPI WineD3D11On12MockDriverGetFlushCount(void)
+{
+    return flush_calls;
+}
+
+__declspec(dllexport) LONG WINAPI WineD3D11On12MockDriverGetDrawCount(void)
+{
+    return draw_calls;
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetExtendedDrawCounts(
+        LONG *indexed, LONG *instanced, LONG *indexed_instanced)
+{
+    if (indexed) *indexed = indexed_draw_calls;
+    if (instanced) *instanced = instanced_draw_calls;
+    if (indexed_instanced) *indexed_instanced = indexed_instanced_draw_calls;
+}
+
+__declspec(dllexport) LONG WINAPI WineD3D11On12MockDriverGetTopology(
+        INT *topology)
+{
+    if (topology)
+        *topology = last_topology;
+    return topology_calls;
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetResourceCounts(
+        LONG *created, LONG *destroyed, int *bad_description)
+{
+    if (created) *created = resource_create_calls;
+    if (destroyed) *destroyed = resource_destroy_calls;
+    if (bad_description) *bad_description = bad_resource_description;
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetTexture2DRecord(
+        LONG *calls, UINT *width, UINT *height, UINT *mip_levels,
+        UINT *array_size, DXGI_FORMAT *format, UINT *bind_flags,
+        int *had_initial_data, int *bad_mip_chain)
+{
+    if (calls) *calls = texture_create_calls;
+    if (width) *width = last_texture_width;
+    if (height) *height = last_texture_height;
+    if (mip_levels) *mip_levels = last_texture_mip_levels;
+    if (array_size) *array_size = last_texture_array_size;
+    if (format) *format = last_texture_format;
+    if (bind_flags) *bind_flags = last_texture_bind_flags;
+    if (had_initial_data) *had_initial_data = last_texture_had_initial_data;
+    if (bad_mip_chain) *bad_mip_chain = bad_texture_mip_chain;
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetIABufferBindings(
+        LONG *vertex_calls, LONG *index_calls, void **vertex_buffer,
+        UINT *vertex_stride, UINT *vertex_offset, void **index_buffer,
+        DXGI_FORMAT *index_format, UINT *index_offset)
+{
+    if (vertex_calls) *vertex_calls = vertex_buffer_bind_calls;
+    if (index_calls) *index_calls = index_buffer_bind_calls;
+    if (vertex_buffer) *vertex_buffer = last_vertex_buffer;
+    if (vertex_stride) *vertex_stride = last_vertex_stride;
+    if (vertex_offset) *vertex_offset = last_vertex_offset;
+    if (index_buffer) *index_buffer = last_index_buffer;
+    if (index_format) *index_format = last_index_format;
+    if (index_offset) *index_offset = last_index_offset;
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetInputLayoutCounts(
+        LONG *created, LONG *destroyed, LONG *bound, void **last_bound,
+        int *bad_description)
+{
+    if (created) *created = input_layout_create_calls;
+    if (destroyed) *destroyed = input_layout_destroy_calls;
+    if (bound) *bound = input_layout_bind_calls;
+    if (last_bound) *last_bound = last_input_layout;
+    if (bad_description) *bad_description = bad_input_layout_description;
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverFailNextInputLayout(void)
+{
+    InterlockedExchange(&fail_next_input_layout, 1);
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetShaderCounts(
+        LONG *vertex_created, LONG *pixel_created, LONG *destroyed,
+        LONG *vertex_bound, LONG *pixel_bound, void **last_vertex,
+        void **last_pixel, int *bad_description)
+{
+    if (vertex_created) *vertex_created = vertex_shader_create_calls;
+    if (pixel_created) *pixel_created = pixel_shader_create_calls;
+    if (destroyed) *destroyed = shader_destroy_calls;
+    if (vertex_bound) *vertex_bound = vertex_shader_bind_calls;
+    if (pixel_bound) *pixel_bound = pixel_shader_bind_calls;
+    if (last_vertex) *last_vertex = last_vertex_shader;
+    if (last_pixel) *last_pixel = last_pixel_shader;
+    if (bad_description) *bad_description = bad_shader_description;
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverFailNextShader(void)
+{
+    InterlockedExchange(&fail_next_shader, 1);
 }
 
 static HRESULT mock_close_adapter(D3D10DDI_HADAPTER adapter)
@@ -453,64 +540,4 @@ __declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetCounts(
         *destroyed = destroy_calls;
     if (closed)
         *closed = close_calls;
-}
-
-/* The shader counters, as one structure rather than a widening argument list:
- * the lifecycle export above is already at four out-parameters, and the
- * interesting assertions here are about which calls happened in what
- * proportion. */
-struct WineD3D11On12MockShaderReport
-{
-    UINT size;
-    LONG sizeCalls;
-    LONG tessellationSizeCalls;
-    LONG vertexCreateCalls;
-    LONG pixelCreateCalls;
-    LONG geometryCreateCalls;
-    LONG hullCreateCalls;
-    LONG domainCreateCalls;
-    LONG computeCreateCalls;
-    LONG destroyCalls;
-    LONG vertexSetCalls;
-    LONG pixelSetCalls;
-    LONG geometrySetCalls;
-    LONG hullSetCalls;
-    LONG domainSetCalls;
-    LONG computeSetCalls;
-    LONG streamOutputRequested;
-    const void *lastBytecode;
-    UINT lastBytecodeSize;
-    const void *lastLinkage;
-    void *lastBoundVertexShader;
-    void *lastBoundPixelShader;
-};
-
-__declspec(dllexport) HRESULT WINAPI WineD3D11On12MockDriverGetShaderReport(
-        struct WineD3D11On12MockShaderReport *report)
-{
-    if (!report || report->size != sizeof(*report))
-        return E_INVALIDARG;
-
-    report->sizeCalls = shader_size_calls;
-    report->tessellationSizeCalls = tessellation_size_calls;
-    report->vertexCreateCalls = vertex_create_calls;
-    report->pixelCreateCalls = pixel_create_calls;
-    report->geometryCreateCalls = geometry_create_calls;
-    report->hullCreateCalls = hull_create_calls;
-    report->domainCreateCalls = domain_create_calls;
-    report->computeCreateCalls = compute_create_calls;
-    report->destroyCalls = shader_destroy_calls;
-    report->vertexSetCalls = vertex_set_calls;
-    report->pixelSetCalls = pixel_set_calls;
-    report->geometrySetCalls = geometry_set_calls;
-    report->hullSetCalls = hull_set_calls;
-    report->domainSetCalls = domain_set_calls;
-    report->computeSetCalls = compute_set_calls;
-    report->streamOutputRequested = last_geometry_stream_output_requested;
-    report->lastBytecode = last_bytecode;
-    report->lastBytecodeSize = last_bytecode_size;
-    report->lastLinkage = last_linkage;
-    report->lastBoundVertexShader = last_bound_vertex_shader;
-    report->lastBoundPixelShader = last_bound_pixel_shader;
-    return S_OK;
 }

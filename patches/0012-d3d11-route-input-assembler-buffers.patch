@@ -1,0 +1,346 @@
+diff --git a/dlls/d3d11/buffer.c b/dlls/d3d11/buffer.c
+index 5ba9ac2..5d1bfc5 100644
+--- a/dlls/d3d11/buffer.c
++++ b/dlls/d3d11/buffer.c
+@@ -89,8 +89,18 @@ static ULONG STDMETHODCALLTYPE d3d11_buffer_Release(ID3D11Buffer *iface)
+     if (!refcount)
+     {
+         ID3D11Device5 *device = buffer->device;
++        struct d3d_device *device_impl = impl_from_ID3D11Device5(device);
+ 
+-        wined3d_buffer_decref(buffer->wined3d_buffer);
++        if (device_impl->backend_ops->destroy_buffer)
++            device_impl->backend_ops->destroy_buffer(device_impl, buffer);
++        if (buffer->wined3d_buffer)
++            wined3d_buffer_decref(buffer->wined3d_buffer);
++        else
++        {
++            if (buffer->dxgi_resource)
++                IUnknown_Release(buffer->dxgi_resource);
++            free(buffer);
++        }
+         /* Release the device last, it may cause the wined3d device to be
+          * destroyed. */
+         ID3D11Device5_Release(device);
+@@ -466,6 +476,17 @@ static HRESULT d3d_buffer_init(struct d3d_buffer *buffer, struct d3d_device *dev
+-    if (!validate_buffer_desc(&buffer->desc, device->state->feature_level))
++    if (!validate_buffer_desc(&buffer->desc,
++            device->backend_ops->get_feature_level(device)))
+         return E_INVALIDARG;
+ 
++    if (device->backend_ops->create_buffer)
++    {
++        buffer->backend_buffer.size = sizeof(buffer->backend_buffer);
++        if (FAILED(hr = device->backend_ops->create_buffer(device, desc, data,
++                buffer)))
++            return hr;
++        ID3D11Device5_AddRef(buffer->device = &device->ID3D11Device5_iface);
++        return S_OK;
++    }
++
+     wined3d_desc.byte_width = buffer->desc.ByteWidth;
+     wined3d_desc.usage = wined3d_usage_from_d3d11(buffer->desc.Usage, buffer->desc.MiscFlags);
+     wined3d_desc.bind_flags = wined3d_bind_flags_from_d3d11(buffer->desc.BindFlags, buffer->desc.MiscFlags);
+diff --git a/dlls/d3d11/d3d11_main.c b/dlls/d3d11/d3d11_main.c
+index cd6264c..ae4b692 100644
+--- a/dlls/d3d11/d3d11_main.c
++++ b/dlls/d3d11/d3d11_main.c
+@@ -399,6 +399,14 @@ struct wine_d3d11on12_adapter_device
+     void *reserved[2];
+ };
+ 
++struct wine_d3d11on12_buffer
++{
++    UINT size;
++    UINT reserved;
++    void *driver_resource;
++    void *runtime_state;
++};
++
+ typedef HRESULT (WINAPI *wine_d3d11on12_open_adapter_fn)(IUnknown *,
+         IUnknown *const *, UINT, UINT, struct wine_d3d11on12_adapter_device *);
+ typedef HRESULT (WINAPI *wine_d3d11on12_close_adapter_fn)(
+@@ -412,6 +420,17 @@ typedef HRESULT (WINAPI *wine_d3d11on12_dispatch_draw_fn)(
+         UINT);
+ typedef HRESULT (WINAPI *wine_d3d11on12_set_primitive_topology_fn)(
+         struct wine_d3d11on12_adapter_device *, INT);
++typedef HRESULT (WINAPI *wine_d3d11on12_create_buffer_fn)(
++        struct wine_d3d11on12_adapter_device *, const D3D11_BUFFER_DESC *,
++        const D3D11_SUBRESOURCE_DATA *, struct wine_d3d11on12_buffer *);
++typedef HRESULT (WINAPI *wine_d3d11on12_destroy_buffer_fn)(
++        struct wine_d3d11on12_buffer *);
++typedef HRESULT (WINAPI *wine_d3d11on12_set_vertex_buffers_fn)(
++        struct wine_d3d11on12_adapter_device *, UINT, UINT,
++        struct wine_d3d11on12_buffer *const *, const UINT *, const UINT *);
++typedef HRESULT (WINAPI *wine_d3d11on12_set_index_buffer_fn)(
++        struct wine_d3d11on12_adapter_device *,
++        struct wine_d3d11on12_buffer *, DXGI_FORMAT, UINT);
+ 
+ struct wine_d3d11on12_core_interface
+ {
+@@ -440,6 +459,10 @@ struct d3d11_on12_backend
+     ID3D12Device *device12;
+     D3D_FEATURE_LEVEL feature_level;
+     UINT creation_flags;
++    wine_d3d11on12_create_buffer_fn create_buffer;
++    wine_d3d11on12_destroy_buffer_fn destroy_buffer;
++    wine_d3d11on12_set_vertex_buffers_fn set_vertex_buffers;
++    wine_d3d11on12_set_index_buffer_fn set_index_buffer;
+ };
+ 
+ static void d3d11_on12_backend_destroy(struct d3d_device *device)
+@@ -549,6 +572,63 @@ static void d3d11_on12_backend_set_primitive_topology(
+         WARN("D3D11On12 IA topology dispatch failed, hr %#lx.\n", hr);
+ }
+ 
++static HRESULT d3d11_on12_backend_create_buffer(struct d3d_device *device,
++        const D3D11_BUFFER_DESC *desc, const D3D11_SUBRESOURCE_DATA *data,
++        struct d3d_buffer *buffer)
++{
++    struct d3d11_on12_backend *backend = device->backend_private;
++    return backend->create_buffer(&backend->adapter, desc, data,
++            (struct wine_d3d11on12_buffer *)&buffer->backend_buffer);
++}
++
++static void d3d11_on12_backend_destroy_buffer(struct d3d_device *device,
++        struct d3d_buffer *buffer)
++{
++    struct d3d11_on12_backend *backend = device->backend_private;
++    HRESULT hr = backend->destroy_buffer(
++            (struct wine_d3d11on12_buffer *)&buffer->backend_buffer);
++    if (FAILED(hr))
++        WARN("D3D11On12 buffer destruction failed, hr %#lx.\n", hr);
++}
++
++static void d3d11_on12_backend_set_vertex_buffers(
++        struct d3d11_device_context *context, UINT start_slot,
++        UINT buffer_count, ID3D11Buffer *const *buffers,
++        const UINT *strides, const UINT *offsets)
++{
++    struct wine_d3d11on12_buffer *handles[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT];
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    UINT i;
++    HRESULT hr;
++
++    if (buffer_count > ARRAY_SIZE(handles))
++        buffer_count = ARRAY_SIZE(handles);
++    for (i = 0; i < buffer_count; ++i)
++    {
++        struct d3d_buffer *buffer = unsafe_impl_from_ID3D11Buffer(buffers[i]);
++        handles[i] = buffer
++                ? (struct wine_d3d11on12_buffer *)&buffer->backend_buffer
++                : NULL;
++    }
++    hr = backend->set_vertex_buffers(&backend->adapter, start_slot,
++            buffer_count, handles, strides, offsets);
++    if (FAILED(hr))
++        WARN("D3D11On12 vertex-buffer binding failed, hr %#lx.\n", hr);
++}
++
++static void d3d11_on12_backend_set_index_buffer(
++        struct d3d11_device_context *context, ID3D11Buffer *buffer,
++        DXGI_FORMAT format, UINT offset)
++{
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    struct d3d_buffer *buffer_impl = unsafe_impl_from_ID3D11Buffer(buffer);
++    HRESULT hr = backend->set_index_buffer(&backend->adapter,
++            buffer_impl ? (struct wine_d3d11on12_buffer *)
++                    &buffer_impl->backend_buffer : NULL, format, offset);
++    if (FAILED(hr))
++        WARN("D3D11On12 index-buffer binding failed, hr %#lx.\n", hr);
++}
++
+ static HRESULT d3d11_on12_backend_create_wrapped_resource(
+         struct d3d_device *device, IUnknown *resource12,
+         const D3D11_RESOURCE_FLAGS *flags, D3D12_RESOURCE_STATES input_state,
+@@ -600,6 +680,10 @@ static const struct d3d11_backend_ops d3d11_on12_backend_ops =
+     d3d11_on12_backend_draw_instanced,
+     d3d11_on12_backend_draw_indexed_instanced,
+     d3d11_on12_backend_set_primitive_topology,
++    d3d11_on12_backend_create_buffer,
++    d3d11_on12_backend_destroy_buffer,
++    d3d11_on12_backend_set_vertex_buffers,
++    d3d11_on12_backend_set_index_buffer,
+     d3d11_on12_backend_create_wrapped_resource,
+     d3d11_on12_backend_release_wrapped_resources,
+     d3d11_on12_backend_acquire_wrapped_resources,
+@@ -657,6 +741,29 @@ static HRESULT d3d11_on12_create_unpublished_backend(IUnknown *device,
+     }
+     backend->core = core;
+ 
++    address = GetProcAddress(backend->core_module,
++            "WineD3D11On12CreateBufferV1");
++    memcpy(&backend->create_buffer, &address, sizeof(backend->create_buffer));
++    address = GetProcAddress(backend->core_module,
++            "WineD3D11On12DestroyBufferV1");
++    memcpy(&backend->destroy_buffer, &address,
++            sizeof(backend->destroy_buffer));
++    address = GetProcAddress(backend->core_module,
++            "WineD3D11On12SetVertexBuffersV1");
++    memcpy(&backend->set_vertex_buffers, &address,
++            sizeof(backend->set_vertex_buffers));
++    address = GetProcAddress(backend->core_module,
++            "WineD3D11On12SetIndexBufferV1");
++    memcpy(&backend->set_index_buffer, &address,
++            sizeof(backend->set_index_buffer));
++    if (!backend->create_buffer || !backend->destroy_buffer
++            || !backend->set_vertex_buffers || !backend->set_index_buffer)
++    {
++        FreeLibrary(backend->core_module);
++        free(backend);
++        return DXGI_ERROR_UNSUPPORTED;
++    }
++
+     address = GetProcAddress(backend->core_module,
+             "WineD3D11On12OpenAdapterV1");
+     memcpy(&open_adapter, &address, sizeof(open_adapter));
+diff --git a/dlls/d3d11/d3d11_private.h b/dlls/d3d11/d3d11_private.h
+index d043279..8046712 100644
+--- a/dlls/d3d11/d3d11_private.h
++++ b/dlls/d3d11/d3d11_private.h
+@@ -186,6 +186,13 @@ struct d3d_buffer
+     struct wined3d_buffer *wined3d_buffer;
+     D3D11_BUFFER_DESC desc;
+     ID3D11Device5 *device;
++    struct
++    {
++        UINT size;
++        UINT reserved;
++        void *driver_resource;
++        void *runtime_state;
++    } backend_buffer;
+ };
+ 
+ HRESULT d3d_buffer_create(struct d3d_device *device, const D3D11_BUFFER_DESC *desc,
+@@ -586,6 +593,17 @@ struct d3d11_backend_ops
+             INT base_vertex, UINT start_instance);
+     void (*set_primitive_topology)(struct d3d11_device_context *context,
+             D3D11_PRIMITIVE_TOPOLOGY topology);
++    HRESULT (*create_buffer)(struct d3d_device *device,
++            const D3D11_BUFFER_DESC *desc,
++            const D3D11_SUBRESOURCE_DATA *data, struct d3d_buffer *buffer);
++    void (*destroy_buffer)(struct d3d_device *device,
++            struct d3d_buffer *buffer);
++    void (*set_vertex_buffers)(struct d3d11_device_context *context,
++            UINT start_slot, UINT buffer_count,
++            ID3D11Buffer *const *buffers, const UINT *strides,
++            const UINT *offsets);
++    void (*set_index_buffer)(struct d3d11_device_context *context,
++            ID3D11Buffer *buffer, DXGI_FORMAT format, UINT offset);
+     HRESULT (*create_wrapped_resource)(struct d3d_device *device,
+             IUnknown *resource12, const D3D11_RESOURCE_FLAGS *flags,
+             D3D12_RESOURCE_STATES input_state,
+diff --git a/dlls/d3d11/device.c b/dlls/d3d11/device.c
+index 936d273..6f0f539 100644
+--- a/dlls/d3d11/device.c
++++ b/dlls/d3d11/device.c
+@@ -94,6 +94,39 @@ static void wined3d_backend_set_primitive_topology(
+             primitive_type, patch_vertex_count);
+ }
+ 
++static void wined3d_backend_set_vertex_buffers(
++        struct d3d11_device_context *context, UINT start_slot,
++        UINT buffer_count, ID3D11Buffer *const *buffers,
++        const UINT *strides, const UINT *offsets)
++{
++    struct wined3d_stream_state streams[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT];
++    unsigned int i;
++
++    if (buffer_count > ARRAY_SIZE(streams))
++        buffer_count = ARRAY_SIZE(streams);
++    for (i = 0; i < buffer_count; ++i)
++    {
++        struct d3d_buffer *buffer = unsafe_impl_from_ID3D11Buffer(buffers[i]);
++        streams[i].buffer = buffer ? buffer->wined3d_buffer : NULL;
++        streams[i].offset = offsets[i];
++        streams[i].stride = strides[i];
++        streams[i].frequency = 1;
++        streams[i].flags = 0;
++    }
++    wined3d_device_context_set_stream_sources(context->wined3d_context,
++            start_slot, buffer_count, streams);
++}
++
++static void wined3d_backend_set_index_buffer(
++        struct d3d11_device_context *context, ID3D11Buffer *buffer,
++        DXGI_FORMAT format, UINT offset)
++{
++    struct d3d_buffer *buffer_impl = unsafe_impl_from_ID3D11Buffer(buffer);
++    wined3d_device_context_set_index_buffer(context->wined3d_context,
++            buffer_impl ? buffer_impl->wined3d_buffer : NULL,
++            wined3dformat_from_dxgi_format(format), offset);
++}
++
+ static const struct d3d11_backend_ops wined3d_backend_ops =
+ {
+     wined3d_backend_destroy_device,
+@@ -108,6 +141,10 @@ static const struct d3d11_backend_ops wined3d_backend_ops =
+     wined3d_backend_set_primitive_topology,
+     NULL,
+     NULL,
++    wined3d_backend_set_vertex_buffers,
++    wined3d_backend_set_index_buffer,
++    NULL,
++    NULL,
+     NULL,
+     NULL,
+ };
+@@ -952,45 +989,25 @@ static void STDMETHODCALLTYPE d3d11_device_context_IASetInputLayout(ID3D11Device
+ static void STDMETHODCALLTYPE d3d11_device_context_IASetVertexBuffers(ID3D11DeviceContext4 *iface,
+         UINT start_slot, UINT buffer_count, ID3D11Buffer *const *buffers, const UINT *strides, const UINT *offsets)
+ {
+-    struct wined3d_stream_state streams[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT];
+     struct d3d11_device_context *context = impl_from_ID3D11DeviceContext4(iface);
+-    unsigned int i;
+ 
+     TRACE("iface %p, start_slot %u, buffer_count %u, buffers %p, strides %p, offsets %p.\n",
+             iface, start_slot, buffer_count, buffers, strides, offsets);
+ 
+-    if (buffer_count > ARRAY_SIZE(streams))
+-    {
+-        WARN("Buffer count %u exceeds limit.\n", buffer_count);
+-        buffer_count = ARRAY_SIZE(streams);
+-    }
+-
+-    for (i = 0; i < buffer_count; ++i)
+-    {
+-        struct d3d_buffer *buffer = unsafe_impl_from_ID3D11Buffer(buffers[i]);
+-
+-        streams[i].buffer = buffer ? buffer->wined3d_buffer : NULL;
+-        streams[i].offset = offsets[i];
+-        streams[i].stride = strides[i];
+-        streams[i].frequency = 1;
+-        streams[i].flags = 0;
+-    }
+-
+-    wined3d_device_context_set_stream_sources(context->wined3d_context, start_slot, buffer_count, streams);
++    context->device->backend_ops->set_vertex_buffers(context, start_slot,
++            buffer_count, buffers, strides, offsets);
+ }
+ 
+ static void STDMETHODCALLTYPE d3d11_device_context_IASetIndexBuffer(ID3D11DeviceContext4 *iface,
+         ID3D11Buffer *buffer, DXGI_FORMAT format, UINT offset)
+ {
+     struct d3d11_device_context *context = impl_from_ID3D11DeviceContext4(iface);
+-    struct d3d_buffer *buffer_impl = unsafe_impl_from_ID3D11Buffer(buffer);
+ 
+     TRACE("iface %p, buffer %p, format %s, offset %u.\n",
+             iface, buffer, debug_dxgi_format(format), offset);
+ 
+-    wined3d_device_context_set_index_buffer(context->wined3d_context,
+-            buffer_impl ? buffer_impl->wined3d_buffer : NULL,
+-            wined3dformat_from_dxgi_format(format), offset);
++    context->device->backend_ops->set_index_buffer(context, buffer, format,
++            offset);
+ }
+ 
+ static void STDMETHODCALLTYPE d3d11_device_context_DrawIndexedInstanced(ID3D11DeviceContext4 *iface,
+@@ -8391,6 +8408,8 @@ struct d3d_device *d3d_device_create_backend(
+             || !backend_ops->draw_instanced
+             || !backend_ops->draw_indexed_instanced
+             || !backend_ops->set_primitive_topology
++            || !backend_ops->set_vertex_buffers
++            || !backend_ops->set_index_buffer
+             || !backend_ops->create_wrapped_resource
+             || !backend_ops->release_wrapped_resources
+             || !backend_ops->acquire_wrapped_resources
