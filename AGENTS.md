@@ -116,9 +116,22 @@ All modifications to this codebase must preserve the following architectural inv
 #### `d3d11on12core.dll` (Core Boundary)
 | Ordinal | Symbol | Purpose |
 | ---: | :--- | :--- |
+Ordinals are part of the ABI and are never reused or renumbered. The
+authoritative list is [`relay12-d3d11/d3d11on12core.def`](file:///Users/niltonperimneto/Whisky/relay12/relay12-d3d11/d3d11on12core.def);
+`.github/workflows/pull-request.yml` asserts the built DLL matches it exactly,
+so this table is a reading aid and the `.def` is the contract.
+
+| Ordinal | Symbol | Purpose |
+| ---: | :--- | :--- |
 | 1 | `WineD3D11On12GetABIVersion` | Returns `WINE_D3D11ON12_ABI_VERSION` |
 | 2 | `WineD3D11On12CreateDeviceV1` | Validated device creation entry point |
 | 3 | `WineD3D11On12GetInterface` | Returns interface function table |
+| 4 | `WineD3D11On12OpenAdapterV1` | Opens the driver and creates the DDI device |
+| 5, 6 | `WineD3D11On12{Create,Destroy}BufferV1` | Owned buffer lifecycle |
+| 7, 8 | `WineD3D11On12Set{VertexBuffers,IndexBuffer}V1` | Input-assembler buffer binding |
+| 9-11 | `WineD3D11On12{Create,Destroy,Set}InputLayoutV1` | Element-layout lifecycle and binding |
+| 12-16 | `WineD3D11On12{CreateVertex,CreatePixel,Destroy,SetVertex,SetPixel}Shader*V1` | Vertex and pixel shader lifecycle and binding |
+| 17, 18 | `WineD3D11On12{Create,Destroy}Texture2DV1` | Owned Texture2D lifecycle |
 
 ### 4.3 Diagnostic Logging
 Diagnostic logging is handled via [`relay12-d3d11/wine_d3d11_diag.h`](file:///Users/niltonperimneto/Whisky/relay12/relay12-d3d11/wine_d3d11_diag.h):
