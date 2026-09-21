@@ -1,0 +1,45 @@
+From: relay12 contributors
+Subject: [PATCH] d3d11on12: complete the entry-point noexcept contract
+
+The last site of the mismatch patch 0020 describes. CloseAndSubmit-
+GraphicsCommandListForPresent lives in present.cpp rather than
+device.cpp, so it was outside the two definitions that patch corrected,
+and present.cpp only started compiling once the overlay supplied
+D3DKMT_PRESENT.
+
+The cause is identical: mingw-w64 expands STDMETHOD with
+COM_DECLSPEC_NOTHROW and STDMETHODIMP_ without it, so the declaration
+carries __attribute__((nothrow)) and the definition does not. The body
+is wrapped in OPEN_TRYCATCH/CLOSE_TRYCATCH and converts exceptions to
+HRESULT, so noexcept states what the function already does.
+
+A scan of every out-of-class STDMETHODIMP definition across the patched
+tree now reports 37 with an explicit noexcept and none without, so this
+closes the bug class rather than fixing one more instance of it.
+---
+diff --git a/include/device.hpp b/include/device.hpp
+index 0875598..990b6a7 100644
+--- a/include/device.hpp
++++ b/include/device.hpp
+@@ -294,7 +294,7 @@ namespace D3D11On12
+         STDMETHOD(Present)(_In_ D3DKMT_PRESENT* pArgs) noexcept override;
+         STDMETHOD_(void, SetMaximumFrameLatency)(UINT MaxFrameLatency) noexcept override;
+         STDMETHOD_(bool, IsMaximumFrameLatencyReached)() noexcept override;
+-        STDMETHOD(CloseAndSubmitGraphicsCommandListForPresent)(BOOL commandsAdded, _In_reads_(numSrcSurfaces) const PresentSurface* pSrcSurfaces, UINT numSrcSurfaces, _In_opt_ ID3D11On12DDIResource* pDest, _In_ D3DKMT_PRESENT* pKMTPresent) override;
++        STDMETHOD(CloseAndSubmitGraphicsCommandListForPresent)(BOOL commandsAdded, _In_reads_(numSrcSurfaces) const PresentSurface* pSrcSurfaces, UINT numSrcSurfaces, _In_opt_ ID3D11On12DDIResource* pDest, _In_ D3DKMT_PRESENT* pKMTPresent) noexcept override;
+         STDMETHOD(PreExecuteCommandQueueCommand)(CommandListType commandListType) noexcept override;
+         STDMETHOD(PostExecuteCommandQueueCommand)(CommandListType commandListType) noexcept override;
+ 
+diff --git a/src/present.cpp b/src/present.cpp
+index 2219056..2f76a66 100644
+--- a/src/present.cpp
++++ b/src/present.cpp
+@@ -342,7 +342,7 @@ namespace D3D11On12
+         _In_reads_(numSrcSurfaces) const PresentSurface* pSrcSurfaces,
+         UINT numSrcSurfaces,
+         _In_opt_ ID3D11On12DDIResource* pDest,
+-        _In_ D3DKMT_PRESENT* pKMTPresent)
++        _In_ D3DKMT_PRESENT* pKMTPresent) noexcept
+     {
+         D3D11on12_DDI_ENTRYPOINT_START();
+         D3D12TranslationLayer::ImmediateContext& immediateContext = GetImmediateContextNoFlush();
