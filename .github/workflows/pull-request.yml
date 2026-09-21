@@ -312,16 +312,13 @@ jobs:
 
           dll="$build/src/d3d11on12.dll"
           test -s "$dll"
-          dump=$(x86_64-w64-mingw32-objdump -p "$dll")
-          exports=$(printf '%s\n' "$dump" | sed -n \
-            '/\[Ordinal\/Name Pointer\] Table/,/^$/p' \
-            | grep -o 'OpenAdapter_D3D11On12' | wc -l)
-          test "$exports" -eq 1
-          if printf '%s\n' "$dump" | grep -Eiq 'libstdc\+\+|libgcc_s'; then
-            echo 'linked driver imports a dynamic MinGW C++ runtime' >&2
-            exit 1
-          fi
-          printf '%s\n' "$dump" | grep 'DLL Name:'
+          # Through the tested gate rather than an inline scrape. The inline
+          # version read GNU binutils objdump's export table, and llvm-mingw's
+          # objdump is llvm-objdump, which prints a different one -- so the
+          # check silently found zero exports and failed with nothing to read.
+          python3 "$GITHUB_WORKSPACE/scripts/check_pe_audit.py" \
+            --require-export OpenAdapter_D3D11On12 "$dll"
+          x86_64-w64-mingw32-objdump -p "$dll" | grep 'DLL Name:'
 
       - name: Compile D3D11-on-12 conformance probe
         run: |
