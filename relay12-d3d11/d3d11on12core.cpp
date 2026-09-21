@@ -27,6 +27,19 @@
  * file reimplementing the supported-version arithmetic. */
 #include "wine_d3d11ddi_negotiate.h"
 
+/* The maximum number of elements in an input-layout declaration.
+ *
+ * The Windows SDK's d3d11.h defines this; mingw-w64's does not. Its d3d11.idl
+ * publishes D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT (the input slot bound,
+ * 32) but not the element-count bound, which is separately specified and also
+ * 32. Guarded so that a toolchain which does supply it wins, and so that this
+ * disappears on its own once mingw-w64 catches up.
+ *
+ * Specification: https://learn.microsoft.com/en-us/windows/win32/direct3d11/d3d11-graphics-reference-d3d11-constants */
+#ifndef D3D11_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT
+#define D3D11_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT 32u
+#endif
+
 /* The adapter-arguments subset of interface/D3D11On12DDI.h, transcribed under
  * its MIT licence rather than included.
  *
@@ -1372,10 +1385,21 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateTexture2DV1(
     if (mipLevels > fullMipLevels || description->ArraySize > ~0u / mipLevels)
         return E_INVALIDARG;
     const UINT subresourceCount = mipLevels * description->ArraySize;
-    if (subresourceCount > (~static_cast<SIZE_T>(0)) / sizeof(D3D10DDI_MIPINFO)
-            || subresourceCount > (~static_cast<SIZE_T>(0))
-                    / sizeof(D3D10_DDIARG_SUBRESOURCE_UP))
-        return E_OUTOFMEMORY;
+
+    /* Asserted rather than tested. subresourceCount is a UINT, so the byte
+     * counts below are at most UINT_MAX times a small element, which cannot
+     * overflow a 64-bit SIZE_T -- Clang rightly rejects the runtime form as
+     * a comparison that is always false. The bound is still checked, just at
+     * compile time, so a 32-bit target would fail to build here instead of
+     * silently losing the guard. The UINT overflow that *can* happen is
+     * mipLevels * ArraySize, and that is tested above. */
+    static_assert((~static_cast<SIZE_T>(0)) / sizeof(D3D10DDI_MIPINFO)
+            >= 0xffffffffu, "a UINT subresource count must not overflow the "
+            "mip-info byte count");
+    static_assert((~static_cast<SIZE_T>(0))
+            / sizeof(D3D10_DDIARG_SUBRESOURCE_UP) >= 0xffffffffu,
+            "a UINT subresource count must not overflow the upload byte "
+            "count");
     D3D10DDI_MIPINFO *mips = static_cast<D3D10DDI_MIPINFO *>(HeapAlloc(
             GetProcessHeap(), HEAP_ZERO_MEMORY,
             subresourceCount * sizeof(*mips)));
