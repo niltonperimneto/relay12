@@ -1,0 +1,32 @@
+From: relay12 contributors
+Subject: [PATCH] dtl: make the interfaces range-flags variable a portable const
+
+The same gap patch 0017 fixed in ResourceState.hpp recurs here:
+llvm-mingw's winnt.h does not mark DEFINE_ENUM_FLAG_OPERATORS' operator|
+constexpr, so a constexpr variable initialized through it is not a
+constant expression under Clang, though it was under MSVC. This is a
+function-local static, not a namespace-scope variable, but the same fix
+applies: const preserves the exact linkage and one-time initialization
+this local static already had, and needs only an ordinary initializer.
+
+Both uses of InterfacesRangeFlags pass it as a runtime argument to
+CD3DX12_DESCRIPTOR_RANGE1::Init, so nothing here depended on it being a
+core constant expression.
+
+A grep across every DEFINE_ENUM_FLAG_OPERATORS-declared type in both
+DirectX-Headers and this project's own headers -- 119 distinct flag-enum
+types in total -- found no other constexpr declaration of this shape
+remaining in the tree.
+---
+diff --git a/src/RootSignature.cpp b/src/RootSignature.cpp
+--- a/src/RootSignature.cpp
++++ b/src/RootSignature.cpp
+@@ -49,7 +49,7 @@ namespace D3D12TranslationLayer
+             RangeFlags |= D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_STATIC_KEEPING_BUFFER_BOUNDS_CHECKS;
+         }
+         // else STATIC (default)
+-        static constexpr D3D12_DESCRIPTOR_RANGE_FLAGS InterfacesRangeFlags = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE | D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
++        static const D3D12_DESCRIPTOR_RANGE_FLAGS InterfacesRangeFlags = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE | D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
+ 
+         UINT NumSRVRanges = std::accumulate(m_NumSRVSpacesUsed, std::end(m_NumSRVSpacesUsed), 0);
+         CD3DX12_DESCRIPTOR_RANGE1* pSRVRanges;
