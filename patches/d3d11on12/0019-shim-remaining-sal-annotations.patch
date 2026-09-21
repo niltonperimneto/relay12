@@ -1,0 +1,457 @@
+From: relay12 contributors
+Subject: [PATCH] d3d11on12: shim the remaining SAL annotations the toolchain lacks
+
+Patch 0018 shims _Maybenull_, which is the first annotation the WDK
+overlay headers use that the pinned llvm-mingw does not define. It is
+not the only one.
+
+mingw-w64 added 137 SAL annotations in v13.0.0, and llvm-mingw 20240619
+bundles an earlier release; _Maybenull_ is simply the one this build
+reached first. Because an unknown annotation halts the parse where it
+appears, finding them one at a time costs a full CI build per
+annotation. This adds the other 136 as a set, taken as the exact
+v12.0.0-to-v13.0.0 delta and each defined the way v13 defines it --
+empty, with the same arity.
+
+These carry no codegen meaning; they are static-analysis intent this
+toolchain does not consume. Each is #ifndef-guarded, so a toolchain bump
+that supplies them makes the block inert rather than conflicting, and
+_Maybenull_ is deliberately excluded here since 0018 already defines it.
+
+Verified: the block compiles standalone under host Clang with -Wall
+-Wextra -Werror, and a use test exercises zero-, one- and two-argument
+annotations in real declaration positions while pre-defining two of them
+to confirm the guards make redefinition inert.
+---
+diff --git a/include/pch.hpp b/include/pch.hpp
+index eb8fe3c..b34e12e 100644
+--- a/include/pch.hpp
++++ b/include/pch.hpp
+@@ -41,6 +41,427 @@ WINADAPTER_IID(IDxbcConverter,
+ #ifndef _Maybenull_
+ #define _Maybenull_
+ #endif
++
++// The rest of the SAL annotations the pinned llvm-mingw lacks.
++//
++// mingw-w64 added 137 annotations in v13.0.0 and llvm-mingw 20240619
++// bundles an earlier release, so _Maybenull_ above is one instance of a
++// set. This is the remaining 136, taken as the exact v12.0.0-to-v13.0.0
++// delta and each defined as v13 defines it: empty, with the same arity.
++// They are static-analysis hints with no codegen meaning.
++//
++// Added as a set rather than one at a time because each missing
++// annotation halts the parse at its first use, so discovering them
++// singly costs one full CI build each. Every one is guarded, so a
++// toolchain bump that supplies them makes this block inert.
++#ifndef _Notnull_
++#define _Notnull_
++#endif
++#ifndef _Null_
++#define _Null_
++#endif
++#ifndef _Post_bytecap_
++#define _Post_bytecap_(s)
++#endif
++#ifndef _Post_bytecount_
++#define _Post_bytecount_(s)
++#endif
++#ifndef _Post_bytecount_c_
++#define _Post_bytecount_c_(s)
++#endif
++#ifndef _Post_bytecount_x_
++#define _Post_bytecount_x_(s)
++#endif
++#ifndef _Post_cap_
++#define _Post_cap_(s)
++#endif
++#ifndef _Post_count_
++#define _Post_count_(s)
++#endif
++#ifndef _Post_count_c_
++#define _Post_count_c_(s)
++#endif
++#ifndef _Post_count_x_
++#define _Post_count_x_(s)
++#endif
++#ifndef _Post_defensive_
++#define _Post_defensive_
++#endif
++#ifndef _Post_impl_
++#define _Post_impl_
++#endif
++#ifndef _Post_invalid_
++#define _Post_invalid_
++#endif
++#ifndef _Post_maybenull_
++#define _Post_maybenull_
++#endif
++#ifndef _Post_maybez_
++#define _Post_maybez_
++#endif
++#ifndef _Post_notnull_
++#define _Post_notnull_
++#endif
++#ifndef _Post_null_
++#define _Post_null_
++#endif
++#ifndef _Post_ptr_invalid_
++#define _Post_ptr_invalid_
++#endif
++#ifndef _Post_satisfies_impl_
++#define _Post_satisfies_impl_(c)
++#endif
++#ifndef _Post_valid_
++#define _Post_valid_
++#endif
++#ifndef _Post_valid_impl_
++#define _Post_valid_impl_
++#endif
++#ifndef _Post_z_
++#define _Post_z_
++#endif
++#ifndef _Post_z_bytecount_
++#define _Post_z_bytecount_(s)
++#endif
++#ifndef _Post_z_bytecount_c_
++#define _Post_z_bytecount_c_(s)
++#endif
++#ifndef _Post_z_bytecount_x_
++#define _Post_z_bytecount_x_(s)
++#endif
++#ifndef _Post_z_count_
++#define _Post_z_count_(s)
++#endif
++#ifndef _Post_z_count_c_
++#define _Post_z_count_c_(s)
++#endif
++#ifndef _Post_z_count_x_
++#define _Post_z_count_x_(s)
++#endif
++#ifndef _Pre_
++#define _Pre_
++#endif
++#ifndef _Pre_bytecap_
++#define _Pre_bytecap_(s)
++#endif
++#ifndef _Pre_bytecap_c_
++#define _Pre_bytecap_c_(s)
++#endif
++#ifndef _Pre_bytecap_x_
++#define _Pre_bytecap_x_(s)
++#endif
++#ifndef _Pre_bytecount_
++#define _Pre_bytecount_(s)
++#endif
++#ifndef _Pre_bytecount_c_
++#define _Pre_bytecount_c_(s)
++#endif
++#ifndef _Pre_bytecount_x_
++#define _Pre_bytecount_x_(s)
++#endif
++#ifndef _Pre_cap_
++#define _Pre_cap_(s)
++#endif
++#ifndef _Pre_cap_c_
++#define _Pre_cap_c_(s)
++#endif
++#ifndef _Pre_cap_c_one_
++#define _Pre_cap_c_one_
++#endif
++#ifndef _Pre_cap_for_
++#define _Pre_cap_for_(p)
++#endif
++#ifndef _Pre_cap_m_
++#define _Pre_cap_m_(m,s)
++#endif
++#ifndef _Pre_cap_x_
++#define _Pre_cap_x_(s)
++#endif
++#ifndef _Pre_count_
++#define _Pre_count_(s)
++#endif
++#ifndef _Pre_count_c_
++#define _Pre_count_c_(s)
++#endif
++#ifndef _Pre_count_x_
++#define _Pre_count_x_(s)
++#endif
++#ifndef _Pre_defensive_
++#define _Pre_defensive_
++#endif
++#ifndef _Pre_impl_
++#define _Pre_impl_
++#endif
++#ifndef _Pre_invalid_
++#define _Pre_invalid_
++#endif
++#ifndef _Pre_maybenull_
++#define _Pre_maybenull_
++#endif
++#ifndef _Pre_null_
++#define _Pre_null_
++#endif
++#ifndef _Pre_opt_bytecap_
++#define _Pre_opt_bytecap_(s)
++#endif
++#ifndef _Pre_opt_bytecap_c_
++#define _Pre_opt_bytecap_c_(s)
++#endif
++#ifndef _Pre_opt_bytecap_x_
++#define _Pre_opt_bytecap_x_(s)
++#endif
++#ifndef _Pre_opt_bytecount_
++#define _Pre_opt_bytecount_(s)
++#endif
++#ifndef _Pre_opt_bytecount_c_
++#define _Pre_opt_bytecount_c_(s)
++#endif
++#ifndef _Pre_opt_bytecount_x_
++#define _Pre_opt_bytecount_x_(s)
++#endif
++#ifndef _Pre_opt_cap_
++#define _Pre_opt_cap_(s)
++#endif
++#ifndef _Pre_opt_cap_c_
++#define _Pre_opt_cap_c_(s)
++#endif
++#ifndef _Pre_opt_cap_c_one_
++#define _Pre_opt_cap_c_one_
++#endif
++#ifndef _Pre_opt_cap_for_
++#define _Pre_opt_cap_for_(p)
++#endif
++#ifndef _Pre_opt_cap_m_
++#define _Pre_opt_cap_m_(m,s)
++#endif
++#ifndef _Pre_opt_cap_x_
++#define _Pre_opt_cap_x_(s)
++#endif
++#ifndef _Pre_opt_count_
++#define _Pre_opt_count_(s)
++#endif
++#ifndef _Pre_opt_count_c_
++#define _Pre_opt_count_c_(s)
++#endif
++#ifndef _Pre_opt_count_x_
++#define _Pre_opt_count_x_(s)
++#endif
++#ifndef _Pre_opt_ptrdiff_cap_
++#define _Pre_opt_ptrdiff_cap_(p)
++#endif
++#ifndef _Pre_opt_ptrdiff_count_
++#define _Pre_opt_ptrdiff_count_(p)
++#endif
++#ifndef _Pre_opt_valid_
++#define _Pre_opt_valid_
++#endif
++#ifndef _Pre_opt_valid_bytecap_
++#define _Pre_opt_valid_bytecap_(s)
++#endif
++#ifndef _Pre_opt_valid_bytecap_c_
++#define _Pre_opt_valid_bytecap_c_(s)
++#endif
++#ifndef _Pre_opt_valid_bytecap_x_
++#define _Pre_opt_valid_bytecap_x_(s)
++#endif
++#ifndef _Pre_opt_valid_cap_
++#define _Pre_opt_valid_cap_(s)
++#endif
++#ifndef _Pre_opt_valid_cap_c_
++#define _Pre_opt_valid_cap_c_(s)
++#endif
++#ifndef _Pre_opt_valid_cap_x_
++#define _Pre_opt_valid_cap_x_(s)
++#endif
++#ifndef _Pre_opt_z_
++#define _Pre_opt_z_
++#endif
++#ifndef _Pre_opt_z_bytecap_
++#define _Pre_opt_z_bytecap_(s)
++#endif
++#ifndef _Pre_opt_z_bytecap_c_
++#define _Pre_opt_z_bytecap_c_(s)
++#endif
++#ifndef _Pre_opt_z_bytecap_x_
++#define _Pre_opt_z_bytecap_x_(s)
++#endif
++#ifndef _Pre_opt_z_cap_
++#define _Pre_opt_z_cap_(s)
++#endif
++#ifndef _Pre_opt_z_cap_c_
++#define _Pre_opt_z_cap_c_(s)
++#endif
++#ifndef _Pre_opt_z_cap_x_
++#define _Pre_opt_z_cap_x_(s)
++#endif
++#ifndef _Pre_ptrdiff_cap_
++#define _Pre_ptrdiff_cap_(p)
++#endif
++#ifndef _Pre_ptrdiff_count_
++#define _Pre_ptrdiff_count_(p)
++#endif
++#ifndef _Pre_readonly_
++#define _Pre_readonly_
++#endif
++#ifndef _Pre_satisfies_impl_
++#define _Pre_satisfies_impl_(c)
++#endif
++#ifndef _Pre_unknown_
++#define _Pre_unknown_
++#endif
++#ifndef _Pre_valid_
++#define _Pre_valid_
++#endif
++#ifndef _Pre_valid_bytecap_
++#define _Pre_valid_bytecap_(s)
++#endif
++#ifndef _Pre_valid_bytecap_c_
++#define _Pre_valid_bytecap_c_(s)
++#endif
++#ifndef _Pre_valid_bytecap_x_
++#define _Pre_valid_bytecap_x_(s)
++#endif
++#ifndef _Pre_valid_cap_
++#define _Pre_valid_cap_(s)
++#endif
++#ifndef _Pre_valid_cap_c_
++#define _Pre_valid_cap_c_(s)
++#endif
++#ifndef _Pre_valid_cap_x_
++#define _Pre_valid_cap_x_(s)
++#endif
++#ifndef _Pre_valid_impl_
++#define _Pre_valid_impl_
++#endif
++#ifndef _Pre_writeonly_
++#define _Pre_writeonly_
++#endif
++#ifndef _Pre_z_
++#define _Pre_z_
++#endif
++#ifndef _Pre_z_bytecap_
++#define _Pre_z_bytecap_(s)
++#endif
++#ifndef _Pre_z_bytecap_c_
++#define _Pre_z_bytecap_c_(s)
++#endif
++#ifndef _Pre_z_bytecap_x_
++#define _Pre_z_bytecap_x_(s)
++#endif
++#ifndef _Pre_z_cap_
++#define _Pre_z_cap_(s)
++#endif
++#ifndef _Pre_z_cap_c_
++#define _Pre_z_cap_c_(s)
++#endif
++#ifndef _Pre_z_cap_x_
++#define _Pre_z_cap_x_(s)
++#endif
++#ifndef _Prepost_z_
++#define _Prepost_z_
++#endif
++#ifndef _Ret_bytecap_
++#define _Ret_bytecap_(s)
++#endif
++#ifndef _Ret_bytecap_c_
++#define _Ret_bytecap_c_(s)
++#endif
++#ifndef _Ret_bytecap_x_
++#define _Ret_bytecap_x_(s)
++#endif
++#ifndef _Ret_bytecount_
++#define _Ret_bytecount_(s)
++#endif
++#ifndef _Ret_bytecount_c_
++#define _Ret_bytecount_c_(s)
++#endif
++#ifndef _Ret_bytecount_x_
++#define _Ret_bytecount_x_(s)
++#endif
++#ifndef _Ret_cap_
++#define _Ret_cap_(s)
++#endif
++#ifndef _Ret_cap_c_
++#define _Ret_cap_c_(s)
++#endif
++#ifndef _Ret_cap_x_
++#define _Ret_cap_x_(s)
++#endif
++#ifndef _Ret_count_
++#define _Ret_count_(s)
++#endif
++#ifndef _Ret_count_c_
++#define _Ret_count_c_(s)
++#endif
++#ifndef _Ret_count_x_
++#define _Ret_count_x_(s)
++#endif
++#ifndef _Ret_opt_bytecap_
++#define _Ret_opt_bytecap_(s)
++#endif
++#ifndef _Ret_opt_bytecap_c_
++#define _Ret_opt_bytecap_c_(s)
++#endif
++#ifndef _Ret_opt_bytecap_x_
++#define _Ret_opt_bytecap_x_(s)
++#endif
++#ifndef _Ret_opt_bytecount_
++#define _Ret_opt_bytecount_(s)
++#endif
++#ifndef _Ret_opt_bytecount_c_
++#define _Ret_opt_bytecount_c_(s)
++#endif
++#ifndef _Ret_opt_bytecount_x_
++#define _Ret_opt_bytecount_x_(s)
++#endif
++#ifndef _Ret_opt_cap_
++#define _Ret_opt_cap_(s)
++#endif
++#ifndef _Ret_opt_cap_c_
++#define _Ret_opt_cap_c_(s)
++#endif
++#ifndef _Ret_opt_cap_x_
++#define _Ret_opt_cap_x_(s)
++#endif
++#ifndef _Ret_opt_count_
++#define _Ret_opt_count_(s)
++#endif
++#ifndef _Ret_opt_count_c_
++#define _Ret_opt_count_c_(s)
++#endif
++#ifndef _Ret_opt_count_x_
++#define _Ret_opt_count_x_(s)
++#endif
++#ifndef _Ret_opt_valid_
++#define _Ret_opt_valid_
++#endif
++#ifndef _Ret_opt_z_
++#define _Ret_opt_z_
++#endif
++#ifndef _Ret_opt_z_bytecap_
++#define _Ret_opt_z_bytecap_(s)
++#endif
++#ifndef _Ret_opt_z_bytecount_
++#define _Ret_opt_z_bytecount_(s)
++#endif
++#ifndef _Ret_opt_z_cap_
++#define _Ret_opt_z_cap_(s)
++#endif
++#ifndef _Ret_opt_z_count_
++#define _Ret_opt_z_count_(s)
++#endif
++#ifndef _Ret_z_bytecap_
++#define _Ret_z_bytecap_(s)
++#endif
++#ifndef _Ret_z_bytecount_
++#define _Ret_z_bytecount_(s)
++#endif
++#ifndef _Ret_z_cap_
++#define _Ret_z_cap_(s)
++#endif
++#ifndef _Ret_z_count_
++#define _Ret_z_count_(s)
++#endif
+ 
+ #ifdef WIN32_LEAN_AND_MEAN
+ // This defines NTSTATUS and other types that are needed for kernel headers
