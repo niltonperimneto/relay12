@@ -1,0 +1,78 @@
+From: relay12 contributors
+Subject: [PATCH] d3d11on12: satisfy Clang on EntryPointHr and the execute-command noexcept
+
+Two unrelated -Werror failures in the same file.
+
+OPEN_TRYCATCH declares EntryPointHr and CLOSE_TRYCATCH_AND_STORE_HRESULT
+assigns it, but several entry points read it only through assert(), which
+compiles out under NDEBUG. Clang then reports it as set-but-unused at four
+sites in device.cpp. Marking the declaration [[maybe_unused]] in the macro
+fixes every current and future site at once and changes no behavior: the
+variable is still assigned and still read wherever a real read exists.
+
+Pre/PostExecuteCommandQueueCommand are declared through STDMETHOD and
+defined through STDMETHODIMP_, and mingw-w64 is asymmetric between the
+two: combaseapi.h line 53 expands STDMETHOD with COM_DECLSPEC_NOTHROW,
+while basetyps.h line 26 expands STDMETHODIMP_ without it. The
+declaration therefore carries __attribute__((nothrow)) and the definition
+does not, which Clang rejects as a mismatched exception specification.
+The MSVC SDK puts COM_DECLSPEC_NOTHROW on both, which is why this builds
+there.
+
+Every other entry point in device.cpp already carries an explicit
+noexcept for exactly this reason; these two were missed. noexcept is also
+accurate rather than merely silencing: the bodies are wrapped in
+OPEN_TRYCATCH/CLOSE_TRYCATCH, which catches and converts to HRESULT, so
+nothing propagates out. The declarations get the same explicit noexcept
+so the contract is stated rather than inherited from a macro expansion.
+---
+diff --git a/include/device.hpp b/include/device.hpp
+index a2d2894..0875598 100644
+--- a/include/device.hpp
++++ b/include/device.hpp
+@@ -295,8 +295,8 @@ namespace D3D11On12
+         STDMETHOD_(void, SetMaximumFrameLatency)(UINT MaxFrameLatency) noexcept override;
+         STDMETHOD_(bool, IsMaximumFrameLatencyReached)() noexcept override;
+         STDMETHOD(CloseAndSubmitGraphicsCommandListForPresent)(BOOL commandsAdded, _In_reads_(numSrcSurfaces) const PresentSurface* pSrcSurfaces, UINT numSrcSurfaces, _In_opt_ ID3D11On12DDIResource* pDest, _In_ D3DKMT_PRESENT* pKMTPresent) override;
+-        STDMETHOD(PreExecuteCommandQueueCommand)(CommandListType commandListType) override;
+-        STDMETHOD(PostExecuteCommandQueueCommand)(CommandListType commandListType) override;
++        STDMETHOD(PreExecuteCommandQueueCommand)(CommandListType commandListType) noexcept override;
++        STDMETHOD(PostExecuteCommandQueueCommand)(CommandListType commandListType) noexcept override;
+ 
+         // Resource wrapping helpers
+         STDMETHOD_(UINT, GetResourcePrivateDataSize)() noexcept final { return D3D12TranslationLayer::SharedResourceHelpers::cPrivateResourceDriverDataSize; }
+diff --git a/include/layer.hpp b/include/layer.hpp
+index 8686422..08da650 100644
+--- a/include/layer.hpp
++++ b/include/layer.hpp
+@@ -12,7 +12,7 @@ namespace D3D11On12
+ 
+ 
+ #define OPEN_TRYCATCH \
+-    HRESULT EntryPointHr = S_OK; \
++    [[maybe_unused]] HRESULT EntryPointHr = S_OK; \
+     try \
+     {
+ 
+diff --git a/src/device.cpp b/src/device.cpp
+index a40f007..fb757e7 100644
+--- a/src/device.cpp
++++ b/src/device.cpp
+@@ -1343,7 +1343,7 @@ namespace D3D11On12
+         assert(SUCCEEDED(EntryPointHr));
+     }
+ 
+-    STDMETHODIMP_(HRESULT) Device::PreExecuteCommandQueueCommand(CommandListType commandListType)
++    STDMETHODIMP_(HRESULT) Device::PreExecuteCommandQueueCommand(CommandListType commandListType) noexcept
+     {
+         D3D11on12_DDI_ENTRYPOINT_START();
+         auto clt = static_cast<D3D12TranslationLayer::COMMAND_LIST_TYPE>(commandListType);
+@@ -1351,7 +1351,7 @@ namespace D3D11On12
+         D3D11on12_DDI_ENTRYPOINT_END_AND_RETURN_HR(hr);
+     }
+ 
+-    STDMETHODIMP_(HRESULT) Device::PostExecuteCommandQueueCommand(CommandListType commandListType)
++    STDMETHODIMP_(HRESULT) Device::PostExecuteCommandQueueCommand(CommandListType commandListType) noexcept
+     {
+         D3D11on12_DDI_ENTRYPOINT_START();
+         auto clt = static_cast<D3D12TranslationLayer::COMMAND_LIST_TYPE>(commandListType);
