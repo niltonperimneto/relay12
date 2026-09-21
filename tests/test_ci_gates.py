@@ -795,6 +795,34 @@ class PeAudit(unittest.TestCase):
                                   "Ordinal Base                    7")
         self.assertEqual(min(check_pe_audit.parse_exports(rebased)), 7)
 
+    def test_llvm_objdump_exports_are_read(self):
+        """llvm-mingw's objdump is llvm-objdump, which prints a different
+        export table. The toolchain migration to llvm-mingw silently turned
+        this gate into a no-op once already; both formats must parse to the
+        same table."""
+        llvm_objdump = (
+            "Export Table:\n"
+            " DLL name: d3d11shim.dll\n"
+            " Ordinal base: 1\n"
+            " Ordinal      RVA  Name\n"
+            "       1   0x1250  D3D11CreateDevice\n"
+            "       2   0x1260  D3D11CreateDeviceAndSwapChain\n"
+            "       3   0x1270  D3D11On12CreateDevice\n"
+            "       4   0x1280  WineD3D11ShimGetStatus\n"
+            "\n"
+            "The Import Tables:\n"
+            "    DLL Name: KERNEL32.dll\n"
+        )
+        self.assertEqual(check_pe_audit.parse_exports(llvm_objdump),
+                         check_pe_audit.parse_exports(OBJDUMP))
+
+    def test_unreadable_export_table_is_an_error_not_an_empty_table(self):
+        """Returning {} for output it cannot read is what made the llvm-mingw
+        migration silent: the caller compared an empty table and exited
+        non-zero with nothing to read."""
+        with self.assertRaises(ValueError):
+            check_pe_audit.parse_exports("a third objdump's output\n")
+
     def test_imports_are_lowercased(self):
         self.assertEqual(check_pe_audit.parse_imports(OBJDUMP),
                          {"kernel32.dll", "msvcrt.dll"})
