@@ -65,24 +65,51 @@ CXX_RUNTIME = re.compile(r"libstdc\+\+|libgcc_s", re.IGNORECASE)
 def parse_exports(text):
     """Ordinal to name, from `objdump -p` output.
 
-    The name-pointer table is indexed from zero and the ordinal base is
-    printed separately, so an export's ordinal is the sum.  Reading the
-    indices as ordinals would pass a module whose base was not 1.
+    Two output formats are accepted, because the toolchain changed under
+    this gate once already and it failed silently rather than loudly.  GNU
+    binutils objdump prints a name-pointer table indexed from zero with the
+    ordinal base stated separately, so an export's ordinal is the sum;
+    reading the indices as ordinals would pass a module whose base was not
+    1.  llvm-objdump, which is what `x86_64-w64-mingw32-objdump` resolves to
+    under llvm-mingw, prints each entry's ordinal directly instead.
+
+    Neither format matching is an error, never an empty result.  Returning
+    {} for unrecognised output is what let the llvm-mingw migration turn
+    this check into a no-op: the caller compared an empty table and got a
+    silent exit code with nothing to read.
     """
-    base_match = re.search(r"Ordinal Base\s+(\d+)", text)
-    if not base_match:
-        raise ValueError("no export ordinal base in the objdump output")
-    base = int(base_match.group(1))
+    if "[Ordinal/Name Pointer] Table" in text:
+        base_match = re.search(r"Ordinal Base\s+(\d+)", text)
+        if not base_match:
+            raise ValueError("no export ordinal base in the objdump output")
+        base = int(base_match.group(1))
 
-    _, _, after = text.partition("[Ordinal/Name Pointer] Table")
-    if not after:
-        raise ValueError("no export name-pointer table in the objdump output")
-    table = after.split("\n\n", 1)[0]
+        _, _, after = text.partition("[Ordinal/Name Pointer] Table")
+        table = after.split("\n\n", 1)[0]
+        return {
+            base + int(index): name
+            for index, name in re.findall(r"\[\s*(\d+)\]\s+(\S+)", table)
+        }
 
-    return {
-        base + int(index): name
-        for index, name in re.findall(r"\[\s*(\d+)\]\s+(\S+)", table)
-    }
+    if "Export Table:" in text:
+        # llvm-objdump prints " Ordinal      RVA  Name" and then one row per
+        # export.  Forwarders have no RVA column, so the name is optional in
+        # the row pattern and rows without one are skipped.
+        _, _, after = text.partition("Export Table:")
+        table = after.split("\n\n", 1)[0]
+        exports = {}
+        for line in table.splitlines():
+            row = re.match(r"\s*(\d+)\s+(?:0x[0-9a-fA-F]+)?\s*(\S+)?\s*$",
+                           line)
+            if row and row.group(2):
+                exports[int(row.group(1))] = row.group(2)
+        return exports
+
+    raise ValueError(
+        "no export table in the objdump output; neither the GNU binutils "
+        "'[Ordinal/Name Pointer] Table' nor the llvm-objdump 'Export Table:' "
+        "heading was present, so the objdump in use prints a third format "
+        "this gate cannot read")
 
 
 def parse_imports(text):
@@ -95,13 +122,28 @@ def find_cxx_runtime(text):
     return [line for line in text.splitlines() if CXX_RUNTIME.search(line)]
 
 
-def audit(path, text, runtime_only):
+def audit(path, text, runtime_only, require_export=None):
     module = os.path.basename(path)
     errors = []
 
     for line in find_cxx_runtime(text):
         errors.append(f"{module}: unexpected C++ runtime dependency: "
                       f"{line.strip()}")
+
+    if require_export:
+        # For modules with no recorded ordinal table of their own -- the
+        # linked driver, whose export list is upstream's -- assert only that
+        # the one entry point the host resolves is present, exactly once.
+        try:
+            exports = parse_exports(text)
+        except ValueError as error:
+            return errors + [f"{module}: {error}"]
+        found = sorted(o for o, n in exports.items() if n == require_export)
+        if len(found) != 1:
+            errors.append(
+                f"{module}: exports {require_export} {len(found)} times, "
+                f"expected exactly once (exports: {sorted(exports.values())})")
+        return errors
 
     if runtime_only:
         return errors
@@ -136,6 +178,9 @@ def main():
                         help=f"objdump to run (default: {DEFAULT_OBJDUMP})")
     parser.add_argument("--runtime-only", action="store_true",
                         help="check only for a C++ runtime dependency")
+    parser.add_argument("--require-export", metavar="NAME",
+                        help="assert NAME is exported exactly once, instead "
+                             "of comparing a recorded ordinal table")
     args = parser.parse_args()
 
     errors = []
@@ -146,7 +191,8 @@ def main():
         except (OSError, subprocess.CalledProcessError) as error:
             errors.append(f"{path}: could not read the PE headers: {error}")
             continue
-        errors.extend(audit(path, text, args.runtime_only))
+        errors.extend(audit(path, text, args.runtime_only,
+                            args.require_export))
 
     if errors:
         for error in errors:
