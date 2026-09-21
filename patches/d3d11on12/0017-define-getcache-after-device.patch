@@ -1,0 +1,57 @@
+From: relay12 contributors
+Subject: [PATCH] d3d11on12: define GetCache out of line, after Device
+
+PipelineStateCacheKeyComponent<Key>::GetCache accesses m_parentDevice,
+whose type Device is only forward-declared at PipelineStateCache.hpp's
+point in the pch.hpp include order; device.hpp comes twelve includes
+later. The body calls a member template on that incomplete type.
+
+MSVC accepts this because it defers the dependent member access until
+instantiation, by which point Device is complete. Clang binds the
+non-dependent parts of a template body when the template is parsed, so
+it reports "member access into incomplete type 'Device'" -- and then,
+because it cannot see the member, rejects the disambiguating 'template'
+keyword too. Both errors have one cause.
+
+Moving the definition to the end of device.hpp, after Device is defined,
+is the minimal fix: the body is unchanged and the declaration stays where
+it was, so nothing about the class's interface or instantiation behavior
+moves. The 'template' disambiguator is retained -- it is still a
+dependent member template call, and MSVC accepts it in this position.
+---
+diff --git a/include/PipelineStateCache.hpp b/include/PipelineStateCache.hpp
+index 004d188..9c1ce4a 100644
+--- a/include/PipelineStateCache.hpp
++++ b/include/PipelineStateCache.hpp
+@@ -127,10 +127,7 @@ namespace D3D11On12
+     {
+         using CacheEntry = PipelineStateCacheEntry<Key>;
+         std::vector<std::weak_ptr<CacheEntry>> m_pPSOComponents;
+-        PipelineStateCacheLocked<Key> GetCache()
+-        {
+-            return m_parentDevice.template GetPSOCache<Key>();
+-        }
++        PipelineStateCacheLocked<Key> GetCache();
+ 
+         // Immovable
+         PipelineStateCacheKeyComponent(Device& device)
+diff --git a/include/device.hpp b/include/device.hpp
+index a4eeb2c..a2d2894 100644
+--- a/include/device.hpp
++++ b/include/device.hpp
+@@ -628,4 +628,15 @@ namespace D3D11On12
+         UINT m_ExecutionCount = 0;
+         bool m_bMapDiscardCalled;
+     };
++
++    // Defined out of line: at PipelineStateCache.hpp's point in pch.hpp
++    // Device is only forward-declared, and this body needs it complete.
++    // MSVC accepts the in-class body because it defers the dependent
++    // member access to instantiation; Clang binds it when the template
++    // is parsed, which only works after Device is defined above.
++    template <typename Key>
++    PipelineStateCacheLocked<Key> PipelineStateCacheKeyComponent<Key>::GetCache()
++    {
++        return m_parentDevice.template GetPSOCache<Key>();
++    }
+ };
