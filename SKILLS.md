@@ -2,7 +2,7 @@
 
 > **Target Audience:** Autonomous Coding Agents, Subagents, and Systems Engineers  
 > **Subsystem:** D3D11On12 (Translation Layer & DDI Host)  
-> **Prerequisites:** Python 3.10+, MinGW-w64 GCC (`x86_64-w64-mingw32-clang` / `g++`), Wine execution environment  
+> **Prerequisites:** Python 3.10+, a MinGW-w64 cross toolchain (CI pins llvm-mingw 20240619 `ucrt`, i.e. `x86_64-w64-mingw32-clang++`), Wine execution environment  
 
 ---
 
@@ -91,8 +91,16 @@ python3 scripts/check_pe_audit.py d3d11shim.dll d3d11on12core.dll
 ```
 *Validation Rules:*
 - `d3d11shim.dll` exports ordinals 1 to 4 (`D3D11CreateDevice`, `D3D11CreateDeviceAndSwapChain`, `D3D11On12CreateDevice`, `WineD3D11ShimGetStatus`).
-- `d3d11on12core.dll` exports ordinals 1 to 3 (`WineD3D11On12GetABIVersion`, `WineD3D11On12CreateDeviceV1`, `WineD3D11On12GetInterface`).
-- Imports are limited to `kernel32.dll` and `msvcrt.dll`. No dependency on `libstdc++` or `libgcc_s`.
+- `d3d11on12core.dll` exports ordinals 1 to 18 — the ABI, device, interface and
+  adapter entry points at 1 to 4, then the buffer, input-layout, shader and
+  Texture2D lifecycles. `AGENTS.md` §4.2 has the table; the gate's copy is
+  transcribed from `relay12-d3d11/d3d11on12core.def` and a test pins the two
+  together, so a new export fails here until it is added deliberately.
+- The whole ordinal table is compared, not just each name's presence, so a
+  rename, a renumber or an extra export is rejected.
+- Imports are limited to `kernel32.dll` plus one C runtime — `msvcrt.dll`, or
+  the seven `api-ms-win-crt-*` stubs under the UCRT-targeted toolchain PR
+  validation pins. No dependency on `libstdc++` or `libgcc_s`.
 
 #### 2. Audit COM Interface Acquisitions
 ```bash
