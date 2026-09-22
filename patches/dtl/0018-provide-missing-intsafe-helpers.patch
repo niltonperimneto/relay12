@@ -1,0 +1,29 @@
+From: relay12 contributors
+Subject: [PATCH] dtl: provide the missing unsigned SIZET-safe helpers
+
+llvm-mingw's <intsafe.h> declares SSIZETAdd/SSIZETMult (the signed
+variants) but not SIZETAdd/SIZETMult, which FormatDescImpl.cpp uses for
+overflow-checked SIZE_T arithmetic exactly as Microsoft's own intsafe.h
+intends. Microsoft's header declares both families; this MinGW header
+ships only one, so these calls are undeclared identifiers under this
+toolchain.
+
+compat/relay_intsafe_compat.hpp supplies the two missing functions,
+included after <intsafe.h> so it can rely on that header's own
+INTSAFE_E_ARITHMETIC_OVERFLOW without redefining it. Not guarded against
+a future toolchain adding these: a redefinition error at that point is a
+clearer signal than a speculative guard, and is exactly when this patch
+should be deleted.
+---
+diff --git a/src/FormatDescImpl.cpp b/src/FormatDescImpl.cpp
+index 69565e3..eb096ca 100644
+--- a/src/FormatDescImpl.cpp
++++ b/src/FormatDescImpl.cpp
+@@ -2,6 +2,7 @@
+ // Licensed under the MIT License.
+ #include <pch.h>
+ #include <intsafe.h>
++#include "relay_intsafe_compat.hpp"
+ 
+ #define R D3D11FCN_R
+ #define G D3D11FCN_G

@@ -77,10 +77,10 @@ diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 +    target_compile_options(d3d11on12 PRIVATE
 +        -Wno-defaulted-function-deleted
 +        -Wno-nested-anon-types -Wno-microsoft-anon-tag
-+        -Wno-gnu-anonymous-struct -Wno-c2y-extensions
++        -Wno-gnu-anonymous-struct
 +        -Wno-extra-semi -Wno-vla-cxx-extension
 +        -Wno-single-bit-bitfield-constant-conversion
-+        -Wno-assume -Wno-nontrivial-memcall
++        -Wno-assume -Wno-nontrivial-memaccess
 +        -Wno-unused-const-variable
 +        -Wno-deprecated-copy-with-user-provided-copy)
 +endif()
