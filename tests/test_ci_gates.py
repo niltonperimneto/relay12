@@ -854,6 +854,39 @@ class PeAudit(unittest.TestCase):
         errors = check_pe_audit.audit("d3d11shim.dll", extra, False)
         self.assertTrue(any("imports" in error for error in errors), errors)
 
+    def test_either_c_runtime_is_accepted(self):
+        """llvm-mingw publishes an msvcrt and a ucrt build of every release,
+        and the same snprintf/fputs calls link against msvcrt.dll under one
+        and a set of api-ms-win-crt-* stubs under the other.  The pinned
+        toolchain is the ucrt build, so that shape has to pass; the rule this
+        gate enforces is that nothing beyond kernel32 and a C runtime appears
+        either way."""
+        ucrt = "\n".join(
+            f"\tDLL Name: {name}\n\tvma:  Hint/Ord"
+            for name in sorted(check_pe_audit.CRT_IMPORTS[1]))
+        text = OBJDUMP.replace("\tDLL Name: msvcrt.dll\n\tvma:  Hint/Ord",
+                               ucrt)
+        self.assertEqual(
+            check_pe_audit.parse_imports(text),
+            {"kernel32.dll"} | check_pe_audit.CRT_IMPORTS[1])
+        self.assertEqual(check_pe_audit.audit("d3d11shim.dll", text, False),
+                         [])
+
+    def test_a_graphics_import_is_rejected_under_either_runtime(self):
+        """The router resolves every driver and diagnostic entry point at run
+        time.  A real import of one means that stopped happening, and it must
+        not be excused by whichever C runtime is in use."""
+        for index, crt in enumerate(check_pe_audit.CRT_IMPORTS):
+            with self.subTest(crt=sorted(crt)):
+                imports = "\n".join(
+                    f"\tDLL Name: {name}\n\tvma:  Hint/Ord"
+                    for name in sorted(crt | {"d3d12.dll"}))
+                text = OBJDUMP.replace(
+                    "\tDLL Name: msvcrt.dll\n\tvma:  Hint/Ord", imports)
+                errors = check_pe_audit.audit("d3d11shim.dll", text, False)
+                self.assertTrue(any("imports" in error for error in errors),
+                                (index, errors))
+
     def test_a_cxx_runtime_dependency_is_rejected(self):
         for library in ("libstdc++-6.dll", "libgcc_s_seh-1.dll"):
             with self.subTest(library=library):
