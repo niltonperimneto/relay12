@@ -20,7 +20,14 @@ Layout and per-slot callability are necessary and not sufficient. Every driver h
 * **`tests/d3d11ddi_triangle.c`:** drives the promoted device function table through the MVP frame — create, bind, clear, draw, copy to staging, map, verify, unmap, tear down — with recording stubs, then asserts the recorded call sequence against a written-out expected order and checks that each binding received the handle the matching creation produced. The clear stub fills a backing image, draw replaces its centre texel, and readback requires the centre to carry the drawn red and a corner the cleared blue, matching the application-level test. Objects get distinct driver private blocks, allocated by the test the way the runtime allocates them, which is what makes the identity checks discriminating rather than vacuous. Compiled in C and C++ and run under Wine, like the layout harness.
 * **What it does not claim:** nothing renders. There is no host behind the table. The application-level counterpart that would prove pixels is `tests/e2e_d3d11_triangle.cpp`, built but not run by the manual `integration-test.yml` job; when a host exists the two must agree.
 
-## 1b. Portability Debt as a Tested Input
+## 1b. Fail-Closed Driver Initialization Tests
+Real driver interactions start with the adapter and device, requiring strict argument handling before the boundary to the translation layer is even entered.
+* **`tests/d3d11on12openadapter.c` & `tests/d3d11on12coretest.c`:** These suites validate the DDI adapter entry point (`WineD3D11On12OpenAdapterV1`), explicitly checking that malformed calls (e.g., null out-structures, size mismatching version handshakes, or invalid interface combinations) are rejected and fail-closed *before* reaching the actual D3D11On12 driver module. This proves defensive design.
+* **`tests/d3d11on12openadapter.c`, Texture2D section:** the owned Texture2D lifecycle. The mock driver is resource-kind aware and validates the *whole* mip array across every array slice rather than its first entry, because the core derives that array itself: a stub checking one level would pass on a core that got every later mip wrong. The suite covers a zero-`MipLevels` request resolving to the full chain, format and bind-flag forwarding, initial subresource data, initial data carrying a null pointer (refused before the DDI is touched), double destruction, five rejected-argument cases, and a texture left alive to prove device teardown destroys it and leaves the caller's handle inert.
+* **Six-stage shader lifecycle, not currently built:** `tests/d3d11on12shaderlifecycle.c` and the mock's `ID3D11On12DDIDevice` vtable live on the `ddi-device-lifecycle` branch. They pin *which* driver entry creates a shader -- the pinned driver leaves all six `pfnCreate*Shader` table slots null on the immediate device and publishes creation only through the sub-object -- and they assert per-stage private-block sizing, bytecode pass-by-address, cross-stage bind refusal, and destruction-through-the-driver at teardown. They return when the six-stage implementation is ported onto the ordinal-export mechanism; see `docs/DDI-REMAINING-ROADMAP.md`.
+* **What these do not claim:** no shader compiles. The mock records the container it was shown and does not parse DXBC, so this proves ownership, routing and lifetime — not that any real bytecode would be accepted.
+
+## 1c. Portability Debt as a Tested Input
 
 `scripts/inventory_dtl_portability.py` inventories the pinned
 D3D12TranslationLayer tree by category, occurrence count, and file. Its golden
@@ -52,3 +59,41 @@ Complex driver implementations might use an unprotected increment but forget the
 ---
 **Summary for Contributors (Human & Automated):**
 When authoring code for this repository, your output will be subjected to deliberate heap corruption, stack-pointer monitoring, multi-threaded hammering, and AST layout extraction. Code defensively, zero-initialize all structs, explicitly type all calling conventions, and check all `HRESULT` return paths.
+
+## 6. Integration-First Test Strategy
+
+The portable suite is a structural and diagnostic gate, not proof that a game
+renders through D3DMetal. Development therefore uses a deliberately uneven
+split: roughly 20% focused hardening and 80% implementation toward the first
+real frame.
+
+Before extending a newly introduced lifetime boundary, add focused coverage
+for partial creation, `pfnSetErrorCb`, double destruction, adapter teardown,
+stale and cross-device handles, and concurrent create/bind/destroy activity.
+The buffer, input-layout, and vertex/pixel shader boundaries now carry that
+coverage in the native mock-driver suite, including DDI error injection and
+device-teardown invalidation.
+Do not delay the rendering path to build exhaustive mocks: mocks cannot prove
+barrier, residency, command submission, shader, or presentation correctness.
+
+The runtime checkpoints, in order, are:
+
+1. A deterministic triangle on a macOS self-hosted runner using the real
+   D3DMetal device and queue, with pixel readback or a screenshot hash.
+2. A timed PEAK smoke run whose log must select `Direct3D 12.0`, must not fall
+   back to D3D11, and must show wrapped-resource activity and a presented
+   frame without device removal, crash, or initialization timeout.
+3. A soak run that records memory growth, synchronization stalls, and device
+   removal over repeated frames.
+
+The EWDK linked-driver build is also a required release gate. If runner or
+toolchain availability causes that job to skip, the portable lane may guide
+continued development but does not qualify a canary runtime for game testing.
+
+The input-layout boundary now exercises these rules in
+`d3d11on12openadapter.c`: null unbinding, stale and cross-device rejection,
+`pfnSetErrorCb` allocation failure cleanup, adapter teardown invalidation, and
+an eight-thread bind-versus-destroy stress pass. Destruction removes a layout
+from the registry while holding the exclusive lock, which first drains every
+in-flight shared-lock binding and prevents a new binding from observing the
+driver object before `DestroyElementLayout` runs.

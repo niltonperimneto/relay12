@@ -1397,6 +1397,8 @@ WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CREATEDEFERREDCONTEXT, WinePad0, 4);
  * Retrieved: 2026-09-08
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d11ddiarg_createresource
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_openresource
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddi_mipinfo
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10_ddiarg_subresource_up
  *
  * The resource structures contain pointers to specification-defined helper
  * structures.  Those helpers are not yet needed by the promoted callbacks, so
@@ -1406,15 +1408,52 @@ WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDIARG_CREATEDEFERREDCONTEXT, WinePad0, 4);
  * members.  The D3D11 form appends ByteStride, DecoderBufferType, and
  * TextureLayout to the D3D10 form.
  */
-typedef struct D3D10DDI_MIPINFO D3D10DDI_MIPINFO;
-typedef struct D3D10_DDIARG_SUBRESOURCE_UP D3D10_DDIARG_SUBRESOURCE_UP;
+typedef struct D3D10DDI_MIPINFO
+{
+    UINT TexelWidth;
+    UINT TexelHeight;
+    UINT TexelDepth;
+    UINT PhysicalWidth;
+    UINT PhysicalHeight;
+    UINT PhysicalDepth;
+} D3D10DDI_MIPINFO;
+
+typedef struct D3D10_DDIARG_SUBRESOURCE_UP
+{
+    const void *pSysMem;
+    UINT SysMemPitch;
+    UINT SysMemSlicePitch;
+} D3D10_DDIARG_SUBRESOURCE_UP;
 typedef struct DXGI_DDI_PRIMARY_DESC DXGI_DDI_PRIMARY_DESC;
 typedef struct D3DDDI_OPENALLOCATIONINFO D3DDDI_OPENALLOCATIONINFO;
 typedef struct D3DDDI_OPENALLOCATIONINFO2 D3DDDI_OPENALLOCATIONINFO2;
 typedef UINT D3D10DDIRESOURCE_TYPE;
+#define D3D10DDIRESOURCE_BUFFER 0u
+#define D3D10DDIRESOURCE_TEXTURE1D 1u
+#define D3D10DDIRESOURCE_TEXTURE2D 2u
+#define D3D10DDIRESOURCE_TEXTURE3D 3u
+#define D3D10DDIRESOURCE_TEXTURECUBE 4u
+#define D3D11DDIRESOURCE_BUFFEREX 5u
 typedef UINT D3D11_1DDI_VIDEO_DECODER_BUFFER_TYPE;
 typedef UINT D3DWDDM2_0DDI_TEXTURE_LAYOUT;
 typedef void *D3D10DDI_HKMRESOURCE;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_MIPINFO);
+WINE_DDI_ASSERT_SIZE(D3D10DDI_MIPINFO, 24);
+WINE_DDI_ASSERT_ALIGN(D3D10DDI_MIPINFO, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_MIPINFO, TexelWidth, 0);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_MIPINFO, TexelHeight, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_MIPINFO, TexelDepth, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_MIPINFO, PhysicalWidth, 12);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_MIPINFO, PhysicalHeight, 16);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_MIPINFO, PhysicalDepth, 20);
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10_DDIARG_SUBRESOURCE_UP);
+WINE_DDI_ASSERT_SIZE(D3D10_DDIARG_SUBRESOURCE_UP, 16);
+WINE_DDI_ASSERT_ALIGN(D3D10_DDIARG_SUBRESOURCE_UP, 8);
+WINE_DDI_ASSERT_FIELD(D3D10_DDIARG_SUBRESOURCE_UP, pSysMem, 0);
+WINE_DDI_ASSERT_FIELD(D3D10_DDIARG_SUBRESOURCE_UP, SysMemPitch, 8);
+WINE_DDI_ASSERT_FIELD(D3D10_DDIARG_SUBRESOURCE_UP, SysMemSlicePitch, 12);
 
 typedef struct D3D10DDIARG_CREATERESOURCE
 {
@@ -1897,6 +1936,7 @@ typedef struct D3D11_1DDIARG_STAGE_IO_SIGNATURES D3D11_1DDIARG_STAGE_IO_SIGNATUR
  *
  * Companion callback specifications:
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_createelementlayout
+ *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_ia_setindexbuffer
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11ddi_setrendertargets
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_setviewports
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ne-d3d10umddi-d3d10_ddi_primitive_topology
@@ -1958,12 +1998,85 @@ WINE_DDI_ASSERT_ALIGN(D3D11DDI_HUNORDEREDACCESSVIEW, 8);
 WINE_DDI_ASSERT_FIELD(D3D11DDI_HUNORDEREDACCESSVIEW, pDrvPrivate, 0);
 WINE_DDI_ASSERT_FIELD_SIZE(D3D11DDI_HUNORDEREDACCESSVIEW, pDrvPrivate, 8);
 
-/* Both are named only behind a const pointer by the slots promoted here, so
- * per the resource group's precedent they stay incomplete.  A pointer to an
- * incomplete type is ABI-complete and it stops a caller reading fields this
- * header has not derived. */
-typedef struct D3D10DDIARG_CREATEELEMENTLAYOUT D3D10DDIARG_CREATEELEMENTLAYOUT;
-typedef struct D3D10_DDI_VIEWPORT D3D10_DDI_VIEWPORT;
+/* The input-layout host now constructs these arguments, so both structures
+ * are complete rather than pointer-only declarations. */
+typedef INT D3D10_DDI_INPUT_CLASSIFICATION;
+
+typedef struct D3D10DDIARG_INPUT_ELEMENT_DESC
+{
+    UINT InputSlot;
+    UINT AlignedByteOffset;
+    DXGI_FORMAT Format;
+    D3D10_DDI_INPUT_CLASSIFICATION InputSlotClass;
+    UINT InstanceDataStepRate;
+    UINT InputRegister;
+} D3D10DDIARG_INPUT_ELEMENT_DESC;
+
+typedef struct D3D10DDIARG_CREATEELEMENTLAYOUT
+{
+    const D3D10DDIARG_INPUT_ELEMENT_DESC *pVertexElements;
+    UINT NumElements;
+    UINT WinePad0;
+} D3D10DDIARG_CREATEELEMENTLAYOUT;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDIARG_INPUT_ELEMENT_DESC);
+WINE_DDI_ASSERT_SIZE(D3D10DDIARG_INPUT_ELEMENT_DESC, 24);
+WINE_DDI_ASSERT_ALIGN(D3D10DDIARG_INPUT_ELEMENT_DESC, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_INPUT_ELEMENT_DESC, InputSlot, 0);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_INPUT_ELEMENT_DESC, AlignedByteOffset, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_INPUT_ELEMENT_DESC, Format, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_INPUT_ELEMENT_DESC, InputSlotClass, 12);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_INPUT_ELEMENT_DESC, InstanceDataStepRate, 16);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_INPUT_ELEMENT_DESC, InputRegister, 20);
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDIARG_CREATEELEMENTLAYOUT);
+WINE_DDI_ASSERT_SIZE(D3D10DDIARG_CREATEELEMENTLAYOUT, 16);
+WINE_DDI_ASSERT_ALIGN(D3D10DDIARG_CREATEELEMENTLAYOUT, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEELEMENTLAYOUT, pVertexElements, 0);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEELEMENTLAYOUT, NumElements, 8);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_CREATEELEMENTLAYOUT, WinePad0, 12);
+/*
+ * Group: viewport description
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10_ddi_viewport
+ * Source mirror: https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs-ddi/staging/wdk-ddi-src/content/d3d10umddi/ns-d3d10umddi-d3d10_ddi_viewport.md
+ * Retrieved: 2026-09-20
+ *
+ * The rendered syntax block and its markdown source mirror agree on six
+ * members, all FLOAT, in the order TopLeftX, TopLeftY, Width, Height,
+ * MinDepth, MaxDepth. Unlike D3D10_DDI_MAP and D3D10_DDI_PRIMITIVE_TOPOLOGY
+ * above, this structure carries no unpublished enumerator values -- every
+ * member is a plain FLOAT with a stated meaning -- so there is nothing left
+ * unspecified here and no reason for the type to stay opaque.
+ *
+ * Six FLOATs is 24 bytes with no implicit padding at natural 4-byte
+ * alignment, the same convention D3D10DDI_MIPINFO uses for an all-4-byte
+ * structure elsewhere in this header: the project's 8-byte rule targets the
+ * device function table, whose members are all pointers, not every value
+ * type this header declares.
+ *
+ * pfnSetViewports was promoted while this type was still opaque --
+ * tests/d3d11ddi_triangle.c calls it with a null array, which proves the
+ * slot is reachable but not that its argument is constructible. Completing
+ * this structure is what makes RSSetViewports constructible above the DDI,
+ * not a change to the slot itself. */
+typedef struct D3D10_DDI_VIEWPORT
+{
+    FLOAT TopLeftX;
+    FLOAT TopLeftY;
+    FLOAT Width;
+    FLOAT Height;
+    FLOAT MinDepth;
+    FLOAT MaxDepth;
+} D3D10_DDI_VIEWPORT;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10_DDI_VIEWPORT);
+WINE_DDI_ASSERT_SIZE(D3D10_DDI_VIEWPORT, 24);
+WINE_DDI_ASSERT_ALIGN(D3D10_DDI_VIEWPORT, 4);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_VIEWPORT, TopLeftX, 0);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_VIEWPORT, TopLeftY, 4);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_VIEWPORT, Width, 8);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_VIEWPORT, Height, 12);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_VIEWPORT, MinDepth, 16);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_VIEWPORT, MaxDepth, 20);
 
 /* IaSetTopology takes its topology by value, so the transport type has to be
  * declared -- but the enumeration's page publishes the enumerator names in
@@ -2323,6 +2436,30 @@ typedef VOID (*PFND3D10DDI_DESTROYSHADER)(
         D3D10DDI_HDEVICE hDevice,
         D3D10DDI_HSHADER hShader);
 
+/* The sizing slot for the two tessellation stages.
+ *
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11_1ddi_calcprivatetessellationshadersize
+ * Source mirror: https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs-ddi/staging/wdk-ddi-src/content/d3d10umddi/nc-d3d10umddi-pfnd3d11_1ddi_calcprivatetessellationshadersize.md
+ * Retrieved: 2026-09-16
+ *
+ * Its parameter list is pfnCalcPrivateShaderSize's with one type changed: the
+ * signatures argument is the tessellation kind rather than the stage kind.
+ * That difference is the whole reason the slot exists, and it is why a host
+ * must not size a hull or domain shader through the other slot -- the driver
+ * placement-constructs its shader object into the block the runtime sized, so
+ * the two are a matched pair.
+ *
+ * D3D11_1DDIARG_TESSELLATION_IO_SIGNATURES stays an incomplete forward
+ * declaration, on the same terms as D3D11_1DDIARG_STAGE_IO_SIGNATURES above:
+ * no promoted slot dereferences it. */
+typedef struct D3D11_1DDIARG_TESSELLATION_IO_SIGNATURES
+        D3D11_1DDIARG_TESSELLATION_IO_SIGNATURES;
+
+typedef SIZE_T (*PFND3D11_1DDI_CALCPRIVATETESSELLATIONSHADERSIZE)(
+        D3D10DDI_HDEVICE hDevice,
+        const UINT *pShaderCode,
+        const D3D11_1DDIARG_TESSELLATION_IO_SIGNATURES *pSignatures);
+
 /*
  * Group: element layout, binding, and draw callbacks
  * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddi_devicefuncs
@@ -2380,12 +2517,12 @@ typedef VOID (*PFND3D10DDI_DESTROYSHADER)(
  * view.  It takes them; nothing promoted can make one.  See the binding-types
  * group above for why the handles are declared anyway.
  *
- * Two slots the frame would otherwise use are deliberately not here.
- * PFND3DWDDM2_0DDI_FLUSH has no published page -- the WDDM 2.0-named URL is a
- * 404 -- and the base PFND3D10DDI_FLUSH page describes a one-parameter list
- * that cannot be attributed to the WDDM 2.0-named typedef the table actually
- * holds, so it stays a placeholder.  PFND3D10DDI_SETSCISSORRECTS would need
- * D3D10_DDI_RECT, and the frame does not require a scissor.
+ * PFND3DWDDM2_0DDI_FLUSH is cross-checked against Microsoft's public,
+ * MIT-licensed D3D11On12 Device::Flush declaration and implementation.  The
+ * published D3D10DDI_DEVICEFUNCS page establishes the table slot, while that
+ * source establishes the WDDM 2.0 extension's ContextType and FlushFlags
+ * parameters. PFND3D10DDI_SETSCISSORRECTS remains a placeholder because it
+ * would need D3D10_DDI_RECT, and the frame does not require a scissor.
  */
 typedef SIZE_T (*PFND3D10DDI_CALCPRIVATEELEMENTLAYOUTSIZE)(
         D3D10DDI_HDEVICE hDevice,
@@ -2412,6 +2549,12 @@ typedef VOID (*PFND3D10DDI_IA_SETVERTEXBUFFERS)(
         const D3D10DDI_HRESOURCE *phBuffers,
         const UINT *pStrides,
         const UINT *pOffsets);
+
+typedef VOID (*PFND3D10DDI_IA_SETINDEXBUFFER)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRESOURCE hBuffer,
+        DXGI_FORMAT Format,
+        UINT Offset);
 
 typedef VOID (*PFND3D10DDI_IA_SETTOPOLOGY)(
         D3D10DDI_HDEVICE hDevice,
@@ -2451,6 +2594,34 @@ typedef VOID (*PFND3D10DDI_DRAW)(
         UINT VertexCount,
         UINT StartVertexLocation);
 
+typedef VOID (*PFND3D10DDI_DRAWINDEXED)(
+        D3D10DDI_HDEVICE hDevice,
+        UINT IndexCount,
+        UINT StartIndexLocation,
+        INT BaseVertexLocation);
+
+typedef VOID (*PFND3D10DDI_DRAWINSTANCED)(
+        D3D10DDI_HDEVICE hDevice,
+        UINT VertexCountPerInstance,
+        UINT InstanceCount,
+        UINT StartVertexLocation,
+        UINT StartInstanceLocation);
+
+typedef VOID (*PFND3D10DDI_DRAWINDEXEDINSTANCED)(
+        D3D10DDI_HDEVICE hDevice,
+        UINT IndexCountPerInstance,
+        UINT InstanceCount,
+        UINT StartIndexLocation,
+        INT BaseVertexLocation,
+        UINT StartInstanceLocation);
+
+/* Microsoft D3D11On12, include/device.hpp and src/context.cpp, pinned in
+ * third_party/D3D11On12: Device::Flush(D3D10DDI_HDEVICE, UINT, UINT). */
+typedef BOOL (*PFND3DWDDM2_0DDI_FLUSH)(
+        D3D10DDI_HDEVICE hDevice,
+        UINT ContextType,
+        UINT FlushFlags);
+
 /* BlendFactor names an argument the specification leaves unnamed. */
 typedef VOID (*PFND3D10DDI_SETBLENDSTATE)(
         D3D10DDI_HDEVICE hDevice,
@@ -2471,10 +2642,6 @@ typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_RESOURCEUPDATESUBRESOURCEUP
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_SETCONSTANTBUFFERS;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETSHADERRESOURCES;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETSAMPLERS;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DRAWINDEXED;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_IA_SETINDEXBUFFER;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DRAWINDEXEDINSTANCED;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DRAWINSTANCED;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SHADERRESOURCEVIEWREADAFTERWRITEHAZARD;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCEREADAFTERWRITEHAZARD;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_QUERYEND;
@@ -2486,7 +2653,6 @@ typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETSCISSORRECTS;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CLEARDEPTHSTENCILVIEW;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETPREDICATION;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_QUERYGETDATA;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_FLUSH;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_GENMIPS;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCERESOLVESUBRESOURCE;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCEISSTAGINGBUSY;
@@ -2521,7 +2687,6 @@ typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_DRAWINDEXEDINSTANCEDINDIRECT;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_DRAWINSTANCEDINDIRECT;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CREATEHULLSHADER;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CREATEDOMAINSHADER;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_CALCPRIVATETESSELLATIONSHADERSIZE;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_SETSHADER_WITH_IFACES;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11DDI_CREATECOMPUTESHADER;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3DWDDM2_0DDI_CALCPRIVATEUNORDEREDACCESSVIEWSIZE;

@@ -2,7 +2,7 @@
 
 > **Target Audience:** Autonomous Coding Agents, Subagents, and Systems Engineers  
 > **Subsystem:** D3D11On12 (Translation Layer & DDI Host)  
-> **Prerequisites:** Python 3.10+, MinGW-w64 GCC (`x86_64-w64-mingw32-gcc` / `g++`), Wine execution environment  
+> **Prerequisites:** Python 3.10+, MinGW-w64 GCC (`x86_64-w64-mingw32-clang` / `g++`), Wine execution environment  
 
 ---
 

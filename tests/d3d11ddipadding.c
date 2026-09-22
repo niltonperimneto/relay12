@@ -22,9 +22,9 @@
  * header's own include of it is a no-op once its guard is set.
  *
  * Build (both languages must succeed):
- *   x86_64-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wextra -Wpadded -Werror \
+ *   x86_64-w64-mingw32-clang -std=gnu11 -O2 -Wall -Wextra -Wpadded -Werror \
  *       -Irelay12-d3d11/ddi -c tests/d3d11ddipadding.c
- *   x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Wpadded -Werror \
+ *   x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Wpadded -Werror \
  *       -fno-exceptions -fno-rtti -Irelay12-d3d11/ddi -x c++ \
  *       -c tests/d3d11ddipadding.c
  */

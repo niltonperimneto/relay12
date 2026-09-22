@@ -46,7 +46,7 @@ To achieve the MVP (Minimum Viable Product) of rendering a frame via `relay12 ->
 The next authoring phase must strictly promote and implement only:
 1. **Resource Management:** `CreateResource`, `OpenResource` — done, see `docs/DDI-REMAINING-ROADMAP.md` §3.1.
 2. **Basic Views:** `CreateRenderTargetView`, `CreateShaderResourceView` — done, see `docs/DDI-REMAINING-ROADMAP.md` §3.1. Depth-stencil and unordered-access views are deliberately not part of this pair and stay unpromoted.
-3. **Core Shaders:** `CreateVertexShader`, `CreatePixelShader` — done, see `docs/DDI-REMAINING-ROADMAP.md` §3.1. Geometry, hull, domain, and compute shader creation are deliberately not part of this pair and stay unpromoted.
+3. **Core Shaders:** all six stages — vertex, pixel, geometry, hull, domain and compute — have an owned host lifecycle; see `docs/DDI-REMAINING-ROADMAP.md` §3.3. Creation runs through the `ID3D11On12DDIDevice` sub-object rather than the DDI table, which never fills its create-shader slots on the immediate device. Geometry **with stream output** stays out of scope: it is a larger driver object needing its own argument structure and sizing slot, and the host always passes the null argument that selects the ordinary kind.
 4. **Base Pipeline State:** Blend, Depth-Stencil, Rasterizer, and Sampler bounds — done, see `docs/DDI-REMAINING-ROADMAP.md` §3.1.
 
 Everything else must remain locked inside `PFNWINE_D3D11DDI_UNDECLARED_CB` placeholders, allowing the compiler to statically enforce their absence while the core rendering loop is brought online.
