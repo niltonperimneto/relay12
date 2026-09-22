@@ -297,5 +297,6 @@ push is what exercises it.
 
 ### Expected Timings
 `validate-d3d11on12` reaches a verdict in about 4–6 minutes, and fails faster
-than it passes. The separate `build winecx gptk runtime` job takes roughly an
-hour and does not gate documentation or gate-only changes.
+than it passes. It is the only long job here: the hour-long runtime build now
+lives in the separate `winecx-gptk` repository and nothing in this repository
+triggers or gates on it.
