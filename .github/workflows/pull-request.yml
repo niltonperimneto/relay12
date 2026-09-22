@@ -352,103 +352,17 @@ jobs:
             -o d3d11shim.dll relay12-d3d11/d3d11shim.cpp \
             relay12-d3d11/wine_d3d11_diag.cpp \
             relay12-d3d11/d3d11shim.def -ld3d11 -ldxgi
-          core_exports="$(x86_64-w64-mingw32-objdump -p d3d11on12core.dll)"
-          grep -q 'WineD3D11On12GetABIVersion' <<<"$core_exports"
-          grep -q 'WineD3D11On12CreateDeviceV1' <<<"$core_exports"
-          grep -q 'WineD3D11On12GetInterface' <<<"$core_exports"
-          grep -q 'WineD3D11On12OpenAdapterV1' <<<"$core_exports"
-          grep -q 'WineD3D11On12CreateBufferV1' <<<"$core_exports"
-          grep -q 'WineD3D11On12DestroyBufferV1' <<<"$core_exports"
-          grep -q 'WineD3D11On12SetVertexBuffersV1' <<<"$core_exports"
-          grep -q 'WineD3D11On12SetIndexBufferV1' <<<"$core_exports"
-          grep -q 'WineD3D11On12CreateInputLayoutV1' <<<"$core_exports"
-          grep -q 'WineD3D11On12DestroyInputLayoutV1' <<<"$core_exports"
-          grep -q 'WineD3D11On12SetInputLayoutV1' <<<"$core_exports"
-          grep -q 'WineD3D11On12CreateVertexShaderV1' <<<"$core_exports"
-          grep -q 'WineD3D11On12CreatePixelShaderV1' <<<"$core_exports"
-          grep -q 'WineD3D11On12DestroyShaderV1' <<<"$core_exports"
-          grep -q 'WineD3D11On12SetVertexShaderV1' <<<"$core_exports"
-          grep -q 'WineD3D11On12SetPixelShaderV1' <<<"$core_exports"
-          grep -q 'WineD3D11On12CreateTexture2DV1' <<<"$core_exports"
-          grep -q 'WineD3D11On12DestroyTexture2DV1' <<<"$core_exports"
-          exports="$(x86_64-w64-mingw32-objdump -p d3d11shim.dll)"
-          grep -q 'D3D11CreateDevice' <<<"$exports"
-          grep -q 'D3D11CreateDeviceAndSwapChain' <<<"$exports"
-          grep -q 'D3D11On12CreateDevice' <<<"$exports"
-          grep -q 'WineD3D11ShimGetStatus' <<<"$exports"
-          python3 - <<'PY'
-          import re
-          import subprocess
-
-          expected = {
-              # Ordinals 1 to 3 are Apple's exact export table.  Ordinal 4 is
-              # the Wine-private status entry point deployment gates on,
-              # because DXGI_ERROR_UNSUPPORTED cannot distinguish "unsupported
-              # here" from "installed wrong".
-              "d3d11shim.dll": {
-                  1: "D3D11CreateDevice",
-                  2: "D3D11CreateDeviceAndSwapChain",
-                  3: "D3D11On12CreateDevice",
-                  4: "WineD3D11ShimGetStatus",
-              },
-              "d3d11on12core.dll": {
-                  1: "WineD3D11On12GetABIVersion",
-                  2: "WineD3D11On12CreateDeviceV1",
-                  3: "WineD3D11On12GetInterface",
-                  4: "WineD3D11On12OpenAdapterV1",
-                  5: "WineD3D11On12CreateBufferV1",
-                  6: "WineD3D11On12DestroyBufferV1",
-                  7: "WineD3D11On12SetVertexBuffersV1",
-                  8: "WineD3D11On12SetIndexBufferV1",
-                  9: "WineD3D11On12CreateInputLayoutV1",
-                  10: "WineD3D11On12DestroyInputLayoutV1",
-                  11: "WineD3D11On12SetInputLayoutV1",
-                  12: "WineD3D11On12CreateVertexShaderV1",
-                  13: "WineD3D11On12CreatePixelShaderV1",
-                  14: "WineD3D11On12DestroyShaderV1",
-                  15: "WineD3D11On12SetVertexShaderV1",
-                  16: "WineD3D11On12SetPixelShaderV1",
-                  17: "WineD3D11On12CreateTexture2DV1",
-                  18: "WineD3D11On12DestroyTexture2DV1",
-              },
-          }
-          for path, wanted in expected.items():
-              output = subprocess.check_output(
-                  ["x86_64-w64-mingw32-objdump", "-p", path], text=True)
-              base = int(re.search(r"Ordinal Base\s+(\d+)", output).group(1))
-              names = output.split("[Ordinal/Name Pointer] Table", 1)[1]
-              names = names.split("\n\n", 1)[0]
-              actual = {
-                  base + int(index): name
-                  for index, name in re.findall(r"\[\s*(\d+)\](?:.*\s+)?([a-zA-Z_]\w*)", names)
-              }
-              if actual != wanted:
-                  raise SystemExit(f"{path}: exports {actual}, expected {wanted}")
-          PY
-          if x86_64-w64-mingw32-objdump -p \
-              d3d11shim.dll d3d11on12core.dll \
-              | grep -Eiq 'libstdc\+\+|libgcc_s'; then
-            echo 'unexpected C++ runtime dependency' >&2
-            exit 1
-          fi
-          python3 - <<'PY'
-          import re
-          import subprocess
-
-          allowed = {
-              "d3d11shim.dll": {"kernel32.dll", "msvcrt.dll"},
-              "d3d11on12core.dll": {"kernel32.dll", "msvcrt.dll"},
-          }
-          for path, wanted in allowed.items():
-              output = subprocess.check_output(
-                  ["x86_64-w64-mingw32-objdump", "-p", path], text=True)
-              actual = {
-                  name.lower()
-                  for name in re.findall(r"DLL Name:\s+(\S+)", output)
-              }
-              if actual != wanted:
-                  raise SystemExit(f"{path}: imports {actual}, expected {wanted}")
-          PY
+          # Through the tested gate rather than four inline scrapes. This step
+          # re-implemented the export table, the import table and the C++
+          # runtime rule that scripts/check_pe_audit.py already owns and has
+          # tests for, and its ordinal scrape read GNU binutils objdump's
+          # format -- llvm-mingw's objdump is llvm-objdump, which prints a
+          # different one, so it raised AttributeError on a failed match.
+          # The eighteen per-name greps that stood here are covered too: the
+          # gate compares the whole ordinal table, which is strictly stronger
+          # than asserting each name appears somewhere in the output.
+          python3 "$GITHUB_WORKSPACE/scripts/check_pe_audit.py" \
+            d3d11shim.dll d3d11on12core.dll
 
       - name: Audit interface acquisition
         run: |
