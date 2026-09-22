@@ -24,7 +24,7 @@ All modifications to this codebase must preserve the following architectural inv
 
 ### 2.1 Natural 8-Byte Alignment (`/Zp8`)
 - Direct3D DDI structures assume standard 64-bit Windows 8-byte natural alignment.
-- **`#pragma pack` is strictly prohibited** under [`relay12-d3d11/ddi`](file:///Users/niltonperimneto/Whisky/relay12/relay12-d3d11/ddi). The presence of packing pragmas is actively checked by [`scripts/check_ddi_header.py`](file:///Users/niltonperimneto/Whisky/relay12/scripts/check_ddi_header.py).
+- **`#pragma pack` is strictly prohibited** under [`relay12-d3d11/ddi`](relay12-d3d11/ddi). The presence of packing pragmas is actively checked by [`scripts/check_ddi_header.py`](scripts/check_ddi_header.py).
 
 ### 2.2 Fail-Closed Routing Semantics
 - **No Mock Success:** The router and core boundary must never return `S_OK` with mock, uninitialized, or partial COM interface pointers.
@@ -33,15 +33,61 @@ All modifications to this codebase must preserve the following architectural inv
 - **Device Ownership:** D3D11On12 must submit rendering commands through the caller's supplied `ID3D12Device` and direct `ID3D12CommandQueue`. It must not create an independent or unmanaged device instance.
 
 ### 2.3 Strict Interface Acquisition and Identity
-- **The `strictResult()` Funnel:** Every `QueryInterface` and `GetDevice` call in [`relay12-d3d11`](file:///Users/niltonperimneto/Whisky/relay12/relay12-d3d11) must be wrapped in `strictResult()`. If an interface query returns `S_OK` but leaves the output pointer null, `strictResult()` treats the acquisition as failed, preventing subsequent null pointer dereferences. Direct calls that bypass this funnel are rejected by [`scripts/check_interface_acquisition.py`](file:///Users/niltonperimneto/Whisky/relay12/scripts/check_interface_acquisition.py).
+- **The `strictResult()` Funnel:** Every `QueryInterface` and `GetDevice` call in [`relay12-d3d11`](relay12-d3d11) must be wrapped in `strictResult()`. If an interface query returns `S_OK` but leaves the output pointer null, `strictResult()` treats the acquisition as failed, preventing subsequent null pointer dereferences. Direct calls that bypass this funnel are rejected by [`scripts/check_interface_acquisition.py`](scripts/check_interface_acquisition.py).
 - **Two-Tier Identity Comparison:** To verify that a command queue was created by the provided device, typed `ID3D12Device` pointers are compared first. An `IUnknown` identity query is performed only if typed pointers differ.
 
 ### 2.4 Clean-Room Boundary and Licensing
 - **No Proprietary WDK Headers:** Proprietary Windows Driver Kit headers (`d3d10umddi.h`, `d3d11umddi.h`, `dxgiddi.h`, `d3dkmthk.h`) must not be added to or vendored in this repository.
-- **Dual-Source Documentation Validation:** All DDI structures declared in [`relay12-d3d11/ddi/wine_d3d11ddi.h`](file:///Users/niltonperimneto/Whisky/relay12/relay12-d3d11/ddi/wine_d3d11ddi.h) must be authored from public Microsoft documentation, cross-validated against the GitHub markdown documentation mirror, and documented with provenance comment blocks.
+- **Dual-Source Documentation Validation:** All DDI structures declared in [`relay12-d3d11/ddi/wine_d3d11ddi.h`](relay12-d3d11/ddi/wine_d3d11ddi.h) must be authored from public Microsoft documentation, cross-validated against the GitHub markdown documentation mirror, and documented with provenance comment blocks.
 - **License Isolation:**
   - Router, Core, Tests, and Scripts: **GPL-3.0-only**
   - Submodules (`third_party/D3D11On12`, `third_party/D3D12TranslationLayer`, `third_party/DirectX-Headers`): **MIT**
+
+### 2.5 Third-Party Trees Are Never Edited In Place
+The pinned submodules stay byte-identical to upstream. Every change to them is
+a patch file in [`patches/d3d11on12/`](patches/d3d11on12) or
+[`patches/dtl/`](patches/dtl), applied by `scripts/prepare-d3d11on12-source.sh`
+and `scripts/prepare-dtl-source.sh` into a throwaway clone. Those scripts
+assert the expected upstream revision first and refuse to run against a
+different one, so editing a submodule directly is both undone by the next CI
+run and invisible in review. A patch needs a body explaining *why* upstream is
+wrong for this target, not just what it changes.
+
+### 2.6 Function Tables Use Designated Initializers
+Any table of function pointers crossing a version or backend boundary —
+notably both `d3d11_backend_ops` tables in the Wine frontend patches — must be
+initialized by member name, never positionally.
+
+This is not style. A positional table silently rebinds every entry after an
+inserted member: adding `create_texture2d`/`destroy_texture2d` after
+`destroy_buffer` shifted the WineD3D table by one pair and bound
+`destroy_vertex_shader` to `wined3d_backend_set_vertex_shader`, so releasing a
+vertex shader on the ordinary WineD3D path would have called a binding
+function through a destroy signature. Enforced by
+`test_positional_wined3d_backend_table_is_rejected`.
+
+Members a backend does not implement stay **absent**, not `NULL`-padded: C
+zero-initializes them, and a null op is how a backend says "use the WineD3D
+path", which the call sites already test for.
+
+### 2.7 Resource Destruction Is Idempotent
+Destroy entry points reach the driver exactly once and are a no-op afterwards.
+A repeat returns `S_OK` and leaves the caller's structure inert; it must not
+return `E_INVALIDARG` for a stale handle. Rejecting one would turn a late
+destroy after device teardown into a failure rather than the double-free guard
+it exists to be, and every resource kind must agree. The contract is stated in
+[`docs/D3D11ON12.md`](docs/D3D11ON12.md) as "destruction reaching the driver
+once, idempotent afterwards".
+
+Using a destroyed handle is the opposite case and *is* rejected with
+`E_INVALIDARG`, before any DDI dispatch.
+
+### 2.8 Shared State Is Guarded and Annotated
+Process-wide mutable state in [`relay12-d3d11`](relay12-d3d11) must be
+initialized through `InitOnceExecuteOnce` and carry an annotation naming the
+`INIT_ONCE` that guards it. Unannotated or unguarded shared state is rejected
+by [`scripts/check_shared_state.py`](scripts/check_shared_state.py), which
+follows a wrapped `InitOnceExecuteOnce` through its helper.
 
 ---
 
@@ -69,7 +115,9 @@ All modifications to this codebase must preserve the following architectural inv
                                 ▼
  ┌──────────────────────────────────────────────────────────────┐
  │             Clean-Room DDI Host (wine_d3d11ddi.h)            │
- │  WDDM 2.6 / 2.7 DeviceFuncs (178 slots) & Callbacks (47 slots│
+ │  Driver fills: DEVICEFUNCS ............ 178 slots, 1424 B    │
+ │  Host fills:   CORELAYER_DEVICECALLBACKS  47 slots,  376 B   │
+ │                D3DDDI_DEVICECALLBACKS ..  66 slots,  528 B   │
  └──────────────────────────────┬───────────────────────────────┘
                                 │
                                 ▼
@@ -85,13 +133,17 @@ All modifications to this codebase must preserve the following architectural inv
 
 ### Component Breakdown
 
+Paths below are repo-relative. Do not reintroduce absolute `file:///Users/...`
+links: they break for every other checkout and on GitHub's web view.
+
 | Directory | Responsibilities |
 | :--- | :--- |
-| [`relay12-d3d11/`](file:///Users/niltonperimneto/Whisky/relay12/relay12-d3d11) | Implementation of `d3d11shim.cpp`, `d3d11on12core.cpp`, `wine_d3d11on12.h`, `wine_d3d11_diag.h`, and `ddi/wine_d3d11ddi.h`. |
-| [`scripts/`](file:///Users/niltonperimneto/Whisky/relay12/scripts) | Static verification tools: `check_ddi_header.py`, `gen_ddi_layout.py`, `check_pe_audit.py`, `check_interface_acquisition.py`. |
-| [`tests/`](file:///Users/niltonperimneto/Whisky/relay12/tests) | Verification tests: Python CI gate tests (`test_ci_gates.py`), mock core unit tests (`d3d11on12coretest.c`), DDI layout validation (`d3d11ddilayout.c`), and router status checks (`d3d11shimstatus.c`). |
-| [`docs/`](file:///Users/niltonperimneto/Whisky/relay12/docs) | Architectural reference documents: [`D3D11ON12.md`](file:///Users/niltonperimneto/Whisky/relay12/docs/D3D11ON12.md) and [`CLEANROOM-DDI.md`](file:///Users/niltonperimneto/Whisky/relay12/docs/CLEANROOM-DDI.md). |
-| [`third_party/`](file:///Users/niltonperimneto/Whisky/relay12/third_party) | Pinned submodules: `D3D11On12`, `D3D12TranslationLayer`, `DirectX-Headers`. |
+| [`relay12-d3d11/`](relay12-d3d11) | Implementation: `d3d11shim.cpp`/`.h`, `d3d11on12core.cpp`/`.h`, `wine_d3d11_diag.h`, `wine_d3d11ddi_negotiate.h`, `ddi/wine_d3d11ddi.h`, and the `.def` export contracts. |
+| [`scripts/`](scripts) | Eleven `check_*.py` gates plus `gen_ddi_layout.py`; the `prepare-*.sh` scripts that materialize the patched third-party trees and the SDK overlay; `package-d3d11on12-source.sh`. See §5 for which run with no arguments. |
+| [`tests/`](tests) | ~50 files: the Python gate suite (`test_ci_gates.py`), the DDI layout and negotiation tests, the mock driver (`d3d11on12mockdriver.c`) and the lifecycle suite that drives it (`d3d11on12openadapter.c`), per-group promoted-slot negative tests, `compat/` unit tests, and probes. [`docs/TESTS.md`](docs/TESTS.md) is the inventory and the rationale. |
+| [`docs/`](docs) | [`D3D11ON12.md`](docs/D3D11ON12.md) (design and readiness — source of truth for what is done), [`CLEANROOM-DDI.md`](docs/CLEANROOM-DDI.md) (DDI authoring roadmap), [`TESTS.md`](docs/TESTS.md), [`PORT-QUALITY-ROADMAP.md`](docs/PORT-QUALITY-ROADMAP.md) (phase/milestone authority), [`DDI-REMAINING-ROADMAP.md`](docs/DDI-REMAINING-ROADMAP.md), [`DDI-CONCURRENCY-TESTING.md`](docs/DDI-CONCURRENCY-TESTING.md), [`D3D11ON12-SKIPPABLE-ELEMENTS.md`](docs/D3D11ON12-SKIPPABLE-ELEMENTS.md), [`RELAY12-IMPLEMENTATION-PLAN.md`](docs/RELAY12-IMPLEMENTATION-PLAN.md). |
+| [`third_party/`](third_party) | Pinned submodules (MIT): `D3D11On12`, `D3D12TranslationLayer`, `DirectX-Headers`. Never edited in place — see §2.5. |
+| [`patches/`](patches) | The reviewable portability series. `patches/d3d11on12/` and `patches/dtl/` are applied to the pinned submodules by `scripts/prepare-*.sh`; `patches/*.patch` at the top level are the Wine frontend patches. |
 
 ---
 
@@ -107,9 +159,27 @@ All modifications to this codebase must preserve the following architectural inv
   `api-ms-win-crt-*` stubs under a UCRT-targeted one. Nothing else — a graphics
   or `ntdll` import means an entry point stopped being resolved at run time.
 - Code must be compiled with `-fno-exceptions -fno-rtti`.
+- Every compile in `validate-d3d11on12` uses `-Wall -Wextra -Werror`, so a
+  warning is a build failure.
+
+#### Clang rejections to expect
+The toolchain moved from apt's GCC to llvm-mingw, and Clang refuses a number of
+things GCC accepted. These are the classes that have actually broken this tree,
+and are worth checking before pushing because none of them can be reproduced
+locally (§5):
+
+| Symptom | Cause |
+| :--- | :--- |
+| `member access into incomplete type` in a template | Clang binds non-dependent parts of a template body at parse time. A method whose body touches a type only forward-declared at that point must be defined out of line, after the definition. |
+| `discards qualifiers` | A `const` DDI pointer assigned to a non-`const` variable. Fix the variable; the qualifier is upstream's and correct. |
+| `missing exception specification '__attribute__((nothrow))'` | mingw-w64 expands `STDMETHOD` with `COM_DECLSPEC_NOTHROW` but `STDMETHODIMP_` without it, so an out-of-class definition needs explicit `noexcept`. |
+| `unused-but-set-variable` on an entry-point macro | `OPEN_TRYCATCH` declares a result the matching `CLOSE_TRYCATCH` reads; an unpaired macro leaves it set and unread. |
+| tautological comparison | A bound that is unreachable on a 64-bit target. Prefer `static_assert` so the guard is still checked and a 32-bit target fails loudly. |
+| `unknown warning option` | A `-Wno-*` name that exists in GCC but not Clang. Suppressions must be spelled for the pinned compiler. |
+| unknown SAL macro, e.g. `_Maybenull_` | The WDK overlay annotates fields with SAL that this include chain never defines. Shim it empty next to the existing `__in`/`__nullterminated` shims in the port series. |
 
 ### 4.2 PE Export Tables
-[`scripts/check_pe_audit.py`](file:///Users/niltonperimneto/Whisky/relay12/scripts/check_pe_audit.py) enforces exact export tables and ordinals:
+[`scripts/check_pe_audit.py`](scripts/check_pe_audit.py) enforces exact export tables and ordinals:
 
 #### `d3d11shim.dll` (Router)
 | Ordinal | Symbol | Purpose |
@@ -121,7 +191,7 @@ All modifications to this codebase must preserve the following architectural inv
 
 #### `d3d11on12core.dll` (Core Boundary)
 Ordinals are part of the ABI and are never reused or renumbered. The
-authoritative list is [`relay12-d3d11/d3d11on12core.def`](file:///Users/niltonperimneto/Whisky/relay12/relay12-d3d11/d3d11on12core.def);
+authoritative list is [`relay12-d3d11/d3d11on12core.def`](relay12-d3d11/d3d11on12core.def);
 `scripts/check_pe_audit.py` compares the built DLL's whole ordinal table
 against its own transcription of that `.def`, and a gate test pins the
 transcription to the file, so this table is a reading aid and the `.def` is the
@@ -140,7 +210,7 @@ contract.
 | 17, 18 | `WineD3D11On12{Create,Destroy}Texture2DV1` | Owned Texture2D lifecycle |
 
 ### 4.3 Diagnostic Logging
-Diagnostic logging is handled via [`relay12-d3d11/wine_d3d11_diag.h`](file:///Users/niltonperimneto/Whisky/relay12/relay12-d3d11/wine_d3d11_diag.h):
+Diagnostic logging is handled via [`relay12-d3d11/wine_d3d11_diag.h`](relay12-d3d11/wine_d3d11_diag.h):
 1. Dynamically queries `__wine_dbg_output` from `ntdll.dll` via `GetProcAddress`.
 2. Falls back to `OutputDebugStringA`.
 3. Falls back to standard error via the C runtime.
@@ -151,20 +221,85 @@ Deduplication latches ensure repeated failure conditions log only once per proce
 
 ## 5. Agent Verification Protocol
 
-Before submitting code modifications, verify that all four static gates pass:
+### 5.1 What you can verify locally
+
+Run these before every push. They need no toolchain, no Wine, and no network,
+and they take seconds. All must exit `0`.
 
 ```bash
-# 1. Run Python CI gate unit tests
-python3 -m unittest discover -s tests -p "test_*.py"
-
-# 2. Check DDI layout model against header declarations
-python3 scripts/gen_ddi_layout.py --check
-
-# 3. Check DDI header provenance and verify absence of #pragma pack
-python3 scripts/check_ddi_header.py
-
-# 4. Verify that interface acquisitions use strictResult()
-python3 scripts/check_interface_acquisition.py relay12-d3d11
+python3 -m unittest discover -s tests -p "test_*.py"   # 103 tests
+python3 scripts/gen_ddi_layout.py --check              # 54 structures, 469 fields
+python3 scripts/check_ddi_header.py                    # 21 declaration groups
+python3 scripts/check_interface_acquisition.py         # strictResult() funnel
+python3 scripts/check_shared_state.py                  # InitOnce annotations
+python3 scripts/check_adapter_args.py                  # adapter-arg transcription
+python3 scripts/check_secure_code.py relay12-d3d11     # refcount/alloc lints
 ```
 
-All commands must exit with code `0`.
+The remaining gates need an artifact or a tree that only CI materializes, and
+are listed here so their absence from the block above is not mistaken for them
+not existing:
+
+| Gate | Needs |
+| :--- | :--- |
+| `check_pe_audit.py MODULE…` | built `d3d11shim.dll` / `d3d11on12core.dll` |
+| `check_wine_d3d11_backend.py WINE_TREE` | a patched WineCX checkout |
+| `check_d3d11on12_port.py SOURCE_DIR` | the prepared D3D11On12 clone |
+| `check_dtl_struct_return.py SOURCE_DIR` | the prepared DTL clone |
+| `check_dtl_include_case.py SOURCE_DIR` | the prepared DTL clone |
+| `check_cleanroom_isolation.py --overlay DIR` | the licensed SDK/WDK overlay |
+
+> `check_secure_code.py` is currently wired into no workflow. It passes, and it
+> exists specifically to catch probabilistic errors in generated code, so run it
+> by hand until it is added to CI.
+
+### 5.2 What you cannot verify locally — and what to do instead
+
+**Nothing in this repository compiles on a developer Mac.** There is no MinGW
+cross toolchain and no Wine, so the C and C++ sources, the DDI tests, the
+patched DTL and D3D11On12 trees, and the entire Wine-executed suite exist only
+inside `validate-d3d11on12`. Treat green local gates as necessary and far from
+sufficient.
+
+The consequence for how you work:
+
+1. Run §5.1 first. It is cheap and catches transcription, layout and annotation
+   errors without waiting on CI.
+2. For anything that must actually compile, push the branch and read the job.
+   Do not claim a compile fix is verified when it has not been compiled — say
+   what was checked and what the push is for.
+3. Pre-check what host tooling can reach. A header or macro question can often
+   be settled with host `clang -fsyntax-only` on a reduced case, and a patch
+   series can be applied to a throwaway clone of the pinned submodule to prove
+   it still applies and produces the tree you expect.
+4. Read failures from the job log, not from a guess:
+   ```bash
+   gh run list --branch "$(git branch --show-current)" --limit 5
+   gh run view <run-id> --log-failed > /tmp/fail.log
+   grep -nE "error:|\[fail\]|##\[error\]" /tmp/fail.log
+   ```
+   `[fail]` in a C test's output is not always a failure — the padding trap
+   reports expected findings. Confirm against the run's own verdict line before
+   chasing one.
+5. Expect the loop to reveal one error class at a time, since `-Werror` stops
+   at the first translation unit that fails. When you fix one, sweep the tree
+   for its siblings rather than waiting for CI to surface them one per push.
+
+### 5.3 Repository Location and Pushing
+
+`relay12` is a **standalone repository** at `/Users/niltonperimneto/relay12`.
+It is no longer nested inside the Whisky checkout and is no longer referenced
+by Whisky as a submodule — see `chore(repo): decouple winecx, winecx-gptk, and
+relay12 into standalone repositories` on the Whisky side.
+
+`origin` is the GitHub remote (`niltonperimneto/relay12`):
+
+```bash
+git remote -v                                   # confirm before pushing
+git push origin "$(git branch --show-current)"
+```
+
+> Older notes describe the nested layout, where `origin` and `rh` were local
+> filesystem paths and `github` was the GitHub remote. That layout is gone, and
+> its `git push origin` warning no longer applies. `git remote -v` is the
+> authority.
