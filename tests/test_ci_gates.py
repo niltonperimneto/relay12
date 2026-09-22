@@ -18,6 +18,7 @@
 import pathlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -865,6 +866,35 @@ class PeAudit(unittest.TestCase):
         errors = check_pe_audit.audit("d3d11mystery.dll", OBJDUMP, False)
         self.assertTrue(any("no expected export table" in error
                             for error in errors), errors)
+
+    def test_the_expected_tables_match_the_def_files(self):
+        """EXPECTED_EXPORTS is transcribed from the .def files rather than
+        parsed from them, so that a .def reorder fails instead of being
+        adopted.  That only holds while the transcription is current: this
+        gate's table sat at four entries while the core's .def had grown to
+        eighteen, and the workflow's own inline copy was what caught the
+        exports until it broke on a toolchain change.  This is the check that
+        the two agree."""
+        for module, source in (
+            ("d3d11shim.dll", "d3d11shim.def"),
+            ("d3d11on12core.dll", "d3d11on12core.def"),
+        ):
+            with self.subTest(module=module):
+                text = (REPOSITORY / "relay12-d3d11" / source).read_text()
+                declared = {}
+                for line in text.splitlines():
+                    line = line.split(";", 1)[0].strip()
+                    if not line or line == "EXPORTS":
+                        continue
+                    # "NAME @N" or "NAME = internal_name @N"
+                    match = re.match(r"(\S+)(?:\s*=\s*\S+)?\s+@(\d+)$", line)
+                    self.assertIsNotNone(
+                        match, f"{source}: unparsed export line {line!r}")
+                    declared[int(match.group(2))] = match.group(1)
+                self.assertEqual(
+                    check_pe_audit.EXPECTED_EXPORTS[module], declared,
+                    f"check_pe_audit.EXPECTED_EXPORTS[{module!r}] and "
+                    f"relay12-d3d11/{source} disagree")
 
 
 class LayoutModel(unittest.TestCase):
