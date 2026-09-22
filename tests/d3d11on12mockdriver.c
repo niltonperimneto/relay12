@@ -58,7 +58,11 @@ static void *last_vertex_shader;
 static void *last_pixel_shader;
 static int bad_shader_description;
 static volatile LONG fail_next_shader;
-static D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS *runtime_callbacks;
+/* const because the core-layer callback table belongs to the runtime and a
+ * driver only reads it, which is how D3D10DDIARG_CREATEDEVICE declares it.
+ * Dropping the qualifier here would let a mistake in the mock write through a
+ * pointer the real runtime owns. */
+static const D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS *runtime_callbacks;
 static D3D10DDI_HRTCORELAYER runtime_device;
 static unsigned char adapter_private;
 
