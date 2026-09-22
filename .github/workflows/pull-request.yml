@@ -176,7 +176,8 @@ jobs:
           done
           python3 scripts/check_wine_d3d11_backend.py winecx
           # The diagnostics resolve __wine_dbg_output at run time so the router
-          # and the core keep importing only kernel32 and msvcrt.  It is a
+          # and the core keep importing only kernel32 and the C runtime, with
+          # no ntdll entry of their own.  It is a
           # Wine-internal, unversioned export, so a Wine bump that drops it
           # must fail here rather than silently losing every deployment
           # diagnostic to an application that handles DBG_PRINTEXCEPTION_C.
@@ -184,6 +185,20 @@ jobs:
             echo 'the pinned Wine no longer exports __wine_dbg_output' >&2
             exit 1
           fi
+          # The pinned llvm-mingw is the ucrt build, so snprintf and fputs
+          # link against these api-set stubs rather than msvcrt.dll.  Wine
+          # ships no api-ms-win-crt-* module: it resolves them through the
+          # apiset schema, and every one of them has to land on a builtin the
+          # prefix actually has, or both modules fail to load with a missing
+          # dependency rather than anything that names this cause.
+          for set in environment heap private runtime stdio string time; do
+            if ! grep -q "^apiset api-ms-win-crt-$set-l1-1-0 = ucrtbase.dll$" \
+                winecx/dlls/apisetschema/apisetschema.spec; then
+              echo "the pinned Wine no longer maps api-ms-win-crt-$set-l1-1-0 to ucrtbase" >&2
+              exit 1
+            fi
+          done
+          test -f winecx/dlls/ucrtbase/Makefile.in
 
       - name: Compile the D3D12TranslationLayer dependency edge
         run: |
