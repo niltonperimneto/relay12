@@ -1857,7 +1857,7 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
             funcs->pfnDestroyRenderTargetView(device, rtv));
     CHECK_STACK("PFND3D11_1DDI_CALCPRIVATESHADERSIZE",
             (void)funcs->pfnCalcPrivateShaderSize(device, NULL, NULL));
-    CHECK_CALL("pfnCalcPrivateTessellationShaderSize",
+    CHECK_STACK("PFND3D11_1DDI_CALCPRIVATETESSELLATIONSHADERSIZE",
             (void)funcs->pfnCalcPrivateTessellationShaderSize(device,
                     NULL, NULL));
     CHECK_STACK("PFND3D11_1DDI_CREATEVERTEXSHADER",
