@@ -37,7 +37,7 @@ BOOL CALLBACK resolveSinks(PINIT_ONCE, PVOID, PVOID *) noexcept
     /* GetModuleHandleW, not LoadLibraryW: ntdll is always already mapped, and
      * this must not add a module reference or run loader work.  Resolving
      * rather than importing also keeps these modules' import table at
-     * kernel32 and msvcrt, which CI asserts exactly. */
+     * kernel32 plus the C runtime, with no ntdll entry, which CI asserts. */
     const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
 
     if (!ntdll)
@@ -70,8 +70,9 @@ extern "C" void wineD3D11DiagReport(const char *message) noexcept
     OutputDebugStringA(message);
 
     /* Last resort when this is not a Wine process, or when the internal export
-     * is gone.  msvcrt is already an import, and a process under Wine inherits
-     * the launching terminal's stderr. */
+     * is gone.  The C runtime is already an import -- snprintf pulls it in
+     * either way -- and a process under Wine inherits the launching
+     * terminal's stderr. */
     if (!reachedWine)
     {
         std::fputs(message, stderr);

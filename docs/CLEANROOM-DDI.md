@@ -108,6 +108,41 @@ so application D3DMetal objects reach the driver without DDI translation. With
 `D3D10DDIARG_OPENADAPTER` and the adapter tables authored, the adapter-level
 boundary is complete.
 
+### `ID3D11On12DDIDevice` is transcribed, not included
+
+The row above says "use directly", and the core cannot. The header's
+`ID3D11On12DDIDevice` declarations name `D3DKMT_PRESENT`, `D3DKMT_HANDLE` and
+`D3D11DDIARG_CREATEGEOMETRYSHADERWITHSTREAMOUTPUT` — WDK and DDI types the
+clean-room header has not authored and this host never uses. The driver
+compiles the header with the licensed overlay on its include path; the core
+must not have that path, so it takes the declarations it needs.
+
+`relay12-d3d11/d3d11on12core.cpp` therefore carries the interface as an
+explicit vtable structure, every slot from `GetD3D12Device` through
+`CreateComputeShader`, with the unused slots' pointer-only arguments left
+incomplete. Two facts make that safe to do:
+
+- the interface has no `IUnknown` base and no virtual destructor, so slot
+  numbering is exactly declaration order; and
+- `CastFrom` in the pinned header states how the interface is reached — the
+  pointer *is* `D3D10DDI_HDEVICE.pDrvPrivate`, the private device block the
+  host allocated — and `DeviceBase` derives from it first and from nothing
+  else, so the vtable pointer sits at offset zero.
+
+A structure of function pointers rather than a pure-virtual class, because
+the slot order then has to be written down where a reviewer can read it, a C
+test can build a mock against it, and nothing rests on two compilers emitting
+the same vtable for a class neither of them can see.
+
+This is a worse drift hazard than `SOpenAdapterArgs`, not a better one: a slot
+inserted upstream anywhere above `CreateVertexShader` renumbers both shader
+calls, and because the interface is reached by reinterpreting a block rather
+than by linking, the host would call the wrong method with no diagnostic at
+all. `scripts/check_adapter_args.py` compares the transcription to the pinned
+header on every run, slot by slot, and `d3d11on12core.cpp` static-asserts the
+slot indices `d3d11on12core.h` publishes for the C mock driver against its own
+declaration, so both halves of the loop are checked.
+
 ## Dual-source cross-validation
 
 Every declaration group is authored from Microsoft's public reference
@@ -506,6 +541,54 @@ declaration nothing yet needs.
   shared-state auditing (`scripts/check_shared_state.py`) and oversubscribed
   Win32 thread storm tests under Wine (`tests/ddi_thread_stress.c`).
 
+- **Which DDI slots create a shader**: none of them. The pinned driver's
+  `FillContextDDIs` assigns `pfnCalcPrivateShaderSize`, `pfnDestroyShader`,
+  `pfnVsSetShader` and `pfnPsSetShader` for the immediate device and leaves
+  `pfnCreateVertexShader` and `pfnCreatePixelShader` unassigned. The only
+  device that fills them is `DeviceDeferred`, and what it fills them with is
+  `PopulateDeferredShaderInit` — a function that ignores the bytecode
+  entirely and records a deferred-to-immediate handle mapping taken from
+  `hRTShader.handle`. So creation is reachable only through
+  `ID3D11On12DDIDevice::CreateVertexShader`/`CreatePixelShader`, whose own
+  header comment calls them the "shader creates which take the full containers
+  instead of driver bytecode". Promoting the two table typedefs was still
+  right — they are part of the frozen contract and a different driver may fill
+  them — but promotion was never what unblocked shader creation.
+- **Which sizing slot each shader stage must use**: the table carries exactly
+  three shader sizing slots and no compute-specific one. Hull and domain take
+  `pfnCalcPrivateTessellationShaderSize`, whose signature argument is the
+  tessellation kind; vertex, pixel, geometry and compute take
+  `pfnCalcPrivateShaderSize`. Getting this wrong is not a cosmetic error — the
+  driver placement-constructs its shader object into the block the host sized,
+  so an undersized block is heap corruption inside the driver.
+
+  That one slot can serve four differently-typed driver objects is the
+  *driver's own invariant*, not an assumption here. Its shader class is a
+  template over the pipeline interface, and the only member whose type varies
+  with that parameter is the pipeline-state cache key
+  (`PSOCacheKeyType<TIface>`, which specialises for compute). The key is never
+  stored: `PipelineStateCacheKeyComponent<Key>` holds only a
+  `std::vector<std::weak_ptr<CacheEntry<Key>>>`, which is one size whatever
+  `Key` is. So every instantiation has identical layout — and it has to,
+  because with no compute sizing slot in the table the runtime can only ever
+  have sized a compute shader through `pfnCalcPrivateShaderSize` while the
+  driver built a compute object in the result.
+
+  `pfnCalcPrivateGeometryShaderWithStreamOutput` is deliberately never called.
+  It sizes `StreamOutShader`, which derives from the ordinary geometry shader
+  and adds four vectors and a `UINT` — a strictly larger object. The host
+  always passes a null stream-output argument, so the driver never builds one;
+  the mock driver leaves that sizing slot null and latches any attempt to
+  describe a stream, so the two facts cannot drift apart.
+- **Whether the driver retains the caller's shader bytecode**: it does not.
+  `CreateUnderlyingShader` in `include/Shader.inl` copies the container into
+  its own `unique_ptr<BYTE[]>` before doing anything with it, on both the
+  DXIL-conversion and the direct paths, and the shader object owns that copy
+  for its lifetime. The host passes the caller's pointer straight through and
+  keeps nothing; `tests/d3d11on12shaderlifecycle.c` asserts the driver was
+  shown the caller's own address and then overwrites the buffer before
+  binding, so a host that started retaining it would fail there.
+
 ### Active open questions
 
 - **Extent of `d3dkmthk.h` types in host signatures**: `D3D11On12`'s `pch.hpp`
@@ -514,6 +597,17 @@ declaration nothing yet needs.
   lists display-kernel paths as disabled for this port, so the host may answer
   the driver's device-removal probe directly rather than forwarding it to
   Wine's D3DKMT. Declaring the slot does not decide this.
+- **What to pass `pfnCalcPrivateShaderSize` on a container path**: the two
+  calls disagree about what a shader is. The sizing slot takes the DDI's
+  driver bytecode — a token stream whose length is its own second word, which
+  is what `_In_reads_(pShaderCode[1])` on the driver's own declaration says —
+  while the only reachable creation call takes a DXBC container. The same
+  pointer cannot be both, so the host passes null for both arguments and the
+  pinned driver is indifferent: its `CalcPrivateSize` ignores them and returns
+  a fixed `sizeof`. A driver that did read them could not be served by this
+  pairing at all. Whether that is an upstream inconsistency or a runtime
+  contract nobody wrote down is unresolved; the host's mock refuses a non-null
+  argument so the assumption cannot quietly change.
 - **Whether the pinned driver ever calls the two undeclared core-layer slots**:
   if `pfnShaderCacheGetValueCb` or `pfnQueryScanoutCapsCb` is invoked, the host
   needs their real signatures and the published set does not have them. Group 1

@@ -99,7 +99,8 @@ Below is the structured roadmap of what is yet to be done.
 ## 3. Core DDI Function Implementations
 
 **3.1. Removing Placeholders**
-* **Status:** Ongoing — 57 of 138 PFN typedefs promoted, covering 73 of 178 slots
+* **Status:** Ongoing — 59 of 138 PFN typedefs promoted, covering 76 of 178 slots
+* **Done:** the device lifecycle family — `pfnCalcPrivateDeviceSize` and `pfnDestroyDevice`. These complete the entry and exit points for the device state, unblocked by the `D3D10DDIARG_CALCPRIVATEDEVICESIZE` full structure.
 * **Done:** the command-list family — `pfnAbandonCommandList`,
   `pfnCommandListExecute`,
   `pfnDestroyCommandList`, `pfnRecycleCommandList`, and
@@ -149,10 +150,11 @@ Below is the structured roadmap of what is yet to be done.
 * **Done:** the element-layout, binding, and draw group — the callbacks that
   turn the objects above into a frame. `pfnCalcPrivateElementLayoutSize`,
   `pfnCreateElementLayout`, `pfnDestroyElementLayout`, `pfnIaSetInputLayout`,
-  `pfnIaSetVertexBuffers`, `pfnIaSetTopology`, `pfnSetRenderTargets`,
+  `pfnIaSetVertexBuffers`, `pfnIaSetIndexBuffer`, `pfnIaSetTopology`,
+  `pfnSetRenderTargets`,
   `pfnSetViewports`, `pfnSetBlendState`, `pfnSetDepthStencilState`,
   `pfnSetRasterizerState`, `pfnClearRenderTargetView`, and `pfnDraw`, plus
-  `PFND3D10DDI_SETSHADER`. Fourteen typedefs, nineteen slots: the SetShader
+  `PFND3D10DDI_SETSHADER`. Fifteen typedefs, twenty slots: the SetShader
   typedef covers all six stages, because its page gives one parameter list for
   all of them. That promotes `pfnGsSetShader`, `pfnHsSetShader`,
   `pfnDsSetShader` and `pfnCsSetShader` as a consequence of the shared type
@@ -207,10 +209,19 @@ makes the worklist a dependency order on structure groups, not a list of slots:
 | `D3D10_DDI_MAP`, `D3D10DDI_MAPPED_SUBRESOURCE` — **done** | all thirteen `pfn*ResourceMap`/`Unmap` slots and `pfnResourceCopy` — **done**; `pfnResourceCopyRegion`, `pfnResourceUpdateSubresourceUP`, `pfnDiscard`, and `pfnResourceConvert*` still require their own argument types |
 | SRV/RTV creation arguments (`D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW`, `D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW`) — **done** | `pfnCalcPrivateShaderResourceViewSize`, `pfnCreateShaderResourceView`, `pfnDestroyShaderResourceView`, `pfnCalcPrivateRenderTargetViewSize`, `pfnCreateRenderTargetView`, `pfnDestroyRenderTargetView` |
 | DSV/UAV creation arguments | every remaining `pfnCalcPrivate*ViewSize`/`pfnCreate*View`/`pfnDestroy*View`, `pfnClearRenderTargetView`, `pfnClearDepthStencilView`, `pfnClearView`, `pfnClearUnorderedAccessView*` |
-| Vertex/pixel shader creation (`D3D10DDI_H(RT)SHADER`) — **done** | `pfnCalcPrivateShaderSize`, `pfnCreateVertexShader`, `pfnCreatePixelShader`, `pfnDestroyShader` |
-| Stream-output and tessellation shader structures | `pfnCreateGeometryShader`, `pfnCalcPrivateGeometryShaderWithStreamOutput`, `pfnCreateGeometryShaderWithStreamOutput`, `pfnCreateHullShader`, `pfnCreateDomainShader`, `pfnCreateComputeShader`, `pfnCalcPrivateTessellationShaderSize`, `pfnCreateElementLayout`, the `pfn*SetShaderWithIfaces` family, `pfnRetrieveShaderComment`, `pfnAssignDebugBinary` |
+| Vertex/pixel shader creation (`D3D10DDI_H(RT)SHADER`) — **done**, but see §3.3: these declare the contract, and `pfnCreateVertexShader`/`pfnCreatePixelShader` are never filled by the pinned driver on the immediate device. Creation runs through `ID3D11On12DDIDevice` instead | `pfnCalcPrivateShaderSize`, `pfnCreateVertexShader`, `pfnCreatePixelShader`, `pfnDestroyShader` |
+| Tessellation IO signatures — **done**, pointer-only so incomplete | `pfnCalcPrivateTessellationShaderSize` — **done** |
+| Stream-output structures | `pfnCalcPrivateGeometryShaderWithStreamOutput`, `pfnCreateGeometryShaderWithStreamOutput`, the `pfn*SetShaderWithIfaces` family, `pfnRetrieveShaderComment`, `pfnAssignDebugBinary`. The six `pfnCreate*Shader` slots stay unpromoted **by choice, not blockage**: the pinned driver never fills them on the immediate device, so a promoted signature there would declare a contract nothing implements — see §3.3 |
 | State structures (blend, depth-stencil, rasterizer, sampler) — **done** | `pfnSetBlendState`, `pfnSetDepthStencilState`, `pfnSetRasterizerState` — **done**; `pfnPsSetSamplers` and the rest of the `pfn*SetSamplers` family remain, an untextured frame not needing them |
-| Element layout and input assembly — **done** | `pfnCalcPrivateElementLayoutSize`, `pfnCreateElementLayout`, `pfnDestroyElementLayout`, `pfnIaSetInputLayout`, `pfnIaSetVertexBuffers`, `pfnIaSetTopology` |
+| Element layout and input assembly — **done** | `pfnCalcPrivateElementLayoutSize`, `pfnCreateElementLayout`, `pfnDestroyElementLayout`, `pfnIaSetInputLayout`, `pfnIaSetVertexBuffers`, `pfnIaSetIndexBuffer`, `pfnIaSetTopology` |
+
+The Wine host now consumes this family as well: it reuses Wine's DXBC input
+signature parser to resolve semantic names to input registers, creates an owned
+driver element-layout handle, routes `IASetInputLayout`, rejects stale or
+foreign handles, and destroys surviving layouts before device teardown. Its
+lifetime tests also cover null unbinding, injected `pfnSetErrorCb` failure, and
+concurrent binding versus destruction; registry removal drains shared-lock
+binders before the driver handle is destroyed.
 | Depth-stencil and unordered-access view *handles* — **done** | `pfnSetRenderTargets`. The handles are declared; nothing promoted can create either kind of view, which is the MVP state |
 | Shader binding (`D3D10DDI_HSHADER`) — **done** | `pfnVsSetShader`, `pfnPsSetShader`, `pfnGsSetShader`, `pfnHsSetShader`, `pfnDsSetShader`, `pfnCsSetShader` — one typedef |
 | Query structures and `D3D10DDI_QUERY` | `pfnCalcPrivateQuerySize`, `pfnCreateQuery`, `pfnDestroyQuery`, `pfnQueryBegin`, `pfnQueryEnd`, `pfnQueryGetData`, `pfnSetPredication` |
@@ -231,9 +242,85 @@ only because the DestroyCommandList page states the two members may take one
 implementation.
 
 **3.3. WDDM Interface Translation**
-* **Status:** Ongoing
-* **Action:** Finalize the state/pipeline mapping mechanisms across `hs`, `ds`,
-  `ps`, and `vs` shaders natively against macOS translation limits.
+* **Status:** Ongoing — `vs` and `ps` cross the Wine/Relay12 boundary; the
+  six-stage implementation is written but not yet on this branch's ABI.
+* **Done here:** `vs` and `ps` creation, destruction, and immediate-context
+  binding cross the boundary with typed lifetime validation, published as
+  ordinal exports 12 to 16 and consumed by Wine patch 0014.
+* **Written, and waiting on a port:** the `ddi-device-lifecycle` branch
+  carries a single stage-parameterised `WineD3D11On12CreateShaderV1` covering
+  all six stages, with `tests/d3d11on12shaderlifecycle.c` driving it against
+  the mock driver. It reaches the host through the interface table rather
+  than through ordinal exports, and the two mechanisms claimed the same table
+  offsets and capability bits, so it could not come across in the
+  consolidation merge. Porting it onto the ordinal-export mechanism is the
+  action, and it subsumes the one below.
+* **Action:** Complete `hs`, `ds`, geometry, compute, and shader-interface
+  binding, preferably by porting the six-stage work rather than reimplementing
+  it stage by stage.
+
+The findings that shaped that implementation are recorded below and remain
+true regardless of which mechanism publishes it.
+
+* **Status:** Ongoing — `vs` and `ps` lifecycle and binding implemented
+* **Done:** the host now owns vertex and pixel shaders end to end.
+  `WineD3D11On12CreateShaderV1`, `WineD3D11On12DestroyShaderV1` and
+  `WineD3D11On12SetShaderV1` are published through the interface table at ABI
+  v4 behind `WINE_D3D11ON12_CAP_SHADER_LIFECYCLE`, and
+  `tests/d3d11on12shaderlifecycle.c` drives them against a mock driver that
+  reproduces the pinned driver's slot population exactly.
+* **The finding that shaped it, and which contradicts §3.1's framing:** no DDI
+  table slot creates a shader. The pinned driver's `FillContextDDIs` fills
+  `pfnCalcPrivateShaderSize`, `pfnDestroyShader`, `pfnVsSetShader` and
+  `pfnPsSetShader` for the immediate device and never assigns
+  `pfnCreateVertexShader` or `pfnCreatePixelShader`; the only device that
+  assigns them is the deferred context, via a `PopulateDeferredShaderInit`
+  that ignores the bytecode and records a handle mapping. Creation exists only
+  on `ID3D11On12DDIDevice`, which takes a DXBC container rather than driver
+  bytecode. So the host sizes and destroys and binds through the table, and
+  creates through the sub-object. See `docs/CLEANROOM-DDI.md`.
+* **What that means for §3.1:** promoting `pfnCreateVertexShader` and
+  `pfnCreatePixelShader` was not wrong — they are part of the frozen contract
+  and another driver may implement them — but the table promotion was never
+  what unblocked creation, and the dependency table below said otherwise.
+* **Bytecode lifetime, resolved by reading the driver rather than guessing:**
+  the caller's container is not retained. `CreateUnderlyingShader` copies it
+  into the shader object's own buffer inside the call. The host passes the
+  caller's pointer through and keeps no copy; the test pins this by asserting
+  the driver saw the caller's own address and then overwriting that buffer
+  before binding and destroying.
+* **Ownership, not just creation:** each shader's private block is tracked on
+  the device that made it, so closing a lifecycle whose shaders the caller
+  abandoned destroys them through the driver first rather than leaking a block
+  per shader. The list is unlocked, which the D3D11 immediate context's own
+  single-threaded contract is what justifies.
+* **Done:** all six stages. The transcription now runs through
+  `CreateComputeShader` (slot 21), and geometry, hull, domain and compute have
+  the same owned lifecycle as vertex and pixel.
+  `WINE_D3D11ON12_CAP_EXTENDED_SHADER_STAGES` advertises them; the ABI stays
+  at v4 because the interface table's shape did not change — the new stages
+  are new accepted values of an argument that was already a `UINT`.
+* **The sizing rule, which is the safety-critical part:** hull and domain size
+  through `pfnCalcPrivateTessellationShaderSize` — newly promoted for this,
+  since the placeholder alias is `void(*)(void)` and deliberately uncallable —
+  and the other four through `pfnCalcPrivateShaderSize`. The two signatures
+  differ only in the type of their signatures argument, and
+  `tests/d3d11ddishaderpromotednegative.c` now requires that difference to
+  make each slot reject the other's argument, so sizing a stage through the
+  wrong slot is a compile error rather than a heap overflow. One slot serving four differently-typed driver
+  objects is the driver's own invariant — its shader template's only
+  stage-dependent member is a cache key that is never stored — and it must
+  hold, because the table has no compute sizing slot at all. See
+  `docs/CLEANROOM-DDI.md`.
+* **Out of scope, and why it is a scope line rather than a gap:** a geometry
+  shader *with stream output* is a different, strictly larger driver object
+  (`StreamOutShader`, which adds four vectors). Reaching it means authoring
+  `D3D11DDIARG_CREATEGEOMETRYSHADERWITHSTREAMOUTPUT` and sizing through
+  `pfnCalcPrivateGeometryShaderWithStreamOutput`. The host always passes a
+  null stream-output argument, which is what selects the ordinary geometry
+  shader, so the structure stays an incomplete type and no stage constant can
+  ask for one.
+
 
 **3.4. CI & End-to-End Test Harness**
 * **Status:** Framework Drafted

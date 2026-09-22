@@ -1,0 +1,28 @@
+From: relay12 contributors
+Subject: [PATCH] d3d11on12: shim the _Maybenull_ SAL annotation
+
+d3dkmddi.h (pulled in transitively through d3dkmthk.h and d3d10umddi.h)
+annotates a DXGK_FLIPQUEUE_LOG_ENTRY* field with _Maybenull_. Nothing in
+this pch's include chain brings in a definition for it before that struct
+is parsed, so llvm-mingw rejects it as an unknown type name -- the same
+gap __in and __nullterminated already hit and were shimmed for just above.
+
+Defined empty, matching the existing shims: these SAL annotations carry
+no codegen meaning, only static-analysis intent that this toolchain does
+not consume.
+---
+diff --git a/include/pch.hpp b/include/pch.hpp
+index d1843ee..eb8fe3c 100644
+--- a/include/pch.hpp
++++ b/include/pch.hpp
+@@ -37,6 +37,10 @@ WINADAPTER_IID(IDxbcConverter,
+ #ifndef __nullterminated
+ #define __nullterminated
+ #endif
++
++#ifndef _Maybenull_
++#define _Maybenull_
++#endif
+ 
+ #ifdef WIN32_LEAN_AND_MEAN
+ // This defines NTSTATUS and other types that are needed for kernel headers

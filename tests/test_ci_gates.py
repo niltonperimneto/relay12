@@ -18,6 +18,7 @@
 import pathlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -28,6 +29,7 @@ sys.path.insert(0, str(REPOSITORY / "scripts"))
 
 import check_ddi_header  # noqa: E402
 import check_d3d11on12_port  # noqa: E402
+import check_wine_d3d11_backend  # noqa: E402
 import check_interface_acquisition  # noqa: E402
 import check_pe_audit  # noqa: E402
 import check_shared_state  # noqa: E402
@@ -56,6 +58,93 @@ def written(text, suffix=".h"):
     with handle:
         handle.write(text)
     return pathlib.Path(handle.name)
+
+
+class WineD3D11BackendGate(unittest.TestCase):
+    def make_tree(self, header, device):
+        temporary = tempfile.TemporaryDirectory()
+        root = pathlib.Path(temporary.name)
+        source = root / "dlls" / "d3d11"
+        source.mkdir(parents=True)
+        (source / "d3d11_private.h").write_text(header)
+        (source / "device.c").write_text(device)
+        (source / "buffer.c").write_text("\n".join(
+            check_wine_d3d11_backend.REQUIRED_BUFFER))
+        (source / "shader.c").write_text("\n".join(
+            check_wine_d3d11_backend.REQUIRED_SHADER))
+        (source / "texture.c").write_text("\n".join(
+            check_wine_d3d11_backend.REQUIRED_TEXTURE))
+        (source / "d3d11_main.c").write_text("\n".join(
+            check_wine_d3d11_backend.REQUIRED_MAIN))
+        (root / "configure.ac").write_text(
+            "WINE_CONFIG_MAKEFILE(dlls/d3d11on12host)")
+        host = root / "dlls" / "d3d11on12host"
+        host.mkdir()
+        (host / "Makefile.in").write_text(
+            "MODULE    = d3d11on12host.dll")
+        (host / "d3d11on12host.spec").write_text(
+            "@ stdcall D3D11On12CreateDevice()")
+        self.addCleanup(temporary.cleanup)
+        return root
+
+    def test_complete_lifecycle_seam_passes(self):
+        root = self.make_tree("\n".join(
+            check_wine_d3d11_backend.REQUIRED_HEADER), "\n".join(
+            check_wine_d3d11_backend.REQUIRED_DEVICE))
+        self.assertEqual(check_wine_d3d11_backend.check_tree(root), [])
+
+    def test_direct_flush_regression_is_rejected(self):
+        markers = list(check_wine_d3d11_backend.REQUIRED_DEVICE)
+        markers.remove("context->device->backend_ops->flush(context);")
+        root = self.make_tree("\n".join(
+            check_wine_d3d11_backend.REQUIRED_HEADER), "\n".join(markers))
+        errors = check_wine_d3d11_backend.check_tree(root)
+        self.assertTrue(any("backend_ops->flush" in error for error in errors))
+
+    def test_missing_separate_host_module_is_rejected(self):
+        root = self.make_tree("\n".join(
+            check_wine_d3d11_backend.REQUIRED_HEADER), "\n".join(
+            check_wine_d3d11_backend.REQUIRED_DEVICE))
+        (root / "dlls/d3d11on12host/Makefile.in").unlink()
+        errors = check_wine_d3d11_backend.check_tree(root)
+        self.assertTrue(any("Makefile.in is missing" in error for error in errors))
+
+    def test_shader_lifecycle_regression_is_rejected(self):
+        root = self.make_tree("\n".join(
+            check_wine_d3d11_backend.REQUIRED_HEADER), "\n".join(
+            check_wine_d3d11_backend.REQUIRED_DEVICE))
+        shader = root / "dlls/d3d11/shader.c"
+        shader.write_text(shader.read_text().replace(
+            "device_impl->backend_ops->destroy_vertex_shader(device_impl, shader);",
+            ""))
+        errors = check_wine_d3d11_backend.check_tree(root)
+        self.assertTrue(any("destroy_vertex_shader" in error for error in errors))
+
+
+    def test_texture2d_lifecycle_regression_is_rejected(self):
+        root = self.make_tree("\n".join(
+            check_wine_d3d11_backend.REQUIRED_HEADER), "\n".join(
+            check_wine_d3d11_backend.REQUIRED_DEVICE))
+        texture = root / "dlls/d3d11/texture.c"
+        texture.write_text(texture.read_text().replace(
+            "device_impl->backend_ops->destroy_texture2d(device_impl, texture);",
+            ""))
+        errors = check_wine_d3d11_backend.check_tree(root)
+        self.assertTrue(any("destroy_texture2d" in error for error in errors))
+
+    def test_positional_wined3d_backend_table_is_rejected(self):
+        """The table must stay designated.
+
+        A positional table already shifted every WineD3D entry after
+        destroy_buffer once, when create_texture2d and destroy_texture2d were
+        added to the ops struct. The gate has to catch a return to that form.
+        """
+        markers = list(check_wine_d3d11_backend.REQUIRED_DEVICE)
+        markers.remove(".set_vertex_shader = wined3d_backend_set_vertex_shader,")
+        root = self.make_tree("\n".join(
+            check_wine_d3d11_backend.REQUIRED_HEADER), "\n".join(markers))
+        errors = check_wine_d3d11_backend.check_tree(root)
+        self.assertTrue(any("set_vertex_shader" in error for error in errors))
 
 
 class D3D11On12PortGate(unittest.TestCase):
@@ -707,6 +796,34 @@ class PeAudit(unittest.TestCase):
                                   "Ordinal Base                    7")
         self.assertEqual(min(check_pe_audit.parse_exports(rebased)), 7)
 
+    def test_llvm_objdump_exports_are_read(self):
+        """llvm-mingw's objdump is llvm-objdump, which prints a different
+        export table. The toolchain migration to llvm-mingw silently turned
+        this gate into a no-op once already; both formats must parse to the
+        same table."""
+        llvm_objdump = (
+            "Export Table:\n"
+            " DLL name: d3d11shim.dll\n"
+            " Ordinal base: 1\n"
+            " Ordinal      RVA  Name\n"
+            "       1   0x1250  D3D11CreateDevice\n"
+            "       2   0x1260  D3D11CreateDeviceAndSwapChain\n"
+            "       3   0x1270  D3D11On12CreateDevice\n"
+            "       4   0x1280  WineD3D11ShimGetStatus\n"
+            "\n"
+            "The Import Tables:\n"
+            "    DLL Name: KERNEL32.dll\n"
+        )
+        self.assertEqual(check_pe_audit.parse_exports(llvm_objdump),
+                         check_pe_audit.parse_exports(OBJDUMP))
+
+    def test_unreadable_export_table_is_an_error_not_an_empty_table(self):
+        """Returning {} for output it cannot read is what made the llvm-mingw
+        migration silent: the caller compared an empty table and exited
+        non-zero with nothing to read."""
+        with self.assertRaises(ValueError):
+            check_pe_audit.parse_exports("a third objdump's output\n")
+
     def test_imports_are_lowercased(self):
         self.assertEqual(check_pe_audit.parse_imports(OBJDUMP),
                          {"kernel32.dll", "msvcrt.dll"})
@@ -737,6 +854,39 @@ class PeAudit(unittest.TestCase):
         errors = check_pe_audit.audit("d3d11shim.dll", extra, False)
         self.assertTrue(any("imports" in error for error in errors), errors)
 
+    def test_either_c_runtime_is_accepted(self):
+        """llvm-mingw publishes an msvcrt and a ucrt build of every release,
+        and the same snprintf/fputs calls link against msvcrt.dll under one
+        and a set of api-ms-win-crt-* stubs under the other.  The pinned
+        toolchain is the ucrt build, so that shape has to pass; the rule this
+        gate enforces is that nothing beyond kernel32 and a C runtime appears
+        either way."""
+        ucrt = "\n".join(
+            f"\tDLL Name: {name}\n\tvma:  Hint/Ord"
+            for name in sorted(check_pe_audit.CRT_IMPORTS[1]))
+        text = OBJDUMP.replace("\tDLL Name: msvcrt.dll\n\tvma:  Hint/Ord",
+                               ucrt)
+        self.assertEqual(
+            check_pe_audit.parse_imports(text),
+            {"kernel32.dll"} | check_pe_audit.CRT_IMPORTS[1])
+        self.assertEqual(check_pe_audit.audit("d3d11shim.dll", text, False),
+                         [])
+
+    def test_a_graphics_import_is_rejected_under_either_runtime(self):
+        """The router resolves every driver and diagnostic entry point at run
+        time.  A real import of one means that stopped happening, and it must
+        not be excused by whichever C runtime is in use."""
+        for index, crt in enumerate(check_pe_audit.CRT_IMPORTS):
+            with self.subTest(crt=sorted(crt)):
+                imports = "\n".join(
+                    f"\tDLL Name: {name}\n\tvma:  Hint/Ord"
+                    for name in sorted(crt | {"d3d12.dll"}))
+                text = OBJDUMP.replace(
+                    "\tDLL Name: msvcrt.dll\n\tvma:  Hint/Ord", imports)
+                errors = check_pe_audit.audit("d3d11shim.dll", text, False)
+                self.assertTrue(any("imports" in error for error in errors),
+                                (index, errors))
+
     def test_a_cxx_runtime_dependency_is_rejected(self):
         for library in ("libstdc++-6.dll", "libgcc_s_seh-1.dll"):
             with self.subTest(library=library):
@@ -749,6 +899,35 @@ class PeAudit(unittest.TestCase):
         errors = check_pe_audit.audit("d3d11mystery.dll", OBJDUMP, False)
         self.assertTrue(any("no expected export table" in error
                             for error in errors), errors)
+
+    def test_the_expected_tables_match_the_def_files(self):
+        """EXPECTED_EXPORTS is transcribed from the .def files rather than
+        parsed from them, so that a .def reorder fails instead of being
+        adopted.  That only holds while the transcription is current: this
+        gate's table sat at four entries while the core's .def had grown to
+        eighteen, and the workflow's own inline copy was what caught the
+        exports until it broke on a toolchain change.  This is the check that
+        the two agree."""
+        for module, source in (
+            ("d3d11shim.dll", "d3d11shim.def"),
+            ("d3d11on12core.dll", "d3d11on12core.def"),
+        ):
+            with self.subTest(module=module):
+                text = (REPOSITORY / "relay12-d3d11" / source).read_text()
+                declared = {}
+                for line in text.splitlines():
+                    line = line.split(";", 1)[0].strip()
+                    if not line or line == "EXPORTS":
+                        continue
+                    # "NAME @N" or "NAME = internal_name @N"
+                    match = re.match(r"(\S+)(?:\s*=\s*\S+)?\s+@(\d+)$", line)
+                    self.assertIsNotNone(
+                        match, f"{source}: unparsed export line {line!r}")
+                    declared[int(match.group(2))] = match.group(1)
+                self.assertEqual(
+                    check_pe_audit.EXPECTED_EXPORTS[module], declared,
+                    f"check_pe_audit.EXPECTED_EXPORTS[{module!r}] and "
+                    f"relay12-d3d11/{source} disagree")
 
 
 class LayoutModel(unittest.TestCase):
@@ -812,6 +991,7 @@ class LayoutModel(unittest.TestCase):
             if struct.padding()
         }
         self.assertEqual(padding, {
+            "D3D10DDIARG_CREATEELEMENTLAYOUT": [(12, 4)],
             "D3D10DDIARG_CREATEDEVICE": [(76, 4)],
             "D3D11DDIARG_CREATEDEFERREDCONTEXT": [(36, 4)],
             "D3D11DDIARG_CREATERESOURCE": [(76, 4)],
@@ -878,22 +1058,18 @@ class LayoutModel(unittest.TestCase):
                             for error in errors), errors)
 
     def test_an_unrecorded_promotion_is_caught(self):
-        # Any slot that is still a placeholder will do; this one is named
-        # because the instanced draws are gated on nothing this header has
-        # authored, so it will stay a placeholder for a while yet.  When it is
+        # Any slot that is still a placeholder will do. When it is
         # promoted, repoint this at another placeholder rather than deleting
         # it -- assertNotEqual below is what stops the substitution silently
         # becoming a no-op and the gate going untested.
         broken = self.header.replace(
-            "typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DRAWINSTANCED;",
-            "typedef VOID (*PFND3D10DDI_DRAWINSTANCED)("
-            "D3D10DDI_HDEVICE hDevice, UINT VertexCountPerInstance, "
-            "UINT InstanceCount, UINT StartVertexLocation, "
-            "UINT StartInstanceLocation);")
+            "typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DRAWAUTO;",
+            "typedef VOID (*PFND3D10DDI_DRAWAUTO)("
+            "D3D10DDI_HDEVICE hDevice);")
         self.assertNotEqual(broken, self.header)
         errors = self.check(broken)
         self.assertTrue(
-            any("PFND3D10DDI_DRAWINSTANCED" in error for error in errors),
+            any("PFND3D10DDI_DRAWAUTO" in error for error in errors),
             errors)
 
     def test_the_declared_and_published_arms_agree(self):

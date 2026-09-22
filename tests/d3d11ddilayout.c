@@ -19,9 +19,9 @@
  * that cannot tolerate it.
  *
  * Build (both languages must succeed):
- *   x86_64-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
+ *   x86_64-w64-mingw32-clang -std=gnu11 -O2 -Wall -Wextra -Werror \
  *       -Irelay12-d3d11/ddi -o d3d11ddilayout.exe tests/d3d11ddilayout.c
- *   x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Werror \
+ *   x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
  *       -Irelay12-d3d11/ddi -x c++ -o d3d11ddilayoutxx.exe tests/d3d11ddilayout.c
  */
 #include <stdio.h>
@@ -168,7 +168,14 @@ static void check_dirty_memory_padding(void)
     if (!create) return;
 
     memset(create, 0, sizeof(*create));
-    check_uninitialized_padding("D3D10DDIARG_CREATEDEVICE (zeroed)", create, sizeof(*create));
+    /* Asserted, not just reported: a memset that stopped covering the
+     * struct's padding would otherwise print and pass. */
+    if (check_uninitialized_padding("D3D10DDIARG_CREATEDEVICE (zeroed)",
+            create, sizeof(*create)) != 0)
+    {
+        printf("[fail] zeroing D3D10DDIARG_CREATEDEVICE left dirty padding\n");
+        failures++;
+    }
     
     struct layout_probe *probe = (struct layout_probe *)malloc_dirty(sizeof(*probe));
     if (!probe) return;
@@ -1139,6 +1146,20 @@ static SIZE_T stub_calc_private_shader_size(D3D10DDI_HDEVICE hDevice,
     return 64;
 }
 
+/* The tessellation sizing slot takes the tessellation signatures type, not
+ * the stage one.  Declaring the stub with that type is what proves the
+ * promoted signature is the distinct one it claims to be. */
+static SIZE_T stub_calc_private_tessellation_shader_size(
+        D3D10DDI_HDEVICE hDevice, const UINT *shader_code,
+        const D3D11_1DDIARG_TESSELLATION_IO_SIGNATURES *signatures)
+{
+    (void)hDevice;
+    (void)shader_code;
+    (void)signatures;
+    ++command_list_calls;
+    return 64;
+}
+
 static VOID stub_create_vertex_shader(D3D10DDI_HDEVICE hDevice,
         const UINT *shader_code, D3D10DDI_HSHADER shader,
         D3D10DDI_HRTSHADER rt_shader,
@@ -1227,6 +1248,16 @@ static VOID stub_ia_set_topology(D3D10DDI_HDEVICE hDevice,
 {
     (void)hDevice;
     (void)topology;
+    ++command_list_calls;
+}
+
+static VOID stub_ia_set_index_buffer(D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRESOURCE buffer, DXGI_FORMAT format, UINT offset)
+{
+    (void)hDevice;
+    (void)buffer;
+    (void)format;
+    (void)offset;
     ++command_list_calls;
 }
 
@@ -1697,6 +1728,8 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     funcs->pfnCreateRenderTargetView = stub_create_render_target_view;
     funcs->pfnDestroyRenderTargetView = stub_destroy_render_target_view;
     funcs->pfnCalcPrivateShaderSize = stub_calc_private_shader_size;
+    funcs->pfnCalcPrivateTessellationShaderSize =
+            stub_calc_private_tessellation_shader_size;
     funcs->pfnCreateVertexShader = stub_create_vertex_shader;
     funcs->pfnCreatePixelShader = stub_create_pixel_shader;
     funcs->pfnDestroyShader = stub_destroy_shader;
@@ -1706,6 +1739,7 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     funcs->pfnDestroyElementLayout = stub_destroy_element_layout;
     funcs->pfnIaSetInputLayout = stub_ia_set_input_layout;
     funcs->pfnIaSetVertexBuffers = stub_ia_set_vertex_buffers;
+    funcs->pfnIaSetIndexBuffer = stub_ia_set_index_buffer;
     funcs->pfnIaSetTopology = stub_ia_set_topology;
     funcs->pfnVsSetShader = stub_set_shader;
     funcs->pfnPsSetShader = stub_set_shader;
@@ -1830,6 +1864,9 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
             funcs->pfnDestroyRenderTargetView(device, rtv));
     CHECK_STACK("PFND3D11_1DDI_CALCPRIVATESHADERSIZE",
             (void)funcs->pfnCalcPrivateShaderSize(device, NULL, NULL));
+    CHECK_STACK("PFND3D11_1DDI_CALCPRIVATETESSELLATIONSHADERSIZE",
+            (void)funcs->pfnCalcPrivateTessellationShaderSize(device,
+                    NULL, NULL));
     CHECK_STACK("PFND3D11_1DDI_CREATEVERTEXSHADER",
             funcs->pfnCreateVertexShader(device, NULL, shader, rt_shader, NULL));
     CHECK_STACK("PFND3D11_1DDI_CREATEPIXELSHADER",
@@ -1846,6 +1883,9 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     CHECK_STACK("PFND3D10DDI_IA_SETVERTEXBUFFERS",
             funcs->pfnIaSetVertexBuffers(device, 0, 1, &vertex_buffer,
                     strides, offsets));
+    CHECK_STACK("PFND3D10DDI_IA_SETINDEXBUFFER",
+            funcs->pfnIaSetIndexBuffer(device, vertex_buffer,
+                    DXGI_FORMAT_R16_UINT, 0));
     CHECK_STACK("PFND3D10DDI_IA_SETTOPOLOGY",
             funcs->pfnIaSetTopology(device, 0));
     /* Six slots, one implementation: the shared typedef's whole claim. */
@@ -1926,14 +1966,14 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
         }
     }
 
-    if (command_list_calls == 74 && handle_count == 1)
+    if (command_list_calls == 76 && handle_count == 1)
     {
         printf("[ ok ] the promoted command-list, deferred-context, resource, state, view, shader, "
                 "and binding/draw slots are callable as declared\n");
     }
     else
     {
-        printf("[fail] %d of 74 promoted command/deferred/resource/state/"
+        printf("[fail] %d of 76 promoted command/deferred/resource/state/"
                 "view/shader/draw/scanout slots "
                 "reached their implementation\n", command_list_calls);
         ++failures;
@@ -2044,6 +2084,8 @@ static void check_device_funcs(void)
     CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateRasterizerState);
     CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnDestroyRasterizerState);
     CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCalcPrivateShaderSize);
+    CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS,
+            pfnCalcPrivateTessellationShaderSize);
     CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateVertexShader);
     CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreateGeometryShader);
     CHECK_FIELD(funcs, D3DWDDM2_6DDI_DEVICEFUNCS, pfnCreatePixelShader);
