@@ -46,11 +46,39 @@ EXPECTED_EXPORTS = {
         3: "D3D11On12CreateDevice",
         4: "WineD3D11ShimGetStatus",
     },
+    # Transcribed from relay12-d3d11/d3d11on12core.def, deliberately rather
+    # than parsed from it.  Fifteen Wine frontend patches resolve these by
+    # name through GetProcAddress, and the ordinals are a published contract,
+    # so this table is an independent statement of the intended ABI: a .def
+    # that reorders or renumbers keeps every name present and still breaks
+    # ordinal-bound consumers, and comparing the build against the .def would
+    # only prove the linker honoured whatever it was handed.
+    #
+    # Two layers, because the transcription can go stale -- it sat at four
+    # entries here while the .def had grown to eighteen.  This table is what
+    # the built DLL is audited against; the test that the transcription still
+    # matches the .def is test_the_expected_tables_match_the_def_files.  So a
+    # new or moved export fails loudly and has to be adopted here on purpose,
+    # which is the intent, rather than being picked up silently.
     "d3d11on12core.dll": {
         1: "WineD3D11On12GetABIVersion",
         2: "WineD3D11On12CreateDeviceV1",
         3: "WineD3D11On12GetInterface",
         4: "WineD3D11On12OpenAdapterV1",
+        5: "WineD3D11On12CreateBufferV1",
+        6: "WineD3D11On12DestroyBufferV1",
+        7: "WineD3D11On12SetVertexBuffersV1",
+        8: "WineD3D11On12SetIndexBufferV1",
+        9: "WineD3D11On12CreateInputLayoutV1",
+        10: "WineD3D11On12DestroyInputLayoutV1",
+        11: "WineD3D11On12SetInputLayoutV1",
+        12: "WineD3D11On12CreateVertexShaderV1",
+        13: "WineD3D11On12CreatePixelShaderV1",
+        14: "WineD3D11On12DestroyShaderV1",
+        15: "WineD3D11On12SetVertexShaderV1",
+        16: "WineD3D11On12SetPixelShaderV1",
+        17: "WineD3D11On12CreateTexture2DV1",
+        18: "WineD3D11On12DestroyTexture2DV1",
     },
 }
 
