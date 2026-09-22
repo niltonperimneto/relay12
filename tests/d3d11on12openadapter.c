@@ -628,9 +628,27 @@ int main(void)
         check(hr == S_OK && !texture_handle.hDrvResource
                 && !texture_handle.runtimeState,
               "Texture2D destruction clears the public handle");
-        hr = WineD3D11On12DestroyTexture2DV1(&texture_handle);
-        check(hr == E_INVALIDARG,
-              "a destroyed Texture2D handle cannot be destroyed twice");
+        get_resource_counts(&resource_created, &resource_destroyed,
+                &bad_resource_description);
+        {
+            const LONG destroyed_once = resource_destroyed;
+
+            /* Idempotent, like every other resource kind here: destruction
+             * reaches the driver once and a repeat is a no-op that leaves the
+             * caller's structure inert.  A stale handle must not be rejected
+             * -- that would make a late destroy after device teardown a
+             * failure rather than the double-free guard it exists to be. */
+            hr = WineD3D11On12DestroyTexture2DV1(&texture_handle);
+            check(hr == S_OK && !texture_handle.hDrvResource
+                    && !texture_handle.runtimeState,
+                  "a destroyed Texture2D handle destroys again idempotently");
+            get_resource_counts(&resource_created, &resource_destroyed,
+                    &bad_resource_description);
+            check(resource_destroyed == destroyed_once
+                    && !bad_resource_description,
+                  "a repeated Texture2D destroy reaches the driver no second "
+                  "time");
+        }
 
         /* Initial data, one entry per subresource. */
         texture_desc.MipLevels = 1;
