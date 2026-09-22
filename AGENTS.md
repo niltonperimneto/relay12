@@ -97,9 +97,15 @@ All modifications to this codebase must preserve the following architectural inv
 
 ## 4. Compilation and Toolchain Rules
 
-### 4.1 MinGW-w64 GCC Configuration
-- PE binaries are compiled with `x86_64-w64-mingw32-clang++` in C++17 mode.
-- Linkage against `libstdc++` and `libgcc_s` is prohibited to ensure runtime independence; PE binaries must import only `kernel32.dll` and `msvcrt.dll`.
+### 4.1 MinGW-w64 Toolchain Configuration
+- PE binaries are compiled with `x86_64-w64-mingw32-clang++` in C++17 mode. PR
+  validation pins llvm-mingw 20240619 (the `ucrt` asset); it is Clang, not GCC,
+  and rejects a number of constructs GCC accepted.
+- Linkage against `libstdc++` and `libgcc_s` is prohibited to ensure runtime
+  independence. PE binaries must import only `kernel32.dll` plus one C runtime:
+  `msvcrt.dll` under an msvcrt-targeted toolchain, or the seven
+  `api-ms-win-crt-*` stubs under a UCRT-targeted one. Nothing else — a graphics
+  or `ntdll` import means an entry point stopped being resolved at run time.
 - Code must be compiled with `-fno-exceptions -fno-rtti`.
 
 ### 4.2 PE Export Tables
@@ -114,12 +120,12 @@ All modifications to this codebase must preserve the following architectural inv
 | 4 | `WineD3D11ShimGetStatus` | Reports module status |
 
 #### `d3d11on12core.dll` (Core Boundary)
-| Ordinal | Symbol | Purpose |
-| ---: | :--- | :--- |
 Ordinals are part of the ABI and are never reused or renumbered. The
 authoritative list is [`relay12-d3d11/d3d11on12core.def`](file:///Users/niltonperimneto/Whisky/relay12/relay12-d3d11/d3d11on12core.def);
-`.github/workflows/pull-request.yml` asserts the built DLL matches it exactly,
-so this table is a reading aid and the `.def` is the contract.
+`scripts/check_pe_audit.py` compares the built DLL's whole ordinal table
+against its own transcription of that `.def`, and a gate test pins the
+transcription to the file, so this table is a reading aid and the `.def` is the
+contract.
 
 | Ordinal | Symbol | Purpose |
 | ---: | :--- | :--- |
@@ -137,7 +143,7 @@ so this table is a reading aid and the `.def` is the contract.
 Diagnostic logging is handled via [`relay12-d3d11/wine_d3d11_diag.h`](file:///Users/niltonperimneto/Whisky/relay12/relay12-d3d11/wine_d3d11_diag.h):
 1. Dynamically queries `__wine_dbg_output` from `ntdll.dll` via `GetProcAddress`.
 2. Falls back to `OutputDebugStringA`.
-3. Falls back to standard error via `msvcrt.dll`.
+3. Falls back to standard error via the C runtime.
 
 Deduplication latches ensure repeated failure conditions log only once per process.
 
