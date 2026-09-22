@@ -168,7 +168,14 @@ static void check_dirty_memory_padding(void)
     if (!create) return;
 
     memset(create, 0, sizeof(*create));
-    check_uninitialized_padding("D3D10DDIARG_CREATEDEVICE (zeroed)", create, sizeof(*create));
+    /* Asserted, not just reported: a memset that stopped covering the
+     * struct's padding would otherwise print and pass. */
+    if (check_uninitialized_padding("D3D10DDIARG_CREATEDEVICE (zeroed)",
+            create, sizeof(*create)) != 0)
+    {
+        printf("[fail] zeroing D3D10DDIARG_CREATEDEVICE left dirty padding\n");
+        failures++;
+    }
     
     struct layout_probe *probe = (struct layout_probe *)malloc_dirty(sizeof(*probe));
     if (!probe) return;
@@ -1959,14 +1966,14 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
         }
     }
 
-    if (command_list_calls == 75 && handle_count == 1)
+    if (command_list_calls == 76 && handle_count == 1)
     {
         printf("[ ok ] the promoted command-list, deferred-context, resource, state, view, shader, "
                 "and binding/draw slots are callable as declared\n");
     }
     else
     {
-        printf("[fail] %d of 75 promoted command/deferred/resource/state/"
+        printf("[fail] %d of 76 promoted command/deferred/resource/state/"
                 "view/shader/draw/scanout slots "
                 "reached their implementation\n", command_list_calls);
         ++failures;
