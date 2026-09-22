@@ -17,8 +17,8 @@
 #            status entry point above it rather than among it.
 #   imports  Both modules resolve __wine_dbg_output at run time instead of
 #            linking it, which is what keeps their import tables down to
-#            kernel32 and msvcrt.  If that ever became a real import, this is
-#            what says so.
+#            kernel32 and the C runtime.  If that ever became a real import,
+#            this is what says so.
 #   runtime  A libstdc++ or libgcc_s dependency would make these modules
 #            undeployable in a Wine prefix, and it appears by accident: one
 #            unguarded C++ construct is enough.
@@ -82,9 +82,35 @@ EXPECTED_EXPORTS = {
     },
 }
 
+# kernel32 plus one C runtime, and nothing else.  Which C runtime depends on
+# the toolchain build: llvm-mingw publishes an msvcrt and a ucrt variant of
+# every release, and the two spell the same snprintf/fputs/fflush calls as
+# either msvcrt.dll or a set of api-ms-win-crt-* stub libraries.  Both are
+# accepted because the choice belongs to whoever pins the toolchain, and the
+# rule this gate exists to enforce is unaffected by it: what must not appear
+# is a third-party or graphics import, which would mean __wine_dbg_output or
+# a driver entry point stopped being resolved at run time.
+#
+# A Wine prefix has to supply whichever set is used.  msvcrt is a Wine
+# builtin; the api-ms-win-crt-* stubs are builtins too in current Wine, which
+# is why the ucrt variant is deployable, but it is eight modules of surface
+# rather than two.
+CRT_IMPORTS = (
+    {"msvcrt.dll"},
+    {
+        "api-ms-win-crt-environment-l1-1-0.dll",
+        "api-ms-win-crt-heap-l1-1-0.dll",
+        "api-ms-win-crt-private-l1-1-0.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+        "api-ms-win-crt-stdio-l1-1-0.dll",
+        "api-ms-win-crt-string-l1-1-0.dll",
+        "api-ms-win-crt-time-l1-1-0.dll",
+    },
+)
+
 EXPECTED_IMPORTS = {
-    "d3d11shim.dll": {"kernel32.dll", "msvcrt.dll"},
-    "d3d11on12core.dll": {"kernel32.dll", "msvcrt.dll"},
+    "d3d11shim.dll": tuple({"kernel32.dll"} | crt for crt in CRT_IMPORTS),
+    "d3d11on12core.dll": tuple({"kernel32.dll"} | crt for crt in CRT_IMPORTS),
 }
 
 CXX_RUNTIME = re.compile(r"libstdc\+\+|libgcc_s", re.IGNORECASE)
@@ -192,9 +218,11 @@ def audit(path, text, runtime_only, require_export=None):
                       f"{EXPECTED_EXPORTS[module]}")
 
     imports = parse_imports(text)
-    if imports != EXPECTED_IMPORTS[module]:
-        errors.append(f"{module}: imports {sorted(imports)}, expected "
-                      f"{sorted(EXPECTED_IMPORTS[module])}")
+    accepted = EXPECTED_IMPORTS[module]
+    if imports not in accepted:
+        errors.append(
+            f"{module}: imports {sorted(imports)}, expected one of "
+            + " or ".join(str(sorted(option)) for option in accepted))
 
     return errors
 
