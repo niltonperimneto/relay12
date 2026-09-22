@@ -56,87 +56,115 @@ To avoid duplicating graphics contexts and GPU memory overhead, these engines ca
 
 ### Architecture Flowchart (Mermaid)
 
-The diagram below illustrates how Direct3D calls flow from the application through `relay12` down to underlying GPU driver backends:
+The diagram below illustrates how Direct3D calls flow from the application through `relay12` down to underlying GPU driver backends. Two pipelines run side by side: the game's **D3D12 pipeline** (blue) reaches its driver untouched, while its **D3D11 pipeline** (orange) is routed through `relay12` and lands on the game's *own* D3D12 device and queue.
 
 ```mermaid
+%%{init: {
+  "theme": "base",
+  "themeVariables": {
+    "fontFamily": "system-ui, -apple-system, sans-serif",
+    "fontSize": "14px",
+    "background": "#fbfbfa",
+    "textColor": "#0b0b0b",
+    "lineColor": "#52514e",
+    "edgeLabelBackground": "#fbfbfa",
+    "clusterBkg": "#f0efec",
+    "clusterBorder": "#c3c2b7"
+  },
+  "flowchart": { "nodeSpacing": 40, "rankSpacing": 55, "padding": 10 }
+}}%%
 flowchart TB
-    subgraph AppTier ["Application Layer (Game / 3D Engine)"]
-        Game["Game Application\n(Unity 6, Unreal Engine 5, Hybrid 3D/Media)"]
-        D3D12Calls["Direct3D 12 API Calls\n(Main 3D Scene Pipeline)"]
-        D3D11Calls["Direct3D 11 API Calls\n(Media Foundation, UI, 2D HUD)"]
+    subgraph AppTier ["Application — game process"]
+        Game["Game or 3D engine<br/>Unity 6 · Unreal Engine 5 · Frostbite"]
+        D3D12Calls["D3D12 API calls<br/>main 3D scene"]
+        D3D11Calls["D3D11 API calls<br/>UI · 2D HUD · Media Foundation"]
     end
 
-    subgraph RouterTier ["PE Router (d3d11shim.dll)"]
-        Shim{"Export Router\n(d3d11.dll drop-in)"}
-        Ord12["Ordinals 1 & 2:\nD3D11CreateDevice[AndSwapChain]"]
-        Ord3["Ordinal 3:\nD3D11On12CreateDevice"]
-        Ord4["Ordinal 4:\nWineD3D11ShimGetStatus"]
+    subgraph RouterTier ["PE router — d3d11shim.dll"]
+        Shim{{"Export router<br/>drop-in for d3d11.dll"}}
+        Ord12["Ordinals 1–2<br/>D3D11CreateDevice[AndSwapChain]"]
+        Ord3["Ordinal 3<br/>D3D11On12CreateDevice"]
+        Ord4["Ordinal 4<br/>WineD3D11ShimGetStatus"]
     end
 
-    subgraph NativeTier ["Native D3D11 Driver"]
-        D3D11MT["d3d11mt.dll\n(Apple D3DMetal / Native Wine D3D11)"]
+    subgraph NativeTier ["Native D3D11 driver"]
+        D3D11MT["d3d11mt.dll<br/>Apple D3DMetal or WineD3D"]
     end
 
-    subgraph CoreTier ["relay12 Core & Clean-Room DDI Host"]
-        Core["Core Boundary: d3d11on12core.dll\n- Command Queue Validation (DIRECT type)\n- Two-Tier COM Identity Verification\n- strictResult() Acquisition Funnel\n- Adapter & Device Lifecycle Owner"]
-        DDIHost["Clean-Room WDDM DDI Host\n(wine_d3d11ddi.h)\n- WDDM 2.6 / 2.7 Version Negotiation\n- D3DWDDM2_6DDI_DEVICEFUNCS (178 slots)\n- CoreLayer DeviceCallbacks (47 slots)\n- Natural 8-Byte Alignment (/Zp8)"]
+    subgraph CoreTier ["relay12 core and clean-room DDI host"]
+        Core["Core boundary — d3d11on12core.dll<br/>DIRECT queue validation · two-tier COM identity<br/>strictResult() funnel · adapter and device lifecycle"]
+        DDIHost["Clean-room WDDM DDI host — wine_d3d11ddi.h<br/>WDDM 2.6 / 2.7 negotiation · /Zp8 alignment<br/>178 DEVICEFUNCS slots · 47 CoreLayer callbacks"]
     end
 
-    subgraph MsftTier ["Microsoft Translation Stack"]
-        D3D11On12["Microsoft D3D11On12 UMD Driver\n(OpenAdapter_D3D11On12)"]
-        DTL["Microsoft D3D12TranslationLayer (DTL)\n(MinGW-w64 Ported via relay12 compat headers)"]
+    subgraph MsftTier ["Microsoft translation stack — prebuilt vendor code"]
+        D3D11On12["D3D11On12 UMD driver<br/>OpenAdapter_D3D11On12"]
+        DTL["D3D12TranslationLayer (DTL)<br/>ported to MinGW-w64 via relay12 compat headers"]
     end
 
-    subgraph D3D12Context ["Direct3D 12 Execution Context"]
-        AppQueue["Caller's ID3D12CommandQueue\n(Direct Command Queue)"]
-        AppDevice["Caller's ID3D12Device\n(Target D3D12 Device)"]
+    subgraph D3D12Context ["Caller's D3D12 objects"]
+        AppDevice["ID3D12Device<br/>target device"]
+        AppQueue["ID3D12CommandQueue<br/>DIRECT type"]
     end
 
-    subgraph DriverBackends ["Direct3D 12 Driver Implementations"]
-        D3DMetal["Apple D3DMetal / GPTK\n(macOS Apple Silicon / Metal 4)"]
-        VKD3D["VKD3D-Proton\n(Linux / Vulkan)"]
-        NativeHW["DirectX 12 Hardware Drivers\n(Windows / Native GPU)"]
+    subgraph DriverBackends ["D3D12 driver implementations"]
+        D3DMetal["Apple D3DMetal / GPTK<br/>macOS · Apple silicon · Metal 4"]
+        VKD3D["VKD3D-Proton<br/>Linux · Vulkan"]
+        NativeHW["Native GPU drivers<br/>Windows · DirectX 12"]
     end
 
-    %% Flow Connections
-    Game -->|Primary 3D Rendering| D3D12Calls
-    Game -->|UI, 2D, Video Playback| D3D11Calls
-
+    %% D3D11 pipeline — routed through relay12 (link indices 0-11)
+    Game -->|"UI, 2D, video playback"| D3D11Calls
     D3D11Calls --> Shim
-    Shim -->|Standard D3D11| Ord12
-    Shim -->|D3D11On12 Entry| Ord3
-    Shim -->|Diagnostic Query| Ord4
-
-    Ord12 -->|Forwarded Unmodified| D3D11MT
-    Ord3 -->|Validated Dispatch| Core
+    Shim -->|"standard D3D11"| Ord12
+    Shim -->|"D3D11On12 entry"| Ord3
+    Shim -->|"diagnostic query"| Ord4
+    Ord12 -->|"forwarded unmodified"| D3D11MT
+    Ord3 -->|"validated dispatch"| Core
     Core --> DDIHost
-    DDIHost <-->|WDDM 2.6 / 2.7 DDI Tables| D3D11On12
+    DDIHost <-->|"WDDM 2.6 / 2.7 DDI tables"| D3D11On12
     D3D11On12 --> DTL
+    DTL -->|"command lists, resource barriers"| AppQueue
+    DTL -->|"allocations, queries"| AppDevice
 
+    %% D3D12 pipeline — never touched by relay12 (link indices 12-16)
+    Game -->|"primary 3D rendering"| D3D12Calls
     D3D12Calls --> AppDevice
     D3D12Calls --> AppQueue
-
-    DTL -->|Command Lists / Resource Barriers| AppQueue
-    DTL -->|Resource Allocations & Queries| AppDevice
-
     AppQueue --> DriverBackends
     AppDevice --> DriverBackends
 
-    %% Styling
-    classDef app fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,color:#01579b;
-    classDef router fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#e65100;
-    classDef core fill:#e8f5e9,stroke:#388e3c,stroke-width:2px,color:#1b5e20;
-    classDef msft fill:#ede7f6,stroke:#512da8,stroke-width:2px,color:#311b92;
-    classDef d3d12 fill:#fce4ec,stroke:#c2185b,stroke-width:2px,color:#880e4f;
-    classDef driver fill:#f5f5f5,stroke:#616161,stroke-width:2px,color:#212121;
+    %% Colour carries ownership: blue = caller, orange = relay12,
+    %% grey = prebuilt Microsoft code, green = driver-side implementation.
+    classDef caller fill:#9bbfe9,stroke:#1b4d89,stroke-width:1.5px,color:#1b4d89;
+    classDef relay fill:#f4b79f,stroke:#7a361b,stroke-width:1.5px,color:#7a361b;
+    classDef vendor fill:#bebdba,stroke:#4e4d49,stroke-width:1.5px,color:#4e4d49;
+    classDef impl fill:#94d8bf,stroke:#0e5c40,stroke-width:1.5px,color:#0e5c40;
 
-    class Game,D3D12Calls,D3D11Calls app;
-    class Shim,Ord12,Ord3,Ord4,D3D11MT router;
-    class Core,DDIHost core;
-    class D3D11On12,DTL msft;
-    class AppQueue,AppDevice d3d12;
-    class D3DMetal,VKD3D,NativeHW driver;
+    class Game,D3D11Calls,D3D12Calls,AppDevice,AppQueue caller;
+    class Shim,Ord12,Ord3,Ord4,Core,DDIHost relay;
+    class D3D11On12,DTL vendor;
+    class D3D11MT,D3DMetal,VKD3D,NativeHW impl;
+
+    style AppTier fill:#bcd4ef,stroke:#2a78d6,stroke-width:1px,color:#1b4d89;
+    style D3D12Context fill:#bcd4ef,stroke:#2a78d6,stroke-width:1px,color:#1b4d89;
+    style RouterTier fill:#f6cfbf,stroke:#eb6834,stroke-width:1px,color:#7a361b;
+    style CoreTier fill:#f6cfbf,stroke:#eb6834,stroke-width:1px,color:#7a361b;
+    style MsftTier fill:#d3d3d0,stroke:#77756e,stroke-width:1px,color:#4e4d49;
+    style NativeTier fill:#b8e4d4,stroke:#1baf7a,stroke-width:1px,color:#0e5c40;
+    style DriverBackends fill:#b8e4d4,stroke:#1baf7a,stroke-width:1px,color:#0e5c40;
+
+    linkStyle 0,1,2,3,4,5,6,7,8,9,10,11 stroke:#eb6834,stroke-width:2px;
+    linkStyle 12,13,14,15,16 stroke:#2a78d6,stroke-width:2px;
 ```
+
+Colour is a wayfinding aid only — every box is labelled, so the diagram reads the same in greyscale or print:
+
+| Colour | Owner | Covers |
+|---|---|---|
+| Blue | The game | Its API call sites and the `ID3D12Device` / `ID3D12CommandQueue` it created |
+| Orange | `relay12` | `d3d11shim.dll`, `d3d11on12core.dll`, and the clean-room DDI host |
+| Grey | Microsoft | Prebuilt `D3D11On12` UMD driver and `D3D12TranslationLayer` |
+| Green | Driver vendors | Native D3D11 driver and the D3D12 backends `relay12` hands off to |
 
 ---
 
