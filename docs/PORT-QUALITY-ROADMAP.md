@@ -42,8 +42,8 @@ The D3D12TranslationLayer port proceeds in dependency order:
 3. Compile out ETW, Microsoft telemetry, and PIX without removing error paths.
 4. Replace isolated MSVC extensions and UUID helpers.
 5. Separate public-SDK functionality from optional WDK/DXBC functionality.
-6. Make CMake configure and compile every supported translation unit with
-   MinGW-w64 GCC C++17.
+6. Make CMake configure and compile every supported translation unit with a
+   MinGW-w64 C++17 cross toolchain (CI pins llvm-mingw 20240619 `ucrt`).
 7. Link and audit the static library, then consume it from D3D11On12.
 
 Each step updates `docs/dtl-portability-baseline.json`; unexplained count
