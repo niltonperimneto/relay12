@@ -649,6 +649,11 @@ void CALLBACK hostSetError(D3D10DDI_HRTCORELAYER runtimeDevice,
         InterlockedExchange(&state->lastDdiError, result);
 }
 
+void CALLBACK hostPerformAmortizedProcessing(D3D10DDI_HRTCORELAYER runtimeDevice) noexcept
+{
+    (void)runtimeDevice;
+}
+
 void destroyRenderTargetState(RenderTargetState *view) noexcept;
 void destroyAllRenderTargets(AdapterState *owner) noexcept;
 
@@ -761,6 +766,7 @@ HRESULT createDriverDevice(AdapterState **statePtr,
     createDevice.ppfnRetrieveSubObject = &state->retrieveSubObject;
     createDevice.hRTCoreLayer.handle = state;
     state->coreCallbacks.pfnSetErrorCb = hostSetError;
+    state->coreCallbacks.pfnPerformAmortizedProcessingCb = hostPerformAmortizedProcessing;
 
     state->hDevice.pDrvPrivate = state->privateDevice;
     createDevice.hDrvDevice = state->hDevice;

@@ -65,3 +65,13 @@ the converter is now available for the next run.
 
 Real GPU pixel acceptance and the full branch validation workflow remain to be
 recorded. Keep publication experimental until those checks pass.
+
+## Next decision point
+
+The next engineering action is a real Apple Silicon run, not another expansion
+of the callback surface. If all three iterations produce the expected pixels
+and clean teardown, retain the opt-in while adding soak and partial-failure
+coverage, then move to wrapped-resource acquire/release and caller-queue
+synchronization. If the run fails, use the harness's last `[stage]` line and
+module list to isolate one boundary and add a regression for that boundary
+before extending functionality.

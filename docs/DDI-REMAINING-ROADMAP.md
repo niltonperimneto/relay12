@@ -85,7 +85,7 @@ Below is the structured roadmap of what is yet to be done.
   points and all seven diagnostic latches, with a bounded join so a deadlock
   is a named failure rather than a hung runner. The CI step captures stderr and
   requires each latch to have reported exactly once.
-* **Not the device function table.** 173 of its 178 slots are still
+* **Not the whole device function table.** 102 of its 178 slots are still
   non-callable placeholders, so a test hammering them would race its own stubs
   and pass regardless of the eventual implementation.
 
