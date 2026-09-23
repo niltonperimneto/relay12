@@ -6,11 +6,20 @@
 
 #include "../relay12-d3d11/wine_d3d11on12_shader.h"
 
-struct mock_image { UINT width, height; BYTE *pixels; };
-struct mock_rtv { struct mock_image *image; };
-static struct mock_rtv *bound_rtv;
-static volatile LONG fail_frame;
-static LONG rtv_created, rtv_destroyed, maps, unmaps;
+/* Storage the mock owns, so a readback can be compared byte for byte rather
+ * than merely counted.  One image per resource and one image per view is all
+ * the first frame needs: clear, draw a pixel, copy, map. */
+struct mock_image
+{
+    UINT width;
+    UINT height;
+    BYTE *pixels;
+};
+
+struct mock_rtv
+{
+    struct mock_image *image;
+};
 
 static LONG open_calls;
 static LONG create_calls;
@@ -26,6 +35,10 @@ static INT last_topology;
 static LONG resource_create_calls;
 static LONG resource_destroy_calls;
 static int bad_resource_description;
+/* Resource creation is the most elaborate thing the core publishes -- a mip
+ * array, an upload array, a subresource map table and two registry links --
+ * so it is the one whose failure path is worth being able to drive. */
+static volatile LONG fail_next_resource;
 /* What the last Texture2D creation actually carried into the DDI.
  *
  * Recorded rather than asserted in place: the mip array is the part of
@@ -64,6 +77,26 @@ static void *last_vertex_shader;
 static void *last_pixel_shader;
 static int bad_shader_description;
 static volatile LONG fail_next_shader;
+/* The frame path: views, render targets and staging readback.
+ *
+ * The counters go through Interlocked* like every other counter here, but the
+ * bound view is a plain volatile store.  Only SetRenderTargets, Draw and
+ * DestroyRenderTargetView touch it, and none of them is on the path the
+ * threaded stress tests in d3d11on12openadapter.c hammer -- those bind input
+ * layouts and shaders.  A test that does drive the frame path from several
+ * threads has to revisit this. */
+static struct mock_rtv *volatile bound_rtv;
+static LONG render_target_view_create_calls;
+static LONG render_target_view_destroy_calls;
+static LONG map_calls;
+static LONG unmap_calls;
+static int bad_frame_description;
+/* One injector per site rather than one shared flag.  Shared, whichever call
+ * the core reached first would consume it, so a test aiming at the readback
+ * path could silently end up testing view creation instead -- and would fail
+ * by reporting success from the call it meant to break. */
+static volatile LONG fail_next_render_target_view;
+static volatile LONG fail_next_map;
 /* const because the core-layer callback table belongs to the runtime and a
  * driver only reads it, which is how D3D10DDIARG_CREATEDEVICE declares it.
  * Dropping the qualifier here would let a mistake in the mock write through a
@@ -72,6 +105,69 @@ static const D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS *runtime_callbacks;
 static D3D10DDI_HRTCORELAYER runtime_device;
 static LONG amortized_processing_calls;
 static unsigned char adapter_private;
+
+/* Report a driver-side failure the way the DDI requires: through the
+ * runtime's callback table, which does not exist until a device has been
+ * created.  Returning whether the report landed lets a caller inject only
+ * when the failure can actually be seen -- an injector armed before the
+ * first CreateDevice becomes a no-op instead of a null dereference. */
+static BOOL mock_report_error(HRESULT error)
+{
+    if (!runtime_callbacks || !runtime_callbacks->pfnSetErrorCb)
+        return FALSE;
+    runtime_callbacks->pfnSetErrorCb(runtime_device, error);
+    return TRUE;
+}
+
+/* SIZE_T throughout: width and height are UINTs the core chose, and
+ * width * height * 4 in UINT arithmetic would wrap into a short allocation
+ * that every later access then runs past. */
+static SIZE_T mock_image_bytes(const struct mock_image *image)
+{
+    return (SIZE_T)image->width * image->height * 4;
+}
+
+/* Every frame entry point resolves its handle through one of these two, so a
+ * core that passes a handle it never created is recorded as a bad frame
+ * description instead of corrupting the heap.  That is the whole point of
+ * hand-writing a driver: a core bug has to arrive as a legible test failure,
+ * not as a crash in memcpy. */
+static struct mock_image *mock_image_of(void *private_resource)
+{
+    struct mock_image *image = private_resource;
+
+    if (!image || !image->pixels || !image->width || !image->height)
+    {
+        bad_frame_description = 1;
+        return NULL;
+    }
+    return image;
+}
+
+static struct mock_image *mock_image_of_view(void *private_view)
+{
+    struct mock_rtv *rtv = private_view;
+
+    if (!rtv)
+    {
+        bad_frame_description = 1;
+        return NULL;
+    }
+    return mock_image_of(rtv->image);
+}
+
+/* The DDI does not clamp a clear colour and neither does the core: the four
+ * floats are the application's.  Casting one outside [0,1] -- or a NaN -- to
+ * BYTE is undefined, so the clamp happens here, and the rounding is
+ * round-half-up so a 0.5 clear reads back as 128 rather than 127. */
+static BYTE mock_unorm8(FLOAT value)
+{
+    if (!(value > 0.0f))
+        return 0;
+    if (value >= 1.0f)
+        return 255;
+    return (BYTE)(value * 255.0f + 0.5f);
+}
 
 static HRESULT mock_get_versions(D3D10DDI_HADAPTER adapter, UINT32 *count,
         UINT64 *versions)
@@ -118,14 +214,29 @@ static BOOL mock_flush(D3D10DDI_HDEVICE device, UINT context_type,
 static void mock_draw(D3D10DDI_HDEVICE device, UINT vertex_count,
         UINT start_vertex_location)
 {
+    /* One opaque red pixel at the centre of whatever is bound.  Enough for a
+     * readback to prove the draw reached the bound target and not some other
+     * one, which is all a mock can honestly claim about a draw. */
+    struct mock_rtv *target = bound_rtv;
+
     (void)device;
     (void)vertex_count;
     (void)start_vertex_location;
-    if (bound_rtv)
+    if (target)
     {
-        struct mock_image *image = bound_rtv->image;
-        BYTE *pixel = image->pixels + (image->height / 2 * image->width + image->width / 2) * 4;
-        pixel[0] = 255; pixel[1] = 0; pixel[2] = 0; pixel[3] = 255;
+        struct mock_image *image = mock_image_of_view(target);
+
+        if (image)
+        {
+            BYTE *pixel = image->pixels
+                    + ((SIZE_T)(image->height / 2) * image->width
+                            + image->width / 2) * 4;
+
+            pixel[0] = 255;
+            pixel[1] = 0;
+            pixel[2] = 0;
+            pixel[3] = 255;
+        }
     }
     InterlockedIncrement(&draw_calls);
 }
@@ -178,6 +289,8 @@ static void mock_create_resource(D3D10DDI_HDEVICE device,
         const D3D11DDIARG_CREATERESOURCE *description,
         D3D10DDI_HRESOURCE resource, D3D10DDI_HRTRESOURCE runtime_resource)
 {
+    struct mock_image *image;
+
     (void)device;
     if (!description || !description->pMipInfoList || !resource.pDrvPrivate
             || !runtime_resource.handle)
@@ -187,14 +300,38 @@ static void mock_create_resource(D3D10DDI_HDEVICE device,
         return;
     }
 
+    /* Injected before anything is committed, and deliberately so: a driver
+     * that fails creation owns whatever it already allocated, because the
+     * runtime does not call pfnDestroyResource for a resource it was told
+     * was never created.  Allocating first and then failing would leak the
+     * pixels on every injected failure, and the soak would find it. */
+    if (InterlockedExchange(&fail_next_resource, 0)
+            && mock_report_error(E_OUTOFMEMORY))
+    {
+        InterlockedIncrement(&resource_create_calls);
+        return;
+    }
+
+    /* Initialised for every dimension, not just the one that grows pixels.
+     * mock_destroy_resource frees through this structure, so leaving a
+     * buffer's copy untouched would make the mock depend on the runtime
+     * having zeroed the private block -- true of this core, but not
+     * something the DDI promises. */
+    image = resource.pDrvPrivate;
+    image->width = 0;
+    image->height = 0;
+    image->pixels = NULL;
+
     if (description->ResourceDimension == D3D10DDIRESOURCE_TEXTURE2D)
     {
         UINT array_slice, mip;
 
-        struct mock_image *image = resource.pDrvPrivate;
         image->width = description->pMipInfoList->TexelWidth;
         image->height = description->pMipInfoList->TexelHeight;
-        image->pixels = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, image->width * image->height * 4);
+        image->pixels = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                mock_image_bytes(image));
+        if (!image->pixels)
+            bad_resource_description = 1;
         last_texture_width = description->pMipInfoList->TexelWidth;
         last_texture_height = description->pMipInfoList->TexelHeight;
         last_texture_mip_levels = description->MipLevels;
@@ -238,11 +375,16 @@ static void mock_create_resource(D3D10DDI_HDEVICE device,
 static void mock_destroy_resource(D3D10DDI_HDEVICE device,
         D3D10DDI_HRESOURCE resource)
 {
+    struct mock_image *image = resource.pDrvPrivate;
+
     (void)device;
-    if (!resource.pDrvPrivate)
+    if (!image)
         bad_resource_description = 1;
-    if (resource.pDrvPrivate && ((struct mock_image *)resource.pDrvPrivate)->pixels)
-        HeapFree(GetProcessHeap(), 0, ((struct mock_image *)resource.pDrvPrivate)->pixels);
+    else if (image->pixels)
+    {
+        HeapFree(GetProcessHeap(), 0, image->pixels);
+        image->pixels = NULL;
+    }
     InterlockedIncrement(&resource_destroy_calls);
 }
 
@@ -297,9 +439,8 @@ static void mock_create_element_layout(D3D10DDI_HDEVICE device,
             || !layout.pDrvPrivate || !runtime_layout.handle)
         bad_input_layout_description = 1;
     InterlockedIncrement(&input_layout_create_calls);
-    if (InterlockedExchange(&fail_next_input_layout, 0)
-            && runtime_callbacks && runtime_callbacks->pfnSetErrorCb)
-        runtime_callbacks->pfnSetErrorCb(runtime_device, E_OUTOFMEMORY);
+    if (InterlockedExchange(&fail_next_input_layout, 0))
+        mock_report_error(E_OUTOFMEMORY);
 }
 
 static void mock_destroy_element_layout(D3D10DDI_HDEVICE device,
@@ -323,9 +464,37 @@ static SIZE_T mock_calc_private_shader_size(D3D10DDI_HDEVICE device,
         const UINT *code, const D3D11_1DDIARG_STAGE_IO_SIGNATURES *signatures)
 {
     (void)device;
+    /* Both arguments must be null.  Sizing takes driver tokens and creation
+     * takes a DXBC container, so there is nothing legitimate the core could
+     * pass here; the pinned driver's own sizing callback ignores them and
+     * returns a constant.  Asserting they are null is what stops the core
+     * from drifting back to handing container bytes to a token reader. */
     if (code || signatures)
         bad_shader_description = 1;
     return 32;
+}
+
+/* Shared because the two stages must be held to the same contract: a mock
+ * that checked the vertex path more carefully than the pixel path would let
+ * exactly one stage's bug through. */
+static void mock_check_shader_desc(D3D10DDI_HSHADER shader,
+        const WineD3D11On12ShaderDesc *desc)
+{
+    UINT container_size;
+
+    if (!desc || !desc->pFunction || !shader.pDrvPrivate || desc->pLinkage
+            || desc->SizeInBytes < 32
+            || memcmp(desc->pFunction, "DXBC", 4))
+    {
+        bad_shader_description = 1;
+        return;
+    }
+    /* A DXBC container records its own length at offset 24.  Checking the
+     * forwarded size against it pins what the core has to get right without
+     * hardcoding the length of whichever blob a test happens to use. */
+    memcpy(&container_size, desc->pFunction + 24, sizeof(container_size));
+    if (desc->SizeInBytes != container_size)
+        bad_shader_description = 1;
 }
 
 static HRESULT STDMETHODCALLTYPE mock_create_vertex_shader(
@@ -333,10 +502,7 @@ static HRESULT STDMETHODCALLTYPE mock_create_vertex_shader(
         const WineD3D11On12ShaderDesc *desc)
 {
     (void)device;
-    if (!desc || !desc->pFunction || desc->SizeInBytes != 32
-            || memcmp(desc->pFunction, "DXBC", 4) || desc->pLinkage
-            || !shader.pDrvPrivate)
-        bad_shader_description = 1;
+    mock_check_shader_desc(shader, desc);
     InterlockedIncrement(&vertex_shader_create_calls);
     return InterlockedExchange(&fail_next_shader, 0) ? E_OUTOFMEMORY : S_OK;
 }
@@ -346,10 +512,7 @@ static HRESULT STDMETHODCALLTYPE mock_create_pixel_shader(
         const WineD3D11On12ShaderDesc *desc)
 {
     (void)device;
-    if (!desc || !desc->pFunction || desc->SizeInBytes != 32
-            || memcmp(desc->pFunction, "DXBC", 4) || desc->pLinkage
-            || !shader.pDrvPrivate)
-        bad_shader_description = 1;
+    mock_check_shader_desc(shader, desc);
     InterlockedIncrement(&pixel_shader_create_calls);
     return InterlockedExchange(&fail_next_shader, 0) ? E_OUTOFMEMORY : S_OK;
 }
@@ -384,74 +547,170 @@ static void mock_ps_set_shader(D3D10DDI_HDEVICE device,
     InterlockedIncrement(&pixel_shader_bind_calls);
 }
 
-static SIZE_T mock_rtv_size(D3D10DDI_HDEVICE device, const D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW *desc)
-{
-    (void)device; (void)desc;
-    return sizeof(struct mock_rtv);
-}
-static void mock_create_rtv(D3D10DDI_HDEVICE device, const D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW *desc,
-        D3D10DDI_HRENDERTARGETVIEW view, D3D10DDI_HRTRENDERTARGETVIEW runtime)
-{
-    (void)device; (void)runtime;
-    if (InterlockedExchange(&fail_frame, 0))
-    {
-        runtime_callbacks->pfnSetErrorCb(runtime_device, E_OUTOFMEMORY);
-        return;
-    }
-    ((struct mock_rtv *)view.pDrvPrivate)->image = desc->hDrvResource.pDrvPrivate;
-    ++rtv_created;
-}
-static void mock_destroy_rtv(D3D10DDI_HDEVICE device, D3D10DDI_HRENDERTARGETVIEW view)
+static SIZE_T mock_calc_private_render_target_view_size(D3D10DDI_HDEVICE device,
+        const D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW *description)
 {
     (void)device;
-    if (bound_rtv == view.pDrvPrivate) bound_rtv = NULL;
-    ++rtv_destroyed;
+    if (!description)
+        bad_frame_description = 1;
+    return sizeof(struct mock_rtv);
 }
-static void mock_set_targets(D3D10DDI_HDEVICE device, const D3D10DDI_HRENDERTARGETVIEW *views,
-        UINT count, UINT clear, D3D10DDI_HDEPTHSTENCILVIEW depth,
+
+static void mock_create_render_target_view(D3D10DDI_HDEVICE device,
+        const D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW *description,
+        D3D10DDI_HRENDERTARGETVIEW view, D3D10DDI_HRTRENDERTARGETVIEW runtime)
+{
+    struct mock_rtv *rtv = view.pDrvPrivate;
+
+    (void)device;
+    (void)runtime;
+    /* Injected before the description is honoured but after it is checked:
+     * a core that passes a malformed argument and a core that trips the
+     * injector are different bugs and must not report the same way. */
+    if (!description || !rtv || !description->hDrvResource.pDrvPrivate)
+    {
+        bad_frame_description = 1;
+        return;
+    }
+    if (InterlockedExchange(&fail_next_render_target_view, 0)
+            && mock_report_error(E_OUTOFMEMORY))
+        return;
+    rtv->image = description->hDrvResource.pDrvPrivate;
+    InterlockedIncrement(&render_target_view_create_calls);
+}
+
+static void mock_destroy_render_target_view(D3D10DDI_HDEVICE device,
+        D3D10DDI_HRENDERTARGETVIEW view)
+{
+    (void)device;
+    if (!view.pDrvPrivate)
+    {
+        bad_frame_description = 1;
+        return;
+    }
+    /* Unbind before the storage goes away.  A destroyed view left bound
+     * would be read by the next draw. */
+    if (bound_rtv == view.pDrvPrivate)
+        bound_rtv = NULL;
+    InterlockedIncrement(&render_target_view_destroy_calls);
+}
+
+static void mock_set_render_targets(D3D10DDI_HDEVICE device,
+        const D3D10DDI_HRENDERTARGETVIEW *views, UINT count, UINT clear,
+        D3D10DDI_HDEPTHSTENCILVIEW depth,
         const D3D11DDI_HUNORDEREDACCESSVIEW *uavs, const UINT *counts,
         UINT start, UINT num, UINT range_start, UINT range_size)
 {
-    (void)device; (void)clear; (void)depth; (void)uavs; (void)counts;
-    (void)start; (void)num; (void)range_start; (void)range_size;
-    bound_rtv = count ? views[0].pDrvPrivate : NULL;
-}
-static void mock_viewports(D3D10DDI_HDEVICE device, UINT count, UINT clear, const D3D10_DDI_VIEWPORT *views)
-{ (void)device; (void)count; (void)clear; (void)views; }
-static void mock_clear(D3D10DDI_HDEVICE device, D3D10DDI_HRENDERTARGETVIEW view, FLOAT color[4])
-{
-    struct mock_image *image = ((struct mock_rtv *)view.pDrvPrivate)->image;
-    UINT i, c;
     (void)device;
-    for (i = 0; i < image->width * image->height; ++i)
-        for (c = 0; c < 4; ++c) image->pixels[4*i+c] = (BYTE)(color[c]*255);
-}
-static void mock_copy(D3D10DDI_HDEVICE device, D3D10DDI_HRESOURCE dst, D3D10DDI_HRESOURCE src)
-{
-    struct mock_image *d = dst.pDrvPrivate, *s = src.pDrvPrivate;
-    (void)device;
-    memcpy(d->pixels, s->pixels, d->width * d->height * 4);
-}
-static void mock_map(D3D10DDI_HDEVICE device, D3D10DDI_HRESOURCE resource, UINT subresource,
-        D3D10_DDI_MAP mode, UINT flags, D3D10DDI_MAPPED_SUBRESOURCE *out)
-{
-    struct mock_image *image = resource.pDrvPrivate;
-    (void)device; (void)subresource; (void)mode; (void)flags;
-    if (InterlockedExchange(&fail_frame, 0))
+    (void)clear;
+    (void)depth;
+    (void)uavs;
+    (void)counts;
+    (void)start;
+    (void)num;
+    (void)range_start;
+    (void)range_size;
+    if (count && (!views || !views[0].pDrvPrivate))
     {
-        runtime_callbacks->pfnSetErrorCb(runtime_device, DXGI_ERROR_DEVICE_REMOVED);
+        bad_frame_description = 1;
         return;
     }
+    bound_rtv = count ? views[0].pDrvPrivate : NULL;
+}
+
+static void mock_set_viewports(D3D10DDI_HDEVICE device, UINT count,
+        UINT clear, const D3D10_DDI_VIEWPORT *viewports)
+{
+    (void)device;
+    (void)clear;
+    if (count && !viewports)
+        bad_frame_description = 1;
+}
+
+static void mock_clear_render_target_view(D3D10DDI_HDEVICE device,
+        D3D10DDI_HRENDERTARGETVIEW view, FLOAT color[4])
+{
+    struct mock_image *image = mock_image_of_view(view.pDrvPrivate);
+    BYTE rgba[4];
+    SIZE_T offset, bytes;
+    UINT channel;
+
+    (void)device;
+    if (!image || !color)
+    {
+        bad_frame_description = 1;
+        return;
+    }
+    for (channel = 0; channel < 4; ++channel)
+        rgba[channel] = mock_unorm8(color[channel]);
+    bytes = mock_image_bytes(image);
+    for (offset = 0; offset < bytes; offset += 4)
+        memcpy(image->pixels + offset, rgba, sizeof(rgba));
+}
+
+static void mock_resource_copy(D3D10DDI_HDEVICE device,
+        D3D10DDI_HRESOURCE destination, D3D10DDI_HRESOURCE source)
+{
+    struct mock_image *to = mock_image_of(destination.pDrvPrivate);
+    struct mock_image *from = mock_image_of(source.pDrvPrivate);
+
+    (void)device;
+    if (!to || !from)
+        return;
+    /* The core checks the two descriptions agree before it gets here, so a
+     * mismatch is a core bug.  Recording it beats copying the smaller of the
+     * two and beats reading past the end of the source. */
+    if (to->width != from->width || to->height != from->height)
+    {
+        bad_frame_description = 1;
+        return;
+    }
+    memcpy(to->pixels, from->pixels, mock_image_bytes(to));
+}
+
+static void mock_staging_resource_map(D3D10DDI_HDEVICE device,
+        D3D10DDI_HRESOURCE resource, UINT subresource, D3D10_DDI_MAP mode,
+        UINT flags, D3D10DDI_MAPPED_SUBRESOURCE *out)
+{
+    struct mock_image *image = mock_image_of(resource.pDrvPrivate);
+
+    (void)device;
+    (void)mode;
+    (void)flags;
+    if (!image || !out)
+    {
+        bad_frame_description = 1;
+        return;
+    }
+    /* One image per resource, so subresource 0 is the only one the mock can
+     * serve -- and it must not pretend otherwise.  Returning mip 0 for every
+     * index would hide a core that computed the wrong subresource, which is
+     * arithmetic the core does on its own and the only reason to check. */
+    if (subresource)
+    {
+        bad_frame_description = 1;
+        return;
+    }
+    if (InterlockedExchange(&fail_next_map, 0)
+            && mock_report_error(DXGI_ERROR_DEVICE_REMOVED))
+        return;
     out->pData = image->pixels;
     out->RowPitch = image->width * 4;
-    out->DepthPitch = image->width * image->height * 4;
-    ++maps;
+    out->DepthPitch = (UINT)mock_image_bytes(image);
+    InterlockedIncrement(&map_calls);
 }
-static void mock_unmap(D3D10DDI_HDEVICE device, D3D10DDI_HRESOURCE resource, UINT subresource)
-{ (void)device; (void)resource; (void)subresource; ++unmaps; }
-__declspec(dllexport) void WINAPI WineD3D11On12MockFailFrame(void) { InterlockedExchange(&fail_frame, 1); }
-__declspec(dllexport) void WINAPI WineD3D11On12MockFrameCounts(LONG *created, LONG *destroyed, LONG *mapped, LONG *unmapped)
-{ *created = rtv_created; *destroyed = rtv_destroyed; *mapped = maps; *unmapped = unmaps; }
+
+static void mock_staging_resource_unmap(D3D10DDI_HDEVICE device,
+        D3D10DDI_HRESOURCE resource, UINT subresource)
+{
+    (void)device;
+    if (!resource.pDrvPrivate || subresource)
+    {
+        bad_frame_description = 1;
+        return;
+    }
+    InterlockedIncrement(&unmap_calls);
+}
 
 static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
         D3D10DDIARG_CREATEDEVICE *args)
@@ -459,9 +718,17 @@ static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
     (void)adapter;
     if (!args || !args->pWDDM2_6DeviceFuncs)
         return E_INVALIDARG;
+    /* The driver is entitled to call back through the whole core-layer table
+     * without checking it, so a missing mandatory entry is rejected here
+     * rather than dereferenced later.  scripts/check_core_callbacks.py makes
+     * the same demand of the core by reading the source. */
     if (!args->pWDDM2_6UMCallbacks
+            || !args->pWDDM2_6UMCallbacks->pfnSetErrorCb
             || !args->pWDDM2_6UMCallbacks->pfnPerformAmortizedProcessingCb)
         return E_POINTER;
+    /* The vtable is written into the runtime's private device block below. */
+    if (!args->hDrvDevice.pDrvPrivate)
+        return E_INVALIDARG;
     if (!runtime_callbacks)
     {
         runtime_callbacks = args->pWDDM2_6UMCallbacks;
@@ -498,15 +765,21 @@ static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
     args->pWDDM2_6DeviceFuncs->pfnDestroyShader = mock_destroy_shader;
     args->pWDDM2_6DeviceFuncs->pfnVsSetShader = mock_vs_set_shader;
     args->pWDDM2_6DeviceFuncs->pfnPsSetShader = mock_ps_set_shader;
-    args->pWDDM2_6DeviceFuncs->pfnCalcPrivateRenderTargetViewSize = mock_rtv_size;
-    args->pWDDM2_6DeviceFuncs->pfnCreateRenderTargetView = mock_create_rtv;
-    args->pWDDM2_6DeviceFuncs->pfnDestroyRenderTargetView = mock_destroy_rtv;
-    args->pWDDM2_6DeviceFuncs->pfnSetRenderTargets = mock_set_targets;
-    args->pWDDM2_6DeviceFuncs->pfnSetViewports = mock_viewports;
-    args->pWDDM2_6DeviceFuncs->pfnClearRenderTargetView = mock_clear;
-    args->pWDDM2_6DeviceFuncs->pfnResourceCopy = mock_copy;
-    args->pWDDM2_6DeviceFuncs->pfnStagingResourceMap = mock_map;
-    args->pWDDM2_6DeviceFuncs->pfnStagingResourceUnmap = mock_unmap;
+    args->pWDDM2_6DeviceFuncs->pfnCalcPrivateRenderTargetViewSize =
+            mock_calc_private_render_target_view_size;
+    args->pWDDM2_6DeviceFuncs->pfnCreateRenderTargetView =
+            mock_create_render_target_view;
+    args->pWDDM2_6DeviceFuncs->pfnDestroyRenderTargetView =
+            mock_destroy_render_target_view;
+    args->pWDDM2_6DeviceFuncs->pfnSetRenderTargets = mock_set_render_targets;
+    args->pWDDM2_6DeviceFuncs->pfnSetViewports = mock_set_viewports;
+    args->pWDDM2_6DeviceFuncs->pfnClearRenderTargetView =
+            mock_clear_render_target_view;
+    args->pWDDM2_6DeviceFuncs->pfnResourceCopy = mock_resource_copy;
+    args->pWDDM2_6DeviceFuncs->pfnStagingResourceMap =
+            mock_staging_resource_map;
+    args->pWDDM2_6DeviceFuncs->pfnStagingResourceUnmap =
+            mock_staging_resource_unmap;
     InterlockedIncrement(&create_calls);
     return S_OK;
 }
@@ -597,6 +870,11 @@ __declspec(dllexport) void WINAPI WineD3D11On12MockDriverFailNextInputLayout(voi
     InterlockedExchange(&fail_next_input_layout, 1);
 }
 
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverFailNextResource(void)
+{
+    InterlockedExchange(&fail_next_resource, 1);
+}
+
 __declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetShaderCounts(
         LONG *vertex_created, LONG *pixel_created, LONG *destroyed,
         LONG *vertex_bound, LONG *pixel_bound, void **last_vertex,
@@ -615,6 +893,27 @@ __declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetShaderCounts(
 __declspec(dllexport) void WINAPI WineD3D11On12MockDriverFailNextShader(void)
 {
     InterlockedExchange(&fail_next_shader, 1);
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetFrameCounts(
+        LONG *view_created, LONG *view_destroyed, LONG *mapped,
+        LONG *unmapped, int *bad_description)
+{
+    if (view_created) *view_created = render_target_view_create_calls;
+    if (view_destroyed) *view_destroyed = render_target_view_destroy_calls;
+    if (mapped) *mapped = map_calls;
+    if (unmapped) *unmapped = unmap_calls;
+    if (bad_description) *bad_description = bad_frame_description;
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverFailNextView(void)
+{
+    InterlockedExchange(&fail_next_render_target_view, 1);
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverFailNextMap(void)
+{
+    InterlockedExchange(&fail_next_map, 1);
 }
 
 static HRESULT mock_close_adapter(D3D10DDI_HADAPTER adapter)

@@ -85,6 +85,10 @@ jobs:
           # including a header that needs the licensed overlay. A copy passed
           # by address to separately compiled code cannot be allowed to drift.
           python3 scripts/check_adapter_args.py
+          # The driver dereferences the core-layer callback table without
+          # checking it. An entry nobody assigns compiles and links, and
+          # crashes inside D3D11On12 on the first flush.
+          python3 scripts/check_core_callbacks.py
           # Linux filename semantics are part of the port contract. A local
           # build on a case-insensitive filesystem cannot establish this.
           python3 scripts/check_dtl_include_case.py "$worktree"
