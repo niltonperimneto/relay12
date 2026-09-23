@@ -1,0 +1,142 @@
+Subject: d3d11: retain backend textures through owned render-target views
+
+d3d11: retain backend textures through owned render-target views. The separate On12 host has no WineD3D resource to dispatch through;
+route only backend-owned objects and preserve the ordinary WineD3D path.
+
+diff --git a/dlls/d3d11/d3d11_main.c b/dlls/d3d11/d3d11_main.c
+index b04ec74f..52b6bffe 100644
+--- a/dlls/d3d11/d3d11_main.c
++++ b/dlls/d3d11/d3d11_main.c
+@@ -511,6 +511,9 @@ struct d3d11_on12_backend
+     UINT creation_flags;
+     wine_d3d11on12_create_buffer_fn create_buffer;
+     wine_d3d11on12_destroy_buffer_fn destroy_buffer;
++    HRESULT (WINAPI *create_rtv)(struct wine_d3d11on12_adapter_device *, void *,
++            const D3D11_RENDER_TARGET_VIEW_DESC *, void *);
++    HRESULT (WINAPI *destroy_rtv)(void *);
+     wine_d3d11on12_create_texture2d_fn create_texture2d;
+     wine_d3d11on12_destroy_texture2d_fn destroy_texture2d;
+     wine_d3d11on12_set_vertex_buffers_fn set_vertex_buffers;
+@@ -855,8 +858,34 @@ static HRESULT d3d11_on12_backend_get_d3d12_device(struct d3d_device *device,
+  * the table where a shifted entry would be least visible, because every op
+  * here is implemented and none is NULL, so nothing would crash -- each call
+  * would simply reach the wrong function through the wrong signature. */
++static HRESULT d3d11_on12_backend_create_rtv(struct d3d_device *device,
++        ID3D11Resource *resource, const D3D11_RENDER_TARGET_VIEW_DESC *desc,
++        struct d3d_rendertarget_view *view)
++{
++    struct d3d11_on12_backend *backend = device->backend_private;
++    struct d3d_texture2d *texture;
++    D3D11_RESOURCE_DIMENSION dimension;
++    if (!resource) return E_INVALIDARG;
++    ID3D11Resource_GetType(resource, &dimension);
++    if (dimension != D3D11_RESOURCE_DIMENSION_TEXTURE2D) return DXGI_ERROR_UNSUPPORTED;
++    texture = unsafe_impl_from_ID3D11Texture2D((ID3D11Texture2D *)resource);
++    if (!texture || !texture->backend_texture.runtime_state) return E_INVALIDARG;
++    view->backend_view.size = sizeof(view->backend_view);
++    return backend->create_rtv(&backend->adapter, &texture->backend_texture, desc, &view->backend_view);
++}
++
++static void d3d11_on12_backend_destroy_rtv(struct d3d_device *device, struct d3d_rendertarget_view *view)
++{
++    struct d3d11_on12_backend *backend = device->backend_private;
++    HRESULT hr = backend->destroy_rtv(&view->backend_view);
++    if (FAILED(hr)) WARN("On12 RTV destruction failed, hr %#lx.\n", hr);
++}
++
+ static const struct d3d11_backend_ops d3d11_on12_backend_ops =
+ {
++    .create_rtv = d3d11_on12_backend_create_rtv,
++    .destroy_rtv = d3d11_on12_backend_destroy_rtv,
++
+     .destroy_device = d3d11_on12_backend_destroy,
+     .get_feature_level = d3d11_on12_backend_get_feature_level,
+     .get_creation_flags = d3d11_on12_backend_get_creation_flags,
+@@ -1008,6 +1037,17 @@ static HRESULT d3d11_on12_create_unpublished_backend(IUnknown *device,
+         return DXGI_ERROR_UNSUPPORTED;
+     }
+ 
++    address = GetProcAddress(backend->core_module, "WineD3D11On12CreateRenderTargetViewV1");
++    memcpy(&backend->create_rtv, &address, sizeof(backend->create_rtv));
++    address = GetProcAddress(backend->core_module, "WineD3D11On12DestroyRenderTargetViewV1");
++    memcpy(&backend->destroy_rtv, &address, sizeof(backend->destroy_rtv));
++    if (!backend->create_rtv || !backend->destroy_rtv)
++    {
++        FreeLibrary(backend->core_module);
++        free(backend);
++        return DXGI_ERROR_UNSUPPORTED;
++    }
++
+     address = GetProcAddress(backend->core_module,
+             "WineD3D11On12OpenAdapterV1");
+     memcpy(&open_adapter, &address, sizeof(open_adapter));
+diff --git a/dlls/d3d11/d3d11_private.h b/dlls/d3d11/d3d11_private.h
+index 3894c946..a2bce6e7 100644
+--- a/dlls/d3d11/d3d11_private.h
++++ b/dlls/d3d11/d3d11_private.h
+@@ -229,6 +229,7 @@ struct d3d_depthstencil_view *unsafe_impl_from_ID3D10DepthStencilView(ID3D10Dept
+ /* ID3D11RenderTargetView, ID3D10RenderTargetView */
+ struct d3d_rendertarget_view
+ {
++    struct { UINT size, reserved; void *driver_view, *runtime_state; } backend_view;
+     ID3D11RenderTargetView ID3D11RenderTargetView_iface;
+     ID3D10RenderTargetView ID3D10RenderTargetView_iface;
+     LONG refcount;
+@@ -604,6 +605,10 @@ struct d3d11_device_context
+  * immediate context. WineD3D remains the default backend. */
+ struct d3d11_backend_ops
+ {
++    HRESULT (*create_rtv)(struct d3d_device *, ID3D11Resource *,
++            const D3D11_RENDER_TARGET_VIEW_DESC *, struct d3d_rendertarget_view *);
++    void (*destroy_rtv)(struct d3d_device *, struct d3d_rendertarget_view *);
++
+     void (*destroy_device)(struct d3d_device *device);
+     D3D_FEATURE_LEVEL (*get_feature_level)(struct d3d_device *device);
+     UINT (*get_creation_flags)(struct d3d_device *device);
+diff --git a/dlls/d3d11/view.c b/dlls/d3d11/view.c
+index ec55dba5..ca8c88f9 100644
+--- a/dlls/d3d11/view.c
++++ b/dlls/d3d11/view.c
+@@ -1397,7 +1397,7 @@ static ULONG STDMETHODCALLTYPE d3d11_rendertarget_view_AddRef(ID3D11RenderTarget
+ 
+     TRACE("%p increasing refcount to %lu.\n", view, refcount);
+ 
+-    if (refcount == 1)
++    if (refcount == 1 && !view->backend_view.runtime_state)
+     {
+         ID3D11Device5_AddRef(view->device);
+         wined3d_rendertarget_view_incref(view->wined3d_view);
+@@ -1416,6 +1416,16 @@ static ULONG STDMETHODCALLTYPE d3d11_rendertarget_view_Release(ID3D11RenderTarge
+     if (!refcount)
+     {
+         ID3D11Device5 *device = view->device;
++        if (view->backend_view.runtime_state)
++        {
++            struct d3d_device *owner = impl_from_ID3D11Device5(device);
++            owner->backend_ops->destroy_rtv(owner, view);
++            ID3D11Resource_Release(view->resource);
++            wined3d_private_store_cleanup(&view->private_store);
++            free(view);
++            ID3D11Device5_Release(device);
++            return 0;
++        }
+         wined3d_rendertarget_view_decref(view->wined3d_view);
+         ID3D11Device5_Release(device);
+     }
+@@ -1727,6 +1737,16 @@ static HRESULT d3d_rendertarget_view_init(struct d3d_rendertarget_view *view, st
+     if (FAILED(hr))
+         return hr;
+ 
++    if (device->backend_ops->create_rtv)
++    {
++        if (FAILED(hr = device->backend_ops->create_rtv(device, resource, &view->desc, view))) return hr;
++        wined3d_private_store_init(&view->private_store);
++        view->resource = resource;
++        ID3D11Resource_AddRef(resource);
++        ID3D11Device5_AddRef(view->device = &device->ID3D11Device5_iface);
++        return S_OK;
++    }
++
+     wined3d_mutex_lock();
+     if (!(wined3d_resource = wined3d_resource_from_d3d11_resource(resource)))
+     {

@@ -1,0 +1,49 @@
+Subject: dtl: reject sharing when the optional compatibility device is absent
+
+ImmediateContext already permits ID3D12CompatibilityDevice to be absent,
+but shared-resource operations unconditionally dereference it. D3DMetal
+supports owned resources without this Windows-specific interface. Reject
+sharing with DXGI_ERROR_UNSUPPORTED rather than dereferencing a null pointer.
+---
+diff --git a/src/Resource.cpp b/src/Resource.cpp
+--- a/src/Resource.cpp
++++ b/src/Resource.cpp
+@@ -524,6 +524,7 @@
+                 }
+                 else if (bCompatibilityCreateRequired)
+                 {
++                    if (!m_pParent->m_pCompatDevice) ThrowFailure(DXGI_ERROR_UNSUPPORTED);
+                     // Shared resources should use simultaneous access whenever possible
+                     // For future designs: Shared resources that cannot use simultaneous access should, in theory, transition to COMMON at every flush
+                     Desc12.Flags
+diff --git a/src/ImmediateContext.cpp b/src/ImmediateContext.cpp
+--- a/src/ImmediateContext.cpp
++++ b/src/ImmediateContext.cpp
+@@ -5403,6 +5403,7 @@
+ void TRANSLATION_API ImmediateContext::GetSharedGDIHandle(_In_ Resource *pResource, _Out_ HANDLE *pHandle)
+ {
+     assert(pResource->Parent()->IsGDIStyleHandleShared());
++    if (!m_pCompatDevice) ThrowFailure(DXGI_ERROR_UNSUPPORTED);
+     ThrowFailure(m_pCompatDevice->ReflectSharedProperties(pResource->GetUnderlyingResource(), D3D12_REFLECT_SHARED_PROPERTY_NON_NT_SHARED_HANDLE, pHandle, sizeof(*pHandle)));
+ }
+ 
+diff --git a/src/SharedResourceHelpers.cpp b/src/SharedResourceHelpers.cpp
+--- a/src/SharedResourceHelpers.cpp
++++ b/src/SharedResourceHelpers.cpp
+@@ -220,6 +220,7 @@
+         }
+         else
+         {
++            if (!m_ImmCtx.m_pCompatDevice) ThrowFailure(DXGI_ERROR_UNSUPPORTED);
+             D3D12_COMPATIBILITY_SHARED_FLAGS CompatFlags;
+             ThrowFailure(m_ImmCtx.m_pCompatDevice->ReflectSharedProperties(
+                 pObject, D3D12_REFELCT_SHARED_PROPERTY_COMPATIBILITY_SHARED_FLAGS, &CompatFlags, sizeof(CompatFlags)));
+@@ -263,7 +264,7 @@
+             D3D12_FEATURE_DATA_FORMAT_SUPPORT formatSupport = { Desc.Format };
+             (void)m_ImmCtx.m_pDevice12->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &formatSupport, sizeof(formatSupport));
+ 
+-            if (pOverrideFlags || FAILED(m_ImmCtx.m_pCompatDevice->ReflectSharedProperties(
++            if (pOverrideFlags || !m_ImmCtx.m_pCompatDevice || FAILED(m_ImmCtx.m_pCompatDevice->ReflectSharedProperties(
+                 spResource, D3D12_REFLECT_SHARED_PROPERTY_D3D11_RESOURCE_FLAGS, &Flags, sizeof(Flags))))
+             {
+                 // First, determine the full set of capabilities from the resource

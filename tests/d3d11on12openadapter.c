@@ -28,6 +28,7 @@
 #include <string.h>
 
 #include "d3d11on12core.h"
+#include "ddi/wine_d3d11ddi.h"
 #include "d3d11on12mocks.h"
 
 static int failures;
@@ -505,6 +506,9 @@ int main(void)
         check(hr == S_OK && !layout_stress.unexpected,
               "concurrent input-layout binding and destruction stays bounded");
 
+        check(!out.deviceFuncs->pfnCreateVertexShader
+                && !out.deviceFuncs->pfnCreatePixelShader,
+              "the immediate driver leaves shader creation table slots null");
         memset(&vertex_shader, 0, sizeof(vertex_shader));
         vertex_shader.size = sizeof(vertex_shader);
         hr = WineD3D11On12CreateVertexShaderV1(&out, shader_byte_code,

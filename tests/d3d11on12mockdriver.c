@@ -4,7 +4,13 @@
 #include <windows.h>
 #include <dxgi.h>
 
-#include "../relay12-d3d11/ddi/wine_d3d11ddi.h"
+#include "../relay12-d3d11/wine_d3d11on12_shader.h"
+
+struct mock_image { UINT width, height; BYTE *pixels; };
+struct mock_rtv { struct mock_image *image; };
+static struct mock_rtv *bound_rtv;
+static volatile LONG fail_frame;
+static LONG rtv_created, rtv_destroyed, maps, unmaps;
 
 static LONG open_calls;
 static LONG create_calls;
@@ -109,6 +115,12 @@ static void mock_draw(D3D10DDI_HDEVICE device, UINT vertex_count,
     (void)device;
     (void)vertex_count;
     (void)start_vertex_location;
+    if (bound_rtv)
+    {
+        struct mock_image *image = bound_rtv->image;
+        BYTE *pixel = image->pixels + (image->height / 2 * image->width + image->width / 2) * 4;
+        pixel[0] = 255; pixel[1] = 0; pixel[2] = 0; pixel[3] = 255;
+    }
     InterlockedIncrement(&draw_calls);
 }
 
@@ -153,7 +165,7 @@ static SIZE_T mock_calc_private_resource_size(D3D10DDI_HDEVICE device,
                     && description->ResourceDimension
                             != D3D10DDIRESOURCE_TEXTURE2D))
         bad_resource_description = 1;
-    return 32;
+    return sizeof(struct mock_image);
 }
 
 static void mock_create_resource(D3D10DDI_HDEVICE device,
@@ -173,6 +185,10 @@ static void mock_create_resource(D3D10DDI_HDEVICE device,
     {
         UINT array_slice, mip;
 
+        struct mock_image *image = resource.pDrvPrivate;
+        image->width = description->pMipInfoList->TexelWidth;
+        image->height = description->pMipInfoList->TexelHeight;
+        image->pixels = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, image->width * image->height * 4);
         last_texture_width = description->pMipInfoList->TexelWidth;
         last_texture_height = description->pMipInfoList->TexelHeight;
         last_texture_mip_levels = description->MipLevels;
@@ -219,6 +235,8 @@ static void mock_destroy_resource(D3D10DDI_HDEVICE device,
     (void)device;
     if (!resource.pDrvPrivate)
         bad_resource_description = 1;
+    if (resource.pDrvPrivate && ((struct mock_image *)resource.pDrvPrivate)->pixels)
+        HeapFree(GetProcessHeap(), 0, ((struct mock_image *)resource.pDrvPrivate)->pixels);
     InterlockedIncrement(&resource_destroy_calls);
 }
 
@@ -299,43 +317,41 @@ static SIZE_T mock_calc_private_shader_size(D3D10DDI_HDEVICE device,
         const UINT *code, const D3D11_1DDIARG_STAGE_IO_SIGNATURES *signatures)
 {
     (void)device;
-    (void)signatures;
-    if (!code || code[0] != 0x43425844)
+    if (code || signatures)
         bad_shader_description = 1;
     return 32;
 }
 
-static void mock_create_vertex_shader(D3D10DDI_HDEVICE device,
-        const UINT *code, D3D10DDI_HSHADER shader,
-        D3D10DDI_HRTSHADER runtime_shader,
-        const D3D11_1DDIARG_STAGE_IO_SIGNATURES *signatures)
+static HRESULT STDMETHODCALLTYPE mock_create_vertex_shader(
+        WineD3D11On12DDIDevice *device, D3D10DDI_HSHADER shader,
+        const WineD3D11On12ShaderDesc *desc)
 {
     (void)device;
-    (void)signatures;
-    if (!code || code[0] != 0x43425844 || !shader.pDrvPrivate
-            || !runtime_shader.handle)
+    if (!desc || !desc->pFunction || desc->SizeInBytes != 32
+            || memcmp(desc->pFunction, "DXBC", 4) || desc->pLinkage
+            || !shader.pDrvPrivate)
         bad_shader_description = 1;
     InterlockedIncrement(&vertex_shader_create_calls);
-    if (InterlockedExchange(&fail_next_shader, 0)
-            && runtime_callbacks && runtime_callbacks->pfnSetErrorCb)
-        runtime_callbacks->pfnSetErrorCb(runtime_device, E_OUTOFMEMORY);
+    return InterlockedExchange(&fail_next_shader, 0) ? E_OUTOFMEMORY : S_OK;
 }
 
-static void mock_create_pixel_shader(D3D10DDI_HDEVICE device,
-        const UINT *code, D3D10DDI_HSHADER shader,
-        D3D10DDI_HRTSHADER runtime_shader,
-        const D3D11_1DDIARG_STAGE_IO_SIGNATURES *signatures)
+static HRESULT STDMETHODCALLTYPE mock_create_pixel_shader(
+        WineD3D11On12DDIDevice *device, D3D10DDI_HSHADER shader,
+        const WineD3D11On12ShaderDesc *desc)
 {
     (void)device;
-    (void)signatures;
-    if (!code || code[0] != 0x43425844 || !shader.pDrvPrivate
-            || !runtime_shader.handle)
+    if (!desc || !desc->pFunction || desc->SizeInBytes != 32
+            || memcmp(desc->pFunction, "DXBC", 4) || desc->pLinkage
+            || !shader.pDrvPrivate)
         bad_shader_description = 1;
     InterlockedIncrement(&pixel_shader_create_calls);
-    if (InterlockedExchange(&fail_next_shader, 0)
-            && runtime_callbacks && runtime_callbacks->pfnSetErrorCb)
-        runtime_callbacks->pfnSetErrorCb(runtime_device, E_OUTOFMEMORY);
+    return InterlockedExchange(&fail_next_shader, 0) ? E_OUTOFMEMORY : S_OK;
 }
+
+static const WineD3D11On12DDIDeviceVtbl shader_device_vtbl = {
+    .CreateVertexShader = mock_create_vertex_shader,
+    .CreatePixelShader = mock_create_pixel_shader,
+};
 
 static void mock_destroy_shader(D3D10DDI_HDEVICE device,
         D3D10DDI_HSHADER shader)
@@ -361,6 +377,75 @@ static void mock_ps_set_shader(D3D10DDI_HDEVICE device,
     last_pixel_shader = shader.pDrvPrivate;
     InterlockedIncrement(&pixel_shader_bind_calls);
 }
+
+static SIZE_T mock_rtv_size(D3D10DDI_HDEVICE device, const D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW *desc)
+{
+    (void)device; (void)desc;
+    return sizeof(struct mock_rtv);
+}
+static void mock_create_rtv(D3D10DDI_HDEVICE device, const D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW *desc,
+        D3D10DDI_HRENDERTARGETVIEW view, D3D10DDI_HRTRENDERTARGETVIEW runtime)
+{
+    (void)device; (void)runtime;
+    if (InterlockedExchange(&fail_frame, 0))
+    {
+        runtime_callbacks->pfnSetErrorCb(runtime_device, E_OUTOFMEMORY);
+        return;
+    }
+    ((struct mock_rtv *)view.pDrvPrivate)->image = desc->hDrvResource.pDrvPrivate;
+    ++rtv_created;
+}
+static void mock_destroy_rtv(D3D10DDI_HDEVICE device, D3D10DDI_HRENDERTARGETVIEW view)
+{
+    (void)device;
+    if (bound_rtv == view.pDrvPrivate) bound_rtv = NULL;
+    ++rtv_destroyed;
+}
+static void mock_set_targets(D3D10DDI_HDEVICE device, const D3D10DDI_HRENDERTARGETVIEW *views,
+        UINT count, UINT clear, D3D10DDI_HDEPTHSTENCILVIEW depth,
+        const D3D11DDI_HUNORDEREDACCESSVIEW *uavs, const UINT *counts,
+        UINT start, UINT num, UINT range_start, UINT range_size)
+{
+    (void)device; (void)clear; (void)depth; (void)uavs; (void)counts;
+    (void)start; (void)num; (void)range_start; (void)range_size;
+    bound_rtv = count ? views[0].pDrvPrivate : NULL;
+}
+static void mock_viewports(D3D10DDI_HDEVICE device, UINT count, UINT clear, const D3D10_DDI_VIEWPORT *views)
+{ (void)device; (void)count; (void)clear; (void)views; }
+static void mock_clear(D3D10DDI_HDEVICE device, D3D10DDI_HRENDERTARGETVIEW view, FLOAT color[4])
+{
+    struct mock_image *image = ((struct mock_rtv *)view.pDrvPrivate)->image;
+    UINT i, c;
+    (void)device;
+    for (i = 0; i < image->width * image->height; ++i)
+        for (c = 0; c < 4; ++c) image->pixels[4*i+c] = (BYTE)(color[c]*255);
+}
+static void mock_copy(D3D10DDI_HDEVICE device, D3D10DDI_HRESOURCE dst, D3D10DDI_HRESOURCE src)
+{
+    struct mock_image *d = dst.pDrvPrivate, *s = src.pDrvPrivate;
+    (void)device;
+    memcpy(d->pixels, s->pixels, d->width * d->height * 4);
+}
+static void mock_map(D3D10DDI_HDEVICE device, D3D10DDI_HRESOURCE resource, UINT subresource,
+        D3D10_DDI_MAP mode, UINT flags, D3D10DDI_MAPPED_SUBRESOURCE *out)
+{
+    struct mock_image *image = resource.pDrvPrivate;
+    (void)device; (void)subresource; (void)mode; (void)flags;
+    if (InterlockedExchange(&fail_frame, 0))
+    {
+        runtime_callbacks->pfnSetErrorCb(runtime_device, DXGI_ERROR_DEVICE_REMOVED);
+        return;
+    }
+    out->pData = image->pixels;
+    out->RowPitch = image->width * 4;
+    out->DepthPitch = image->width * image->height * 4;
+    ++maps;
+}
+static void mock_unmap(D3D10DDI_HDEVICE device, D3D10DDI_HRESOURCE resource, UINT subresource)
+{ (void)device; (void)resource; (void)subresource; ++unmaps; }
+__declspec(dllexport) void WINAPI WineD3D11On12MockFailFrame(void) { InterlockedExchange(&fail_frame, 1); }
+__declspec(dllexport) void WINAPI WineD3D11On12MockFrameCounts(LONG *created, LONG *destroyed, LONG *mapped, LONG *unmapped)
+{ *created = rtv_created; *destroyed = rtv_destroyed; *mapped = maps; *unmapped = unmaps; }
 
 static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
         D3D10DDIARG_CREATEDEVICE *args)
@@ -398,13 +483,21 @@ static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
             mock_ia_set_input_layout;
     args->pWDDM2_6DeviceFuncs->pfnCalcPrivateShaderSize =
             mock_calc_private_shader_size;
-    args->pWDDM2_6DeviceFuncs->pfnCreateVertexShader =
-            mock_create_vertex_shader;
-    args->pWDDM2_6DeviceFuncs->pfnCreatePixelShader =
-            mock_create_pixel_shader;
+    /* The immediate driver does not populate either shader creation slot. */
+    ((WineD3D11On12DDIDevice *)args->hDrvDevice.pDrvPrivate)->lpVtbl =
+            &shader_device_vtbl;
     args->pWDDM2_6DeviceFuncs->pfnDestroyShader = mock_destroy_shader;
     args->pWDDM2_6DeviceFuncs->pfnVsSetShader = mock_vs_set_shader;
     args->pWDDM2_6DeviceFuncs->pfnPsSetShader = mock_ps_set_shader;
+    args->pWDDM2_6DeviceFuncs->pfnCalcPrivateRenderTargetViewSize = mock_rtv_size;
+    args->pWDDM2_6DeviceFuncs->pfnCreateRenderTargetView = mock_create_rtv;
+    args->pWDDM2_6DeviceFuncs->pfnDestroyRenderTargetView = mock_destroy_rtv;
+    args->pWDDM2_6DeviceFuncs->pfnSetRenderTargets = mock_set_targets;
+    args->pWDDM2_6DeviceFuncs->pfnSetViewports = mock_viewports;
+    args->pWDDM2_6DeviceFuncs->pfnClearRenderTargetView = mock_clear;
+    args->pWDDM2_6DeviceFuncs->pfnResourceCopy = mock_copy;
+    args->pWDDM2_6DeviceFuncs->pfnStagingResourceMap = mock_map;
+    args->pWDDM2_6DeviceFuncs->pfnStagingResourceUnmap = mock_unmap;
     InterlockedIncrement(&create_calls);
     return S_OK;
 }

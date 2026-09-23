@@ -1,0 +1,71 @@
+From: relay12 contributors
+Subject: [PATCH] d3d11on12: allow an offscreen host without a DXGI table
+
+Relay's first-frame host owns no DXGI presentation path and passes no DXGI
+function table. Upstream unconditionally writes through that null pointer
+at the end of Device construction, after the D3D12 context is initialized.
+Only publish those entry points when the host supplies table storage. All
+rendering and readback initialization remains unconditional; callers that
+supply a table retain the original behavior. This neither implements nor
+advertises presentation support and avoids fabricating a clean-room layout
+for the undocumented DXGI1_6_1_DDI_BASE_FUNCTIONS structure.
+---
+diff --git a/src/device.cpp b/src/device.cpp
+index fb757e7..b95bed3 100644
+--- a/src/device.cpp
++++ b/src/device.cpp
+@@ -600,28 +600,32 @@ namespace D3D11On12
+ 
+         assert(pArgs->Interface == D3DWDDM2_7_DDI_INTERFACE_VERSION);
+ 
+-        m_pDXGITable->pfnBlt = Blt;
+-        m_pDXGITable->pfnBlt1 = Blt1;
+-        m_pDXGITable->pfnPresent1 = Present1;
+-        m_pDXGITable->pfnRotateResourceIdentities = RotateResourceIdentities;
+-        m_pDXGITable->pfnResolveSharedResource = ResolveSharedResource;
+-        // TODO
+-        m_pDXGITable->pfnTrimResidencySet = TrimResidencySet;
+-        m_pDXGITable->pfnSetResourcePriority = SetResourcePriority;
+-        m_pDXGITable->pfnCheckMultiplaneOverlayColorSpaceSupport = CheckMultiplaneOverlayColorSpaceSupport;
+-        m_pDXGITable->pfnPresentMultiplaneOverlay1 = PresentMultiplaneOverlay1;
+-
+-        // Not implemented (Handled by DXGIOn12)
+-        m_pDXGITable->pfnPresent = nullptr;
+-        m_pDXGITable->pfnCheckPresentDurationSupport = nullptr;
+-        m_pDXGITable->pfnGetGammaCaps = nullptr;
+-        m_pDXGITable->pfnGetMultiplaneOverlayCaps = nullptr;
+-        m_pDXGITable->pfnGetMultiplaneOverlayGroupCaps = nullptr;
+-        m_pDXGITable->pfnOfferResources1 = nullptr;
+-        m_pDXGITable->pfnReclaimResources = nullptr;
+-        m_pDXGITable->pfnPresentMultiplaneOverlay = nullptr;
+-        m_pDXGITable->pfnQueryResourceResidency = nullptr;
+-        m_pDXGITable->pfnSetDisplayMode = nullptr;
++        // Offscreen hosts do not publish DXGI presentation entry points.
++        if (m_pDXGITable)
++        {
++            m_pDXGITable->pfnBlt = Blt;
++            m_pDXGITable->pfnBlt1 = Blt1;
++            m_pDXGITable->pfnPresent1 = Present1;
++            m_pDXGITable->pfnRotateResourceIdentities = RotateResourceIdentities;
++            m_pDXGITable->pfnResolveSharedResource = ResolveSharedResource;
++            // TODO
++            m_pDXGITable->pfnTrimResidencySet = TrimResidencySet;
++            m_pDXGITable->pfnSetResourcePriority = SetResourcePriority;
++            m_pDXGITable->pfnCheckMultiplaneOverlayColorSpaceSupport = CheckMultiplaneOverlayColorSpaceSupport;
++            m_pDXGITable->pfnPresentMultiplaneOverlay1 = PresentMultiplaneOverlay1;
++
++            // Not implemented (Handled by DXGIOn12)
++            m_pDXGITable->pfnPresent = nullptr;
++            m_pDXGITable->pfnCheckPresentDurationSupport = nullptr;
++            m_pDXGITable->pfnGetGammaCaps = nullptr;
++            m_pDXGITable->pfnGetMultiplaneOverlayCaps = nullptr;
++            m_pDXGITable->pfnGetMultiplaneOverlayGroupCaps = nullptr;
++            m_pDXGITable->pfnOfferResources1 = nullptr;
++            m_pDXGITable->pfnReclaimResources = nullptr;
++            m_pDXGITable->pfnPresentMultiplaneOverlay = nullptr;
++            m_pDXGITable->pfnQueryResourceResidency = nullptr;
++            m_pDXGITable->pfnSetDisplayMode = nullptr;
++        }
+ 
+         *pArgs->ppfnRetrieveSubObject = RetrieveSubObject;
+     }

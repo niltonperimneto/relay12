@@ -40,6 +40,15 @@ REQUIRED_HEADER = (
 )
 
 REQUIRED_DEVICE = (
+    "context->device->backend_ops->set_render_targets(context,",
+    "context->device->backend_ops->set_viewports(context,",
+    "context->device->backend_ops->clear_render_target(context,",
+    "context->device->backend_ops->copy_resource(context,",
+    "context->device->backend_ops->map_resource(context,",
+    "context->device->backend_ops->unmap_resource(context,",
+    "|| !backend_ops->create_rtv",
+    "|| !backend_ops->destroy_rtv",
+
     "static const struct d3d11_backend_ops wined3d_backend_ops",
     ".destroy_device = wined3d_backend_destroy_device,",
     ".set_vertex_shader = wined3d_backend_set_vertex_shader,",
@@ -106,6 +115,17 @@ REQUIRED_SHADER = (
 )
 
 REQUIRED_MAIN = (
+    "WineD3D11On12CreateRenderTargetViewV1",
+    "WineD3D11On12DestroyRenderTargetViewV1",
+    "WineD3D11On12SetRenderTargetV1",
+    "WineD3D11On12SetViewportV1",
+    "WineD3D11On12ClearRenderTargetV1",
+    "WineD3D11On12CopyTexture2DV1",
+    "WineD3D11On12MapTexture2DV1",
+    "WineD3D11On12UnmapTexture2DV1",
+    "WineD3D11On12CheckFrameSupportV1",
+    "backend->check_frame_support(&backend->adapter)",
+
     "static const struct d3d11_backend_ops d3d11_on12_backend_ops",
     ".create_texture2d = d3d11_on12_backend_create_texture2d,",
     ".destroy_texture2d = d3d11_on12_backend_destroy_texture2d,",

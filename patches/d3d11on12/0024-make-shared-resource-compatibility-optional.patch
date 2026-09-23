@@ -1,0 +1,29 @@
+Subject: d3d11on12: do not require shared-resource compatibility for owned resources
+
+D3DMetal returns E_NOINTERFACE for ID3D12CompatibilityDevice. The adapter's
+stored interface is never used, and DTL already queries it optionally.
+Accept absence for ordinary owned resources; shared-resource operations are
+separately guarded in the DTL port. Perform the query before constructing
+the device so any other failure cannot leak an already constructed device.
+---
+diff --git a/src/adapter.cpp b/src/adapter.cpp
+index eb8d1dd..9b85e61 100644
+--- a/src/adapter.cpp
++++ b/src/adapter.cpp
+@@ -99,9 +99,15 @@ namespace D3D11On12
+             //New present path does support redirection
+             hr = S_OK;
+         }
++        // Owned resources do not require Windows shared-resource compatibility.
++        HRESULT compatHr = pAdapter->m_pUnderlyingDevice->QueryInterface(&pAdapter->m_pCompatDevice);
++        if (compatHr != E_NOINTERFACE)
++        {
++            ThrowFailure(compatHr);
++        }
+         new (pArgs->hDrvDevice.pDrvPrivate) Device(pAdapter, pArgs); // throw( _com_error, bad_alloc )
+ 
+-        ThrowFailure(pAdapter->m_pUnderlyingDevice->QueryInterface(&pAdapter->m_pCompatDevice));
++
+ 
+         D3D11on12_DDI_ENTRYPOINT_END_AND_RETURN_HR(hr);
+     }

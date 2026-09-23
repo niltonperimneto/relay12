@@ -236,6 +236,17 @@ struct SOpenAdapterArgs
 """
 
 
+class ShaderInterfaceTranscription(unittest.TestCase):
+    def test_pinned_shader_interface(self):
+        root = pathlib.Path(__file__).resolve().parents[1]
+        driver = (root / "third_party/D3D11On12/interface/D3D11On12DDI.h").read_text()
+        header = (root / "relay12-d3d11/wine_d3d11on12_shader.h").read_text()
+        self.assertEqual(check_adapter_args.check_shader_interface(driver, header), [])
+        for mutation in (header.replace("*Signal", "*WrongSlot"),
+                         header.replace("UINT SizeInBytes", "SIZE_T SizeInBytes")):
+            self.assertTrue(check_adapter_args.check_shader_interface(driver, mutation))
+
+
 class AdapterArgsTranscription(unittest.TestCase):
     """The copy in the core is compared to the pinned driver on every run.
 
@@ -1174,10 +1185,10 @@ enum EnumTag;
     def test_a_touch_before_the_barrier_is_rejected(self):
         broken = self.shim.replace(
             "    initialize();\n"
-            "    if (!backend.on12Interface.createDirectDevice)",
-            "    if (!backend.on12Interface.createDirectDevice)\n"
+            "    if (!backend.createDevice)",
+            "    if (!backend.createDevice)\n"
             "        initialize();\n"
-            "    if (!backend.on12Interface.createDirectDevice)")
+            "    if (!backend.createDevice)")
         self.assertNotEqual(broken, self.shim)
         self.assertTrue(any("before it executes 'initOnce'" in error
                             for error in self.check(broken)))
