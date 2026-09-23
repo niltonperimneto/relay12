@@ -323,12 +323,14 @@ jobs:
             -DCMAKE_RC_COMPILER=x86_64-w64-mingw32-windres \
             -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DD3D11ON12_DTL_SOURCE_DIR="$dtl" \
             -DD3D11ON12_WINDOWS_KITS_INCLUDE_DIRS="$overlay" \
             -DDTL_DIRECTX_HEADERS_SOURCE_DIR="$GITHUB_WORKSPACE/third_party/DirectX-Headers" \
             -DDTL_WINDOWS_SDK_OVERLAY_DIR="$overlay" \
             -DDTL_ENABLE_WDK_DXBC=ON
           cmake --build "$build" --parallel 2
+          python3 scripts/check_driver_resource_abi.py "$build/compile_commands.json"
 
           dll="$build/src/d3d11on12.dll"
           test -s "$dll"

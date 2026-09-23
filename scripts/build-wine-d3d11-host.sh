@@ -14,7 +14,7 @@ CROSSCFLAGS='-O2 -Werror -Wno-unused-command-line-argument' "$source_dir/configu
     --without-x --without-wayland --without-gstreamer \
     --without-oss --without-alsa --without-pulse --without-sane \
     --without-usb --without-v4l2 --without-pcap --without-capi \
-    --without-opencl --without-ffmpeg --without-cups
+    --without-opencl --without-ffmpeg --without-cups --without-freetype
 make -j"${RELAY12_BUILD_JOBS:-2}" dlls/d3d11/all dlls/d3d11on12host/all
 test -s dlls/d3d11/x86_64-windows/d3d11.dll
 test -s dlls/d3d11on12host/x86_64-windows/d3d11on12host.dll

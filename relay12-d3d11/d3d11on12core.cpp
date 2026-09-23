@@ -421,6 +421,7 @@ D3D11_RESOURCE_FLAGS CALLBACK hostGetResourceFlags(D3D10DDI_HRESOURCE resource,
             traceCreation("found resource flags");
             flags = entry->flags;
             ReleaseSRWLockShared(&resourceRegistryLock);
+            traceCreation("leave resource flags callback");
             return flags;
         }
     }
