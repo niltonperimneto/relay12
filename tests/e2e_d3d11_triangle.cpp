@@ -326,7 +326,9 @@ int run_frame()
     release(rtv); release(vertices); release(layout); release(vs); release(ps);
     printf("[stage] drawing\n");
     context->Draw(3, 0);
+    printf("[stage] flushing draw\n");
     context->Flush();
+    printf("[stage] creating staging texture\n");
 
     D3D11_TEXTURE2D_DESC staging_desc = target_desc;
     staging_desc.Usage = D3D11_USAGE_STAGING;
@@ -338,8 +340,10 @@ int run_frame()
     if (failed("CreateTexture2D (staging)", hr))
         return 1;
 
+    printf("[stage] copying readback\n");
     context->CopyResource(staging, target);
     context->Flush();
+    printf("[stage] waiting for caller queue\n");
     hr = device12->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_ID3D12Fence,
             reinterpret_cast<void **>(&owned.fence));
     if (failed("CreateFence", hr)) return 1;
@@ -354,6 +358,7 @@ int run_frame()
     }
 
     D3D11_MAPPED_SUBRESOURCE mapped = {};
+    printf("[stage] mapping readback\n");
     hr = context->Map(staging, 0, D3D11_MAP_READ, 0, &mapped);
     if (failed("Map", hr))
         return 1;

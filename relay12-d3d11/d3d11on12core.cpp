@@ -2310,6 +2310,7 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateRenderTargetViewV1(
     args.ResourceDimension = D3D10DDIRESOURCE_TEXTURE2D;
     args.Tex2D.MipSlice = desc ? desc->Texture2D.MipSlice : 0;
     args.Tex2D.ArraySize = 1;
+    traceCreation("calculate view storage");
     const SIZE_T size = f.pfnCalcPrivateRenderTargetViewSize(owner->hDevice, &args);
     if (!size || size > SIZE_MAX - offsetof(RenderTargetState, privateView)) return E_OUTOFMEMORY;
     auto *v = static_cast<RenderTargetState *>(HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
@@ -2321,7 +2322,9 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateRenderTargetViewV1(
     v->driverHandle.pDrvPrivate = v->privateView;
     D3D10DDI_HRTRENDERTARGETVIEW runtime = {v};
     InterlockedExchange(&owner->lastDdiError, S_OK);
+    traceCreation("enter driver view creation");
     f.pfnCreateRenderTargetView(owner->hDevice, &args, v->driverHandle, runtime);
+    traceCreation("leave driver view creation");
     HRESULT hr = frameError(owner);
     if (FAILED(hr)) { HeapFree(GetProcessHeap(), 0, v); return hr; }
     v->created = true;

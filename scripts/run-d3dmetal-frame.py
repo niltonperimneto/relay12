@@ -35,7 +35,7 @@ def main():
         parser.error("--wine must name a configured Wine/GPTK runtime with D3DMetal")
     prefix.mkdir(parents=True, exist_ok=True)
     marker.touch()
-    env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG="-all",
+    env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG=os.environ.get("WINEDEBUG", "-all"),
                RELAY12_EXPERIMENTAL_FRAME="1", RELAY12_TRACE_CREATION="1",
                CX_APPLEGPTK_LIBD3DSHARED_PATH=str(shared),
                WINEDLLOVERRIDES="d3d11,d3d11on12,d3d11on12core,dxilconv=n;"

@@ -23,6 +23,8 @@ def main():
     entries = json.loads(args.compile_commands.read_text())
     entry = next(item for item in entries if Path(item["file"]).name == "resource.cpp")
     original = entry.get("arguments") or shlex.split(entry["command"])
+    if "-DDYNAMIC_LOAD_DXCORE=1" not in original:
+        parser.error("driver compile is missing DYNAMIC_LOAD_DXCORE=1; DTL class layout differs")
     command = []
     skip = False
     for value in original:
@@ -37,7 +39,9 @@ def main():
     names = ("D3D10DDIRESOURCE_BUFFER", "D3D10DDIRESOURCE_TEXTURE1D",
              "D3D10DDIRESOURCE_TEXTURE2D", "D3D10DDIRESOURCE_TEXTURE3D",
              "D3D10DDIRESOURCE_TEXTURECUBE", "D3D11DDIRESOURCE_BUFFEREX")
-    assertions = []
+    # This flag adds m_DXCore to ImmediateContext. A PRIVATE definition in
+    # DTL previously gave its consumer different offsets for every later field.
+    assertions = ['static_assert(DYNAMIC_LOAD_DXCORE == 1, "DTL consumer class layout mismatch");']
     for name in names:
         match = re.search(r"^#define " + name + r" (\d+)u$", header, re.M)
         if not match:
