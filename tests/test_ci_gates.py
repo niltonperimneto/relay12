@@ -1244,5 +1244,37 @@ class GateEntryPoints(unittest.TestCase):
         )
         self.assertEqual(0, proc.returncode, "check_secure_code rejected tests")
 
+class CoreCallbacksGate(unittest.TestCase):
+    """The D3D11On12 core runtime must initialize all mandatory WDDM 2.6
+    core-layer device callbacks passed to the driver.
+
+    Specifically, pfnPerformAmortizedProcessingCb must be wired to a valid
+    callback. If left NULL, Microsoft's D3D11On12 Device::PostSubmit unconditionally
+    dereferences a NULL function pointer during batch flushing."""
+
+    CORE = REPOSITORY / "relay12-d3d11" / "d3d11on12core.cpp"
+
+    def setUp(self):
+        self.core = self.CORE.read_text(encoding="utf-8")
+
+    def test_amortized_processing_callback_is_defined_and_assigned(self):
+        self.assertIn("hostPerformAmortizedProcessing", self.core)
+        self.assertIn(
+            "state->coreCallbacks.pfnPerformAmortizedProcessingCb = hostPerformAmortizedProcessing;",
+            self.core,
+        )
+
+    def test_uninitialized_amortized_processing_callback_is_rejected(self):
+        stripped = self.core.replace(
+            "    state->coreCallbacks.pfnPerformAmortizedProcessingCb = hostPerformAmortizedProcessing;\n",
+            "",
+        )
+        self.assertNotEqual(stripped, self.core)
+        self.assertNotIn(
+            "state->coreCallbacks.pfnPerformAmortizedProcessingCb",
+            stripped,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -70,6 +70,7 @@ static volatile LONG fail_next_shader;
  * pointer the real runtime owns. */
 static const D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS *runtime_callbacks;
 static D3D10DDI_HRTCORELAYER runtime_device;
+static LONG amortized_processing_calls;
 static unsigned char adapter_private;
 
 static HRESULT mock_get_versions(D3D10DDI_HADAPTER adapter, UINT32 *count,
@@ -106,6 +107,11 @@ static BOOL mock_flush(D3D10DDI_HDEVICE device, UINT context_type,
     (void)context_type;
     (void)flush_flags;
     InterlockedIncrement(&flush_calls);
+    if (runtime_callbacks && runtime_callbacks->pfnPerformAmortizedProcessingCb)
+    {
+        runtime_callbacks->pfnPerformAmortizedProcessingCb(runtime_device);
+        InterlockedIncrement(&amortized_processing_calls);
+    }
     return TRUE;
 }
 
@@ -453,6 +459,9 @@ static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
     (void)adapter;
     if (!args || !args->pWDDM2_6DeviceFuncs)
         return E_INVALIDARG;
+    if (!args->pWDDM2_6UMCallbacks
+            || !args->pWDDM2_6UMCallbacks->pfnPerformAmortizedProcessingCb)
+        return E_POINTER;
     if (!runtime_callbacks)
     {
         runtime_callbacks = args->pWDDM2_6UMCallbacks;
@@ -505,6 +514,11 @@ static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
 __declspec(dllexport) LONG WINAPI WineD3D11On12MockDriverGetFlushCount(void)
 {
     return flush_calls;
+}
+
+__declspec(dllexport) LONG WINAPI WineD3D11On12MockDriverGetAmortizedProcessingCount(void)
+{
+    return amortized_processing_calls;
 }
 
 __declspec(dllexport) LONG WINAPI WineD3D11On12MockDriverGetDrawCount(void)

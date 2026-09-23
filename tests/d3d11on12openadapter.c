@@ -127,6 +127,7 @@ int main(void)
     get_counts_fn get_counts;
     get_flush_count_fn get_flush_count;
     get_flush_count_fn get_draw_count;
+    get_flush_count_fn get_amortized_count;
     get_extended_draw_counts_fn get_extended_draw_counts;
     get_topology_fn get_topology;
     get_resource_counts_fn get_resource_counts;
@@ -261,6 +262,8 @@ int main(void)
             mock_driver, "WineD3D11On12MockDriverGetFlushCount") : NULL;
     get_draw_count = mock_driver ? (get_flush_count_fn)(void *)GetProcAddress(
             mock_driver, "WineD3D11On12MockDriverGetDrawCount") : NULL;
+    get_amortized_count = mock_driver ? (get_flush_count_fn)(void *)GetProcAddress(
+            mock_driver, "WineD3D11On12MockDriverGetAmortizedProcessingCount") : NULL;
     get_extended_draw_counts = mock_driver
             ? (get_extended_draw_counts_fn)(void *)GetProcAddress(mock_driver,
                     "WineD3D11On12MockDriverGetExtendedDrawCounts") : NULL;
@@ -289,6 +292,8 @@ int main(void)
                     "WineD3D11On12MockDriverGetTexture2DRecord") : NULL;
     check(get_counts != NULL, "the lifecycle mock driver is loaded");
     check(get_flush_count != NULL, "the flush counter is exported");
+    check(get_amortized_count != NULL,
+          "the amortized processing counter is exported");
     check(get_draw_count != NULL, "the draw counter is exported");
     check(get_extended_draw_counts != NULL,
           "the extended draw counters are exported");
@@ -303,8 +308,8 @@ int main(void)
     check(fail_next_shader != NULL, "the shader failure injector is exported");
     check(get_texture2d_record != NULL,
           "the Texture2D creation recorder is exported");
-    if (get_counts && get_flush_count && get_draw_count
-            && get_extended_draw_counts && get_topology
+    if (get_counts && get_flush_count && get_amortized_count
+            && get_draw_count && get_extended_draw_counts && get_topology
             && get_resource_counts && get_ia_bindings
             && get_input_layout_counts && fail_next_input_layout
             && get_shader_counts && fail_next_shader
@@ -333,6 +338,8 @@ int main(void)
                   "flush dispatches through the live DDI device");
             check(get_flush_count() == 1,
                   "flush invokes the driver callback exactly once");
+            check(get_amortized_count() == 1,
+                  "flush invokes the runtime amortized processing callback exactly once");
         }
         hr = WineD3D11On12DrawAdapterDeviceV1(&out, 3, 0);
         check(hr == S_OK && get_draw_count() == 1,
