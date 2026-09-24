@@ -7,6 +7,9 @@ import pathlib
 
 REQUIRED_HEADER = (
     "struct d3d11_backend_ops",
+    # Patch 0025: standalone devices answer IDXGIDevice and keep its data.
+    "IDXGIDevice IDXGIDevice_iface;",
+    "struct wined3d_private_store private_store;",
     "void (*destroy_device)(struct d3d_device *device);",
     "void (*flush)(struct d3d11_device_context *context);",
     "void (*draw)(struct d3d11_device_context *context, UINT vertex_count,",
@@ -40,6 +43,15 @@ REQUIRED_HEADER = (
 )
 
 REQUIRED_DEVICE = (
+    "context->device->backend_ops->set_render_targets(context,",
+    "context->device->backend_ops->set_viewports(context,",
+    "context->device->backend_ops->clear_render_target(context,",
+    "context->device->backend_ops->copy_resource(context,",
+    "context->device->backend_ops->map_resource(context,",
+    "context->device->backend_ops->unmap_resource(context,",
+    "|| !backend_ops->create_rtv",
+    "|| !backend_ops->destroy_rtv",
+
     "static const struct d3d11_backend_ops wined3d_backend_ops",
     ".destroy_device = wined3d_backend_destroy_device,",
     ".set_vertex_shader = wined3d_backend_set_vertex_shader,",
@@ -76,6 +88,16 @@ REQUIRED_DEVICE = (
     "return IUnknown_QueryInterface(device->outer_unk, iid, out);",
     "*out = &device->ID3D11On12Device1_iface;",
     "device->ID3D11On12Device1_iface.lpVtbl = &d3d11_on12_device_vtbl;",
+    # Patch 0025: Unity's D3D12 renderer discards the On12 device without
+    # IDXGIDevice. The adapter comes from the D3D12 device's LUID, and the
+    # private store is created and freed with the standalone device.
+    "static const struct IDXGIDeviceVtbl d3d11_on12_dxgi_device_vtbl",
+    "&& !IsEqualGUID(riid, &IID_IDXGIDevice)",
+    "*out = &device->IDXGIDevice_iface;",
+    "IDXGIFactory4_EnumAdapterByLuid(factory, luid, &IID_IDXGIAdapter, (void **)adapter);",
+    "device->IDXGIDevice_iface.lpVtbl = &d3d11_on12_dxgi_device_vtbl;",
+    "wined3d_private_store_init(&device->private_store);",
+    "wined3d_private_store_cleanup(&device->private_store);",
     "struct d3d_device *d3d_device_create_backend(",
     "d3d_device_init(device, &device->IUnknown_inner);",
     "if (device->standalone_allocation)",
@@ -106,6 +128,22 @@ REQUIRED_SHADER = (
 )
 
 REQUIRED_MAIN = (
+    "WineD3D11On12CreateWrappedTexture2DV1",
+    "WineD3D11On12SetWrappedOwnershipV1",
+    "backend->create_wrapped_texture(&backend->adapter",
+    "backend->set_wrapped_ownership(&backend->adapter",
+    "d3d_texture2d_from_wrapped(resources[i], device)",
+    "WineD3D11On12CreateRenderTargetViewV1",
+    "WineD3D11On12DestroyRenderTargetViewV1",
+    "WineD3D11On12SetRenderTargetV1",
+    "WineD3D11On12SetViewportV1",
+    "WineD3D11On12ClearRenderTargetV1",
+    "WineD3D11On12CopyTexture2DV1",
+    "WineD3D11On12MapTexture2DV1",
+    "WineD3D11On12UnmapTexture2DV1",
+    "WineD3D11On12CheckFrameSupportV1",
+    "backend->check_frame_support(&backend->adapter)",
+
     "static const struct d3d11_backend_ops d3d11_on12_backend_ops",
     ".create_texture2d = d3d11_on12_backend_create_texture2d,",
     ".destroy_texture2d = d3d11_on12_backend_destroy_texture2d,",

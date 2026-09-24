@@ -180,6 +180,29 @@ def check(driver_text, core_text):
     return errors
 
 
+def check_shader_interface(driver_text, shader_text):
+    """Pin the non-COM vtable prefix and container layout to the MIT source."""
+    driver = without_comments(driver_text)
+    shader = without_comments(shader_text)
+    body = driver.split("interface ID3D11On12DDIDevice", 1)[-1]
+    methods = re.findall(r"STDMETHOD(?:_\([^,]+,\s*|\()(\w+)\)", body)
+    prefix = struct_body(shader, "WineD3D11On12DDIDeviceVtbl") or ""
+    copied = re.findall(r"STDMETHODCALLTYPE\s*\*(\w+)", prefix)
+    errors = []
+    if copied != methods[:18] or len(copied) != 18:
+        errors.append("shader interface: vtable prefix differs from the pinned driver")
+    resource_body = driver.split("interface ID3D11On12DDIResource", 1)[-1].split("interface ID3D11On12DDIFence", 1)[0]
+    resource_methods = re.findall(r"STDMETHOD(?:_\([^,]+,\s*|\()(\w+)\)", resource_body)
+    resource_prefix = struct_body(shader, "WineD3D11On12DDIResourceVtbl") or ""
+    if re.findall(r"STDMETHODCALLTYPE\s*\*(\w+)", resource_prefix) != resource_methods:
+        errors.append("resource interface: vtable order differs from the pinned driver")
+    original = struct_body(driver, "SHADER_DESC") or ""
+    copied_desc = struct_body(shader, "WineD3D11On12ShaderDesc") or ""
+    if members(original) != members(copied_desc):
+        errors.append("shader interface: SHADER_DESC layout differs from the pinned driver")
+    return errors
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -195,6 +218,8 @@ def main():
 
     errors = check(args.driver.read_text(errors="replace"),
                    args.core.read_text(errors="replace"))
+    errors += check_shader_interface(args.driver.read_text(errors="replace"),
+            pathlib.Path("relay12-d3d11/wine_d3d11on12_shader.h").read_text())
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1

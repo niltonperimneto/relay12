@@ -208,6 +208,10 @@ contract.
 | 9-11 | `WineD3D11On12{Create,Destroy,Set}InputLayoutV1` | Element-layout lifecycle and binding |
 | 12-16 | `WineD3D11On12{CreateVertex,CreatePixel,Destroy,SetVertex,SetPixel}Shader*V1` | Vertex and pixel shader lifecycle and binding |
 | 17, 18 | `WineD3D11On12{Create,Destroy}Texture2DV1` | Owned Texture2D lifecycle |
+| 19, 20 | `WineD3D11On12{Create,Destroy}RenderTargetViewV1` | Owned render-target-view lifecycle |
+| 21-23 | `WineD3D11On12{SetRenderTarget,SetViewport,ClearRenderTarget}V1` | First-frame output state and clear |
+| 24-26 | `WineD3D11On12{CopyTexture2D,MapTexture2D,UnmapTexture2D}V1` | Copy and staging readback |
+| 27 | `WineD3D11On12CheckFrameSupportV1` | Experimental first-frame readiness check |
 
 ### 4.3 Diagnostic Logging
 Diagnostic logging is handled via [`relay12-d3d11/wine_d3d11_diag.h`](relay12-d3d11/wine_d3d11_diag.h):
@@ -227,7 +231,7 @@ Run these before every push. They need no toolchain, no Wine, and no network,
 and they take seconds. All must exit `0`.
 
 ```bash
-python3 -m unittest discover -s tests -p "test_*.py"   # 103 tests
+python3 -m unittest discover -s tests -p "test_*.py"   # 104 tests
 python3 scripts/gen_ddi_layout.py --check              # 54 structures, 469 fields
 python3 scripts/check_ddi_header.py                    # 21 declaration groups
 python3 scripts/check_interface_acquisition.py         # strictResult() funnel
@@ -303,3 +307,10 @@ git push origin "$(git branch --show-current)"
 > filesystem paths and `github` was the GitHub remote. That layout is gone, and
 > its `git push origin` warning no longer applies. `git remote -v` is the
 > authority.
+
+## 6. Agent Identity and Commit Guidelines
+
+When contributing to this repository or executing git commands, autonomous agents must adhere to the following rules regarding identity and commit provenance:
+
+- **Required Sign-Off:** Every commit must include a Signed-off-by line. You must always use `git commit -s`.
+- **Identity Representation:** Agents must adopt the default local git user identity for the `Signed-off-by` trait and commit author.

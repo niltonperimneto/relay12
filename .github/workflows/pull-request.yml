@@ -85,6 +85,10 @@ jobs:
           # including a header that needs the licensed overlay. A copy passed
           # by address to separately compiled code cannot be allowed to drift.
           python3 scripts/check_adapter_args.py
+          # The driver dereferences the core-layer callback table without
+          # checking it. An entry nobody assigns compiles and links, and
+          # crashes inside D3D11On12 on the first flush.
+          python3 scripts/check_core_callbacks.py
           # Linux filename semantics are part of the port contract. A local
           # build on a case-insensitive filesystem cannot establish this.
           python3 scripts/check_dtl_include_case.py "$worktree"
@@ -142,6 +146,7 @@ jobs:
           # thing that runs them: the checks below are still inline heredocs,
           # and migrating those to scripts/check_*.py is separate work.
           python3 -m unittest discover -s tests -p 'test_*.py' --verbose
+          python3 scripts/check_secure_code.py relay12-d3d11
 
       - name: Install MinGW-w64 GCC and Wine
         run: |
@@ -151,7 +156,7 @@ jobs:
           echo "$PWD/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64/bin" >> $GITHUB_PATH
           sudo apt-get update
           sudo apt-get install --yes \
-            cmake curl unzip wine
+            cmake curl unzip wine bison flex
           # Wine refuses to create a prefix under a directory it does not own,
           # and the prefix stays out of the workspace so it is never packaged
           # or uploaded.
@@ -199,6 +204,10 @@ jobs:
             fi
           done
           test -f winecx/dlls/ucrtbase/Makefile.in
+
+      - name: Compile the patched Wine D3D11 frontend and host
+        run: |
+          scripts/build-wine-d3d11-host.sh "$PWD/winecx" "$RUNNER_TEMP/wine-host-build"
 
       - name: Compile the D3D12TranslationLayer dependency edge
         run: |
@@ -318,12 +327,14 @@ jobs:
             -DCMAKE_RC_COMPILER=x86_64-w64-mingw32-windres \
             -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DD3D11ON12_DTL_SOURCE_DIR="$dtl" \
             -DD3D11ON12_WINDOWS_KITS_INCLUDE_DIRS="$overlay" \
             -DDTL_DIRECTX_HEADERS_SOURCE_DIR="$GITHUB_WORKSPACE/third_party/DirectX-Headers" \
             -DDTL_WINDOWS_SDK_OVERLAY_DIR="$overlay" \
             -DDTL_ENABLE_WDK_DXBC=ON
           cmake --build "$build" --parallel 2
+          python3 scripts/check_driver_resource_abi.py "$build/compile_commands.json"
 
           dll="$build/src/d3d11on12.dll"
           test -s "$dll"
@@ -467,6 +478,30 @@ jobs:
             d3d11on12openadapter.o d3d11on12core.o wine_d3d11_diag.o \
             -ld3d12 -ldxgi -ldxguid -luuid
           WINEDLLOVERRIDES=d3d11on12=n wine d3d11on12openadapter.exe
+          x86_64-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
+            -Irelay12-d3d11 -o d3d11on12frame.exe tests/d3d11on12frame.c \
+            d3d11on12core.o wine_d3d11_diag.o -ld3d12 -ldxgi -ldxguid -luuid
+          WINEDLLOVERRIDES=d3d11on12=n wine d3d11on12frame.exe
+          x86_64-w64-mingw32-clang -std=gnu11 -O2 -Wall -Wextra -Werror \
+            -Irelay12-d3d11 -o d3d11on12wrapped.exe tests/d3d11on12wrapped.c \
+            d3d11on12core.o wine_d3d11_diag.o -ld3d12 -ldxgi -ldxguid -luuid
+          WINEDLLOVERRIDES=d3d11on12=n wine d3d11on12wrapped.exe
+
+      - name: Run compiled frontend lifetime and unsupported-operation tests
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/wine-host-build/dlls/d3d11on12host/x86_64-windows/d3d11on12host.dll" .
+          x86_64-w64-mingw32-clang -std=gnu11 -O2 -Wall -Wextra -Werror \
+            -Irelay12-d3d11 -o d3d11on12frontend.exe tests/d3d11on12frontend.c \
+            -ld3dcompiler -ldxguid -luuid
+          WINEDLLOVERRIDES='d3d11on12,d3d11on12core=n;d3d11on12host=b;mscoree,mshtml=' \
+            timeout 60s wine d3d11on12frontend.exe
+          x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
+            -fno-exceptions -fno-rtti -o d3d11_e2e_triangle.exe \
+            tests/e2e_d3d11_triangle.cpp -ld3d12 -ld3dcompiler -luuid
+          x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
+            -fno-exceptions -fno-rtti -o d3d11_e2e_wrapped.exe \
+            tests/e2e_d3d11_wrapped.cpp -ld3d12 -luuid
 
       - name: Run the D3D11-on-12 concurrency stress
         run: |
@@ -513,7 +548,7 @@ jobs:
               "refusing to assume they match",
               "reports zero nodes",
               "validated but not yet translated",
-              "no D3D11 runtime/DDI host is implemented",
+              "experimental frame publication is disabled",
           ]
           text = pathlib.Path("stress-stderr.txt").read_text(errors="replace")
           errors = []
@@ -718,6 +753,21 @@ jobs:
           grep -q '^relay12/third_party/DirectX-Headers/LICENSE$' \
             source-files.txt
 
+      - name: Stage real-driver artifacts separately from the mock
+        run: |
+          mkdir -p artifacts/first-frame
+          cp d3d11shim.dll artifacts/first-frame/d3d11.dll
+          cp d3d11on12core.dll d3d11on12host.dll d3d11_e2e_triangle.exe d3d11_e2e_wrapped.exe artifacts/first-frame/
+          cp "$RUNNER_TEMP/d3d11on12-build/src/d3d11on12.dll" artifacts/first-frame/
+
+      - name: Upload first-frame runtime
+        uses: actions/upload-artifact@v7
+        with:
+          name: first-frame-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/first-frame/
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload D3D11-on-12 development artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -725,6 +775,9 @@ jobs:
           path: |
             d3d11on12probe.exe
             d3d11on12coretest.exe
+            d3d11on12frame.exe
+            d3d11on12wrapped.exe
+            d3d11on12frontend.exe
             d3d11shimstatus.exe
             d3d11ddilayout.exe
             d3d11ddi_triangle.exe
