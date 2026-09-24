@@ -79,8 +79,8 @@ members in `tests/d3d11on12mocks.h` use `InterlockedIncrement` and
 
 ### What the storm deliberately does not test
 
-Not the `D3DWDDM2_6DDI_DEVICEFUNCS` router. 173 of its 178 slots still hold
-`PFNWINE_D3D11DDI_UNDECLARED_CB`, so a test calling them would be racing stubs
+Not the whole `D3DWDDM2_6DDI_DEVICEFUNCS` router. 102 of its 178 slots still
+hold `PFNWINE_D3D11DDI_UNDECLARED_CB`, so a test calling them would be racing stubs
 it wrote itself, and would pass whatever the eventual implementation does. A
 test that cannot fail for the right reason is worse than no test, because the
 roadmap then reads as though the ground were covered. The storm targets the

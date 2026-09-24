@@ -1,0 +1,156 @@
+Subject: d3d11: route staging Texture2D copy map and unmap
+
+d3d11: route staging Texture2D copy map and unmap. The separate On12 host has no WineD3D resource to dispatch through;
+route only backend-owned objects and preserve the ordinary WineD3D path.
+
+diff --git a/dlls/d3d11/d3d11_main.c b/dlls/d3d11/d3d11_main.c
+index b061d7a7..c54e632e 100644
+--- a/dlls/d3d11/d3d11_main.c
++++ b/dlls/d3d11/d3d11_main.c
+@@ -517,6 +517,10 @@ struct d3d11_on12_backend
+     HRESULT (WINAPI *set_render_target)(struct wine_d3d11on12_adapter_device *, void *);
+     HRESULT (WINAPI *set_viewport)(struct wine_d3d11on12_adapter_device *, const D3D11_VIEWPORT *);
+     HRESULT (WINAPI *clear_render_target)(struct wine_d3d11on12_adapter_device *, void *, const float *);
++    HRESULT (WINAPI *copy_texture)(struct wine_d3d11on12_adapter_device *, void *, void *);
++    HRESULT (WINAPI *map_texture)(struct wine_d3d11on12_adapter_device *, void *, UINT,
++            D3D11_MAP, UINT, D3D11_MAPPED_SUBRESOURCE *);
++    HRESULT (WINAPI *unmap_texture)(struct wine_d3d11on12_adapter_device *, void *, UINT);
+     wine_d3d11on12_create_texture2d_fn create_texture2d;
+     wine_d3d11on12_destroy_texture2d_fn destroy_texture2d;
+     wine_d3d11on12_set_vertex_buffers_fn set_vertex_buffers;
+@@ -924,8 +928,57 @@ static void d3d11_on12_backend_clear_render_target(struct d3d11_device_context *
+     if (FAILED(hr)) WARN("On12 clear failed, hr %#lx.\n", hr);
+ }
+ 
++static struct d3d_texture2d *d3d11_on12_texture(ID3D11Resource *resource)
++{
++    D3D11_RESOURCE_DIMENSION type;
++    struct d3d_texture2d *texture;
++    if (!resource) return NULL;
++    ID3D11Resource_GetType(resource, &type);
++    if (type != D3D11_RESOURCE_DIMENSION_TEXTURE2D) return NULL;
++    texture = unsafe_impl_from_ID3D11Texture2D((ID3D11Texture2D *)resource);
++    return texture && texture->backend_texture.runtime_state ? texture : NULL;
++}
++
++static void d3d11_on12_backend_copy_resource(struct d3d11_device_context *context,
++        ID3D11Resource *destination, ID3D11Resource *source)
++{
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    struct d3d_texture2d *dst = d3d11_on12_texture(destination), *src = d3d11_on12_texture(source);
++    HRESULT hr;
++    if (!dst || !src) { WARN("On12 copy requires owned Texture2D resources.\n"); return; }
++    hr = backend->copy_texture(&backend->adapter, &dst->backend_texture, &src->backend_texture);
++    if (FAILED(hr)) WARN("On12 copy failed, hr %#lx.\n", hr);
++}
++
++static HRESULT d3d11_on12_backend_map_resource(struct d3d11_device_context *context,
++        ID3D11Resource *resource, UINT subresource, D3D11_MAP mode, UINT flags,
++        D3D11_MAPPED_SUBRESOURCE *mapped)
++{
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    struct d3d_texture2d *texture = d3d11_on12_texture(resource);
++    if (!mapped) return E_INVALIDARG;
++    memset(mapped, 0, sizeof(*mapped));
++    if (!texture) return DXGI_ERROR_UNSUPPORTED;
++    return backend->map_texture(&backend->adapter, &texture->backend_texture, subresource, mode, flags, mapped);
++}
++
++static void d3d11_on12_backend_unmap_resource(struct d3d11_device_context *context,
++        ID3D11Resource *resource, UINT subresource)
++{
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    struct d3d_texture2d *texture = d3d11_on12_texture(resource);
++    HRESULT hr;
++    if (!texture) { WARN("On12 unmap requires an owned Texture2D.\n"); return; }
++    hr = backend->unmap_texture(&backend->adapter, &texture->backend_texture, subresource);
++    if (FAILED(hr)) WARN("On12 unmap failed, hr %#lx.\n", hr);
++}
++
+ static const struct d3d11_backend_ops d3d11_on12_backend_ops =
+ {
++    .copy_resource = d3d11_on12_backend_copy_resource,
++    .map_resource = d3d11_on12_backend_map_resource,
++    .unmap_resource = d3d11_on12_backend_unmap_resource,
++
+     .set_render_targets = d3d11_on12_backend_set_render_targets,
+     .set_viewports = d3d11_on12_backend_set_viewports,
+     .clear_render_target = d3d11_on12_backend_clear_render_target,
+@@ -1108,6 +1161,19 @@ static HRESULT d3d11_on12_create_unpublished_backend(IUnknown *device,
+         return DXGI_ERROR_UNSUPPORTED;
+     }
+ 
++    address = GetProcAddress(backend->core_module, "WineD3D11On12CopyTexture2DV1");
++    memcpy(&backend->copy_texture, &address, sizeof(backend->copy_texture));
++    address = GetProcAddress(backend->core_module, "WineD3D11On12MapTexture2DV1");
++    memcpy(&backend->map_texture, &address, sizeof(backend->map_texture));
++    address = GetProcAddress(backend->core_module, "WineD3D11On12UnmapTexture2DV1");
++    memcpy(&backend->unmap_texture, &address, sizeof(backend->unmap_texture));
++    if (!backend->copy_texture || !backend->map_texture || !backend->unmap_texture)
++    {
++        FreeLibrary(backend->core_module);
++        free(backend);
++        return DXGI_ERROR_UNSUPPORTED;
++    }
++
+     address = GetProcAddress(backend->core_module,
+             "WineD3D11On12OpenAdapterV1");
+     memcpy(&open_adapter, &address, sizeof(open_adapter));
+diff --git a/dlls/d3d11/d3d11_private.h b/dlls/d3d11/d3d11_private.h
+index b2f6c5fc..1ef29bd2 100644
+--- a/dlls/d3d11/d3d11_private.h
++++ b/dlls/d3d11/d3d11_private.h
+@@ -605,6 +605,11 @@ struct d3d11_device_context
+  * immediate context. WineD3D remains the default backend. */
+ struct d3d11_backend_ops
+ {
++    void (*copy_resource)(struct d3d11_device_context *, ID3D11Resource *, ID3D11Resource *);
++    HRESULT (*map_resource)(struct d3d11_device_context *, ID3D11Resource *, UINT,
++            D3D11_MAP, UINT, D3D11_MAPPED_SUBRESOURCE *);
++    void (*unmap_resource)(struct d3d11_device_context *, ID3D11Resource *, UINT);
++
+     void (*set_render_targets)(struct d3d11_device_context *, UINT,
+             ID3D11RenderTargetView *const *, ID3D11DepthStencilView *);
+     void (*set_viewports)(struct d3d11_device_context *, UINT, const D3D11_VIEWPORT *);
+diff --git a/dlls/d3d11/device.c b/dlls/d3d11/device.c
+index e6f39780..a54b7155 100644
+--- a/dlls/d3d11/device.c
++++ b/dlls/d3d11/device.c
+@@ -954,6 +954,11 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_context_Map(ID3D11DeviceContext4 *
+     TRACE("iface %p, resource %p, subresource_idx %u, map_type %u, map_flags %#x, mapped_subresource %p.\n",
+             iface, resource, subresource_idx, map_type, map_flags, mapped_subresource);
+ 
++    if (context->device->backend_ops->map_resource)
++    {
++        return context->device->backend_ops->map_resource(context, resource, subresource_idx, map_type, map_flags, mapped_subresource);
++    }
++
+     if (map_flags)
+         FIXME("Ignoring map_flags %#x.\n", map_flags);
+ 
+@@ -984,6 +989,12 @@ static void STDMETHODCALLTYPE d3d11_device_context_Unmap(ID3D11DeviceContext4 *i
+ 
+     TRACE("iface %p, resource %p, subresource_idx %u.\n", iface, resource, subresource_idx);
+ 
++    if (context->device->backend_ops->unmap_resource)
++    {
++        context->device->backend_ops->unmap_resource(context, resource, subresource_idx);
++        return;
++    }
++
+     wined3d_resource = wined3d_resource_from_d3d11_resource(resource);
+ 
+     wined3d_device_context_unmap(context->wined3d_context, wined3d_resource, subresource_idx);
+@@ -1515,6 +1526,12 @@ static void STDMETHODCALLTYPE d3d11_device_context_CopyResource(ID3D11DeviceCont
+ 
+     TRACE("iface %p, dst_resource %p, src_resource %p.\n", iface, dst_resource, src_resource);
+ 
++    if (context->device->backend_ops->copy_resource)
++    {
++        context->device->backend_ops->copy_resource(context, dst_resource, src_resource);
++        return;
++    }
++
+     wined3d_dst_resource = wined3d_resource_from_d3d11_resource(dst_resource);
+     wined3d_src_resource = wined3d_resource_from_d3d11_resource(src_resource);
+     wined3d_device_context_copy_resource(context->wined3d_context, wined3d_dst_resource, wined3d_src_resource);

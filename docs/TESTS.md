@@ -18,12 +18,13 @@ Developers can easily misread documentation, miscount padding bytes, or mix up l
 ## 1a. Behavioural Determinism: The Frame Harness
 Layout and per-slot callability are necessary and not sufficient. Every driver handle in this DDI is one wrapped pointer, so a frame that bound the vertex buffer where it meant to bind the render target would call the right slots, in the right order, with arguments of the right types — and only the identity of a pointer would be wrong. No layout assertion and no per-slot call can see that.
 * **`tests/d3d11ddi_triangle.c`:** drives the promoted device function table through the MVP frame — create, bind, clear, draw, copy to staging, map, verify, unmap, tear down — with recording stubs, then asserts the recorded call sequence against a written-out expected order and checks that each binding received the handle the matching creation produced. The clear stub fills a backing image, draw replaces its centre texel, and readback requires the centre to carry the drawn red and a corner the cleared blue, matching the application-level test. Objects get distinct driver private blocks, allocated by the test the way the runtime allocates them, which is what makes the identity checks discriminating rather than vacuous. Compiled in C and C++ and run under Wine, like the layout harness.
-* **What it does not claim:** nothing renders. There is no host behind the table. The application-level counterpart that would prove pixels is `tests/e2e_d3d11_triangle.cpp`, built but not run by the manual `integration-test.yml` job; when a host exists the two must agree.
+* **What it does not claim:** recording stubs do not prove GPU rendering. `tests/d3d11on12frame.c` additionally drives the real core against a mock driver, including fault injection, mapping validation, retained views, and teardown with outstanding maps. `tests/d3d11on12frontend.c` loads the compiled Wine host to check bound-object lifetime, cycle-free device destruction, and safe rejection of unsupported operations. Real GPU acceptance uses `tests/e2e_d3d11_triangle.cpp`; see [FIRST-FRAME-VALIDATION.md](FIRST-FRAME-VALIDATION.md).
 
 ## 1b. Fail-Closed Driver Initialization Tests
 Real driver interactions start with the adapter and device, requiring strict argument handling before the boundary to the translation layer is even entered.
 * **`tests/d3d11on12openadapter.c` & `tests/d3d11on12coretest.c`:** These suites validate the DDI adapter entry point (`WineD3D11On12OpenAdapterV1`), explicitly checking that malformed calls (e.g., null out-structures, size mismatching version handshakes, or invalid interface combinations) are rejected and fail-closed *before* reaching the actual D3D11On12 driver module. This proves defensive design.
 * **`tests/d3d11on12openadapter.c`, Texture2D section:** the owned Texture2D lifecycle. The mock driver is resource-kind aware and validates the *whole* mip array across every array slice rather than its first entry, because the core derives that array itself: a stub checking one level would pass on a core that got every later mip wrong. The suite covers a zero-`MipLevels` request resolving to the full chain, format and bind-flag forwarding, initial subresource data, initial data carrying a null pointer (refused before the DDI is touched), double destruction, five rejected-argument cases, and a texture left alive to prove device teardown destroys it and leaves the caller's handle inert.
+* **Vertex/pixel shader creation:** the current mock leaves the immediate-device DDI creation slots null, matching the pinned driver. The adapter lifecycle suite verifies creation through the non-COM device sub-object, binding, and destruction.
 * **Six-stage shader lifecycle, not currently built:** `tests/d3d11on12shaderlifecycle.c` and the mock's `ID3D11On12DDIDevice` vtable live on the `ddi-device-lifecycle` branch. That branch's PR (#7) was closed when PR #8 consolidated the tree, so it is preserved deliberately and must not be deleted as stale — it is the only copy of this work until the port lands. They pin *which* driver entry creates a shader -- the pinned driver leaves all six `pfnCreate*Shader` table slots null on the immediate device and publishes creation only through the sub-object -- and they assert per-stage private-block sizing, bytecode pass-by-address, cross-stage bind refusal, and destruction-through-the-driver at teardown. They return when the six-stage implementation is ported onto the ordinal-export mechanism; see `docs/DDI-REMAINING-ROADMAP.md`.
 * **What these do not claim:** no shader compiles. The mock records the container it was shown and does not parse DXBC, so this proves ownership, routing and lifetime — not that any real bytecode would be accepted.
 
@@ -97,3 +98,40 @@ an eight-thread bind-versus-destroy stress pass. Destruction removes a layout
 from the registry while holding the exclusive lock, which first drains every
 in-flight shared-lock binding and prevents a new binding from observing the
 driver object before `DestroyElementLayout` runs.
+
+## Wrapped-resource ownership slice
+
+`tests/d3d11on12wrapped.c` covers reference transfer, failed wrapping/open,
+strict COM acquisition, foreign devices, stale handles, batch prevalidation,
+invalid ownership transitions, retained RTVs, adapter teardown, transition
+failure refusal, and eight-thread ownership/destruction stress. CI executes it
+against the native mock driver.
+
+`tests/e2e_d3d11_wrapped.cpp` uses the original D3D12 texture and D3D12 readback
+to verify three acquire/clear/release cycles per RGBA/BGRA format. Run it with
+`scripts/run-d3dmetal-frame.py --test wrapped`; see
+[WRAPPED-RESOURCE-VALIDATION.md](WRAPPED-RESOURCE-VALIDATION.md). It does not
+exercise DXGI surfaces, Direct2D, or presentation.
+
+## PEAK smoke run
+
+`scripts/check_peak_smoke_log.py` turns the second runtime checkpoint above into
+a verdict from Unity's `Player.log` and the Wine output of the same run. Every
+criterion needs positive evidence; tests in `tests/test_peak_smoke_log.py` use
+real PEAK logs for the D3D11 crash, the silent On12 fallback and Metal HUD
+output. Unity's D3D12 renderer presents through its own D3D12 swap chain, so a
+presented frame is read from Metal's performance HUD (`MTL_HUD_LOG_ENABLED=1`),
+whose frame count must rise across reports.
+
+`scripts/run-peak-smoke.py` starts Steam in a marked test prefix, launches PEAK
+with `-applaunch`, and returns the verdict. It refuses any prefix without a
+`.relay12-peak-prefix` marker, so it cannot upgrade a player's bottle;
+`tests/test_run_peak_smoke.py` covers that refusal without Wine.
+
+`tests/peak_on12_probe.cpp` is a hardware check, not a CI one. It repeats
+Unity's `D3D11On12CreateDevice` call, lists every interface the objects answer,
+and asserts what patch 0025 promises on real D3DMetal: `IDXGIDevice` exists, its
+`GetAdapter` and `GetParent` return the D3D12 device's adapter by LUID, and
+private data set through `ID3D11Device` reads back through it. The CI half of
+0025 is in `tests/d3d11on12frontend.c` against the mock D3D12 device, and
+`check_wine_d3d11_backend.py` rejects a tree that loses it.

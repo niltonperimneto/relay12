@@ -1,10 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only
  * D3DMetal d3d11.dll router.
  *
- * All three creation exports route through the independently versioned core.
- * The core obtains D3D12 objects through the deployed D3DMetal interposer, so
- * ordinary D3D11 and explicit D3D11On12 creation share one host and queue
- * ownership model.
+ * Ordinary D3D11 forwards to d3d11mt; only explicit On12 enters the core.
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -73,6 +70,7 @@ BOOL CALLBACK initializeBackend(PINIT_ONCE, PVOID, PVOID *) noexcept
         if (backend.createDevice && backend.createDeviceAndSwapChain)
         {
             backend.flags |= WINE_D3D11SHIM_FORWARDER_COMPLETE;
+            backend.creationResult = S_OK;
         }
         else
         {
@@ -133,7 +131,6 @@ BOOL CALLBACK initializeBackend(PINIT_ONCE, PVOID, PVOID *) noexcept
         else
         {
             backend.flags |= WINE_D3D11SHIM_CORE_COMPATIBLE;
-            backend.creationResult = S_OK;
             backend.on12Result = S_OK;
         }
     }
@@ -161,11 +158,14 @@ extern "C" HRESULT WINAPI shimD3D11CreateDevice(IDXGIAdapter *adapter,
         UINT sdkVersion, ID3D11Device **device, D3D_FEATURE_LEVEL *featureLevel,
         ID3D11DeviceContext **immediateContext) noexcept
 {
+    if (device) *device = nullptr;
+    if (immediateContext) *immediateContext = nullptr;
+    if (featureLevel) *featureLevel = static_cast<D3D_FEATURE_LEVEL>(0);
     initialize();
-    if (!backend.on12Interface.createDirectDevice)
+    if (!backend.createDevice)
         return backend.creationResult;
 
-    return backend.on12Interface.createDirectDevice(adapter, driverType,
+    return backend.createDevice(adapter, driverType,
             software, flags,
             featureLevels, featureLevelCount, sdkVersion, device, featureLevel,
             immediateContext);
@@ -179,11 +179,15 @@ extern "C" HRESULT WINAPI shimD3D11CreateDeviceAndSwapChain(
         ID3D11Device **device, D3D_FEATURE_LEVEL *featureLevel,
         ID3D11DeviceContext **immediateContext) noexcept
 {
+    if (device) *device = nullptr;
+    if (immediateContext) *immediateContext = nullptr;
+    if (featureLevel) *featureLevel = static_cast<D3D_FEATURE_LEVEL>(0);
+    if (swapChain) *swapChain = nullptr;
     initialize();
-    if (!backend.on12Interface.createDirectDeviceAndSwapChain)
+    if (!backend.createDeviceAndSwapChain)
         return backend.creationResult;
 
-    return backend.on12Interface.createDirectDeviceAndSwapChain(adapter,
+    return backend.createDeviceAndSwapChain(adapter,
             driverType, software, flags, featureLevels, featureLevelCount,
             sdkVersion, swapChainDesc, swapChain, device, featureLevel,
             immediateContext);

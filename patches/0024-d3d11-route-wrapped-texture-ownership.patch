@@ -1,0 +1,159 @@
+Subject: d3d11: route wrapped Texture2D ownership through Relay12
+
+Hybrid D3D12 callers pass their existing textures to ID3D11On12Device. The
+frontend previously rejected creation and silently ignored acquire/release.
+Allocate the public texture shell before publishing its address-bound core
+handle, retain it through the existing backend child lifetime, and route
+validated ownership batches to the original caller queue. Reject foreign
+frontend resources before interpreting their internal storage.
+---
+--- a/dlls/d3d11/d3d11_main.c
++++ b/dlls/d3d11/d3d11_main.c
+@@ -522,6 +522,11 @@
+             D3D11_MAP, UINT, D3D11_MAPPED_SUBRESOURCE *);
+     HRESULT (WINAPI *unmap_texture)(struct wine_d3d11on12_adapter_device *, void *, UINT);
+     HRESULT (WINAPI *check_frame_support)(struct wine_d3d11on12_adapter_device *);
++    HRESULT (WINAPI *create_wrapped_texture)(struct wine_d3d11on12_adapter_device *,
++            IUnknown *, const D3D11_RESOURCE_FLAGS *, D3D12_RESOURCE_STATES,
++            D3D12_RESOURCE_STATES, D3D11_TEXTURE2D_DESC *, struct wine_d3d11on12_texture2d *);
++    HRESULT (WINAPI *set_wrapped_ownership)(struct wine_d3d11on12_adapter_device *,
++            struct wine_d3d11on12_texture2d *const *, UINT, BOOL);
+     wine_d3d11on12_create_texture2d_fn create_texture2d;
+     wine_d3d11on12_destroy_texture2d_fn destroy_texture2d;
+     wine_d3d11on12_set_vertex_buffers_fn set_vertex_buffers;
+@@ -936,30 +941,62 @@
+         const D3D11_RESOURCE_FLAGS *flags, D3D12_RESOURCE_STATES input_state,
+         D3D12_RESOURCE_STATES output_state, REFIID iid, void **resource11)
+ {
+-    (void)device;
+-    (void)resource12;
+-    (void)flags;
+-    (void)input_state;
+-    (void)output_state;
+-    (void)iid;
+-    (void)resource11;
+-    return DXGI_ERROR_UNSUPPORTED;
++    struct d3d11_on12_backend *backend = device->backend_private;
++    struct d3d_texture2d *texture;
++    HRESULT hr;
++    *resource11 = NULL;
++    if (!IsEqualGUID(iid, &IID_ID3D11Texture2D) && !IsEqualGUID(iid, &IID_ID3D11Resource)
++            && !IsEqualGUID(iid, &IID_ID3D11DeviceChild) && !IsEqualGUID(iid, &IID_IUnknown))
++        return E_NOINTERFACE;
++    if (!(texture = d3d_texture2d_allocate_wrapped())) return E_OUTOFMEMORY;
++    hr = backend->create_wrapped_texture(&backend->adapter, resource12, flags,
++            input_state, output_state, &texture->desc,
++            (struct wine_d3d11on12_texture2d *)&texture->backend_texture);
++    if (FAILED(hr)) { free(texture); return hr; }
++    texture->backend_child.refs = 1;
++    texture->backend_child.object = texture;
++    texture->backend_child.destroy = d3d11_on12_free_texture2d;
++    ID3D11Device5_AddRef(texture->device = &device->ID3D11Device5_iface);
++    *resource11 = &texture->ID3D11Texture2D_iface;
++    return S_OK;
++}
++
++static void d3d11_on12_backend_wrapped_ownership(struct d3d_device *device,
++        ID3D11Resource *const *resources, UINT count, BOOL acquire)
++{
++    struct d3d11_on12_backend *backend = device->backend_private;
++    struct wine_d3d11on12_texture2d **handles = NULL;
++    struct d3d_texture2d *texture;
++    HRESULT hr;
++    UINT i;
++    if (resources && count)
++    {
++        if (!(handles = calloc(count, sizeof(*handles))))
++        { WARN("D3D11On12 ownership allocation failed.\n"); return; }
++        for (i = 0; i < count; ++i)
++        {
++            if (!(texture = d3d_texture2d_from_wrapped(resources[i], device)))
++            { WARN("D3D11On12 ownership rejected foreign resource.\n"); free(handles); return; }
++            handles[i] = (struct wine_d3d11on12_texture2d *)&texture->backend_texture;
++        }
++    }
++    /* Preserve empty-list versus NULL (release-all) semantics. */
++    if (resources && !count) return;
++    hr = backend->set_wrapped_ownership(&backend->adapter, handles, count, acquire);
++    if (FAILED(hr)) WARN("D3D11On12 wrapped ownership failed, hr %#lx.\n", hr);
++    free(handles);
+ }
+ 
+ static void d3d11_on12_backend_release_wrapped_resources(
+         struct d3d_device *device, ID3D11Resource *const *resources, UINT count)
+ {
+-    (void)device;
+-    (void)resources;
+-    (void)count;
++    d3d11_on12_backend_wrapped_ownership(device, resources, count, FALSE);
+ }
+ 
+ static void d3d11_on12_backend_acquire_wrapped_resources(
+         struct d3d_device *device, ID3D11Resource *const *resources, UINT count)
+ {
+-    (void)device;
+-    (void)resources;
+-    (void)count;
++    d3d11_on12_backend_wrapped_ownership(device, resources, count, TRUE);
+ }
+ 
+ static HRESULT d3d11_on12_backend_get_d3d12_device(struct d3d_device *device,
+@@ -1310,6 +1347,17 @@
+         return DXGI_ERROR_UNSUPPORTED;
+     }
+ 
++    address = GetProcAddress(backend->core_module, "WineD3D11On12CreateWrappedTexture2DV1");
++    memcpy(&backend->create_wrapped_texture, &address, sizeof(backend->create_wrapped_texture));
++    address = GetProcAddress(backend->core_module, "WineD3D11On12SetWrappedOwnershipV1");
++    memcpy(&backend->set_wrapped_ownership, &address, sizeof(backend->set_wrapped_ownership));
++    if (!backend->create_wrapped_texture || !backend->set_wrapped_ownership)
++    {
++        FreeLibrary(backend->core_module);
++        free(backend);
++        return DXGI_ERROR_UNSUPPORTED;
++    }
++
+     address = GetProcAddress(backend->core_module, "WineD3D11On12CheckFrameSupportV1");
+     memcpy(&backend->check_frame_support, &address, sizeof(backend->check_frame_support));
+     if (!backend->check_frame_support)
+--- a/dlls/d3d11/d3d11_private.h
++++ b/dlls/d3d11/d3d11_private.h
+@@ -188,6 +188,8 @@
+     return CONTAINING_RECORD(iface, struct d3d_texture2d, ID3D11Texture2D_iface);
+ }
+ 
++struct d3d_texture2d *d3d_texture2d_allocate_wrapped(void);
++struct d3d_texture2d *d3d_texture2d_from_wrapped(ID3D11Resource *, struct d3d_device *);
+ HRESULT d3d_texture2d_create(struct d3d_device *device, const D3D11_TEXTURE2D_DESC *desc,
+         struct wined3d_texture *wined3d_texture,
+         const D3D11_SUBRESOURCE_DATA *data, struct d3d_texture2d **out);
+--- a/dlls/d3d11/texture.c
++++ b/dlls/d3d11/texture.c
+@@ -1055,6 +1055,27 @@
+     return TRUE;
+ }
+ 
++/* Allocate the COM shell before the core publishes its address-bound handle. */
++struct d3d_texture2d *d3d_texture2d_allocate_wrapped(void)
++{
++    struct d3d_texture2d *texture = calloc(1, sizeof(*texture));
++    if (!texture) return NULL;
++    texture->ID3D11Texture2D_iface.lpVtbl = &d3d11_texture2d_vtbl;
++    texture->ID3D10Texture2D_iface.lpVtbl = &d3d10_texture2d_vtbl;
++    texture->refcount = 1;
++    texture->backend_texture.size = sizeof(texture->backend_texture);
++    return texture;
++}
++
++struct d3d_texture2d *d3d_texture2d_from_wrapped(ID3D11Resource *resource, struct d3d_device *device)
++{
++    struct d3d_texture2d *texture;
++    if (!resource || (const void *)resource->lpVtbl != &d3d11_texture2d_vtbl) return NULL;
++    texture = CONTAINING_RECORD(resource, struct d3d_texture2d, ID3D11Texture2D_iface);
++    return texture->device == &device->ID3D11Device5_iface && texture->backend_texture.runtime_state
++            ? texture : NULL;
++}
++
+ HRESULT d3d_texture2d_create(struct d3d_device *device, const D3D11_TEXTURE2D_DESC *desc,
+         struct wined3d_texture *wined3d_texture, const D3D11_SUBRESOURCE_DATA *data, struct d3d_texture2d **out)
+ {

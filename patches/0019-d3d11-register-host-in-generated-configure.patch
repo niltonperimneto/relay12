@@ -1,0 +1,17 @@
+Subject: d3d11: register the host in generated configure
+
+Wine ships configure and CI invokes it directly. Updating configure.ac alone
+left the host absent from the generated Makefile and never compiled it.
+
+diff --git a/configure b/configure
+index 27370232..54c89df5 100755
+--- a/configure
++++ b/configure
+@@ -22654,6 +22654,7 @@ wine_fn_config_makefile dlls/d3d10_1/tests enable_tests
+ wine_fn_config_makefile dlls/d3d10core enable_d3d10core
+ wine_fn_config_makefile dlls/d3d10core/tests enable_tests
+ wine_fn_config_makefile dlls/d3d11 enable_d3d11
++wine_fn_config_makefile dlls/d3d11on12host enable_d3d11on12host
+ wine_fn_config_makefile dlls/d3d11/tests enable_tests
+ wine_fn_config_makefile dlls/d3d12 enable_d3d12
+ wine_fn_config_makefile dlls/d3d12/tests enable_tests

@@ -46,6 +46,10 @@ struct mock_device
     UINT node_count;
     unsigned int node_count_calls;
     int support_device1;
+    /* Reported through GetAdapterLuid.  The default names no real adapter,
+     * so an adapter lookup keyed on it must fail. */
+    LUID adapter_luid;
+    unsigned int adapter_luid_calls;
 };
 
 static inline struct mock_device *impl_from_device(ID3D12Device *iface)
@@ -121,6 +125,17 @@ static UINT STDMETHODCALLTYPE mock_device_GetNodeCount(ID3D12Device *iface)
     return device->node_count;
 }
 
+/* The widl C binding returns the aggregate through a hidden pointer, so the
+ * vtable entry takes it as a parameter and returns it. */
+static LUID *STDMETHODCALLTYPE mock_device_GetAdapterLuid(ID3D12Device *iface, LUID *luid)
+{
+    struct mock_device *device = impl_from_device(iface);
+
+    ++device->adapter_luid_calls;
+    *luid = device->adapter_luid;
+    return luid;
+}
+
 /* Not const: the widl C interface declares lpVtbl as a pointer to
  * non-const. */
 static ID3D12DeviceVtbl mock_device_vtbl =
@@ -130,6 +145,7 @@ static ID3D12DeviceVtbl mock_device_vtbl =
     .Release = mock_device_Release,
     .CheckFeatureSupport = mock_device_CheckFeatureSupport,
     .GetNodeCount = mock_device_GetNodeCount,
+    .GetAdapterLuid = mock_device_GetAdapterLuid,
 };
 
 static inline void mock_device_init(struct mock_device *device)
@@ -140,6 +156,8 @@ static inline void mock_device_init(struct mock_device *device)
     device->feature_hr = S_OK;
     device->max_feature_level = D3D_FEATURE_LEVEL_11_0;
     device->node_count = 1;
+    device->adapter_luid.LowPart = 0xfffffff0;
+    device->adapter_luid.HighPart = 0x7ffffff0;
 }
 
 /* Mock ID3D12CommandQueue. */
