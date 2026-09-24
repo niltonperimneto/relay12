@@ -65,19 +65,10 @@ Below is the structured roadmap of what is yet to be done.
 
 ## 2. Concurrency & Thread-Safety
 
-*As detailed in `DDI-CONCURRENCY-TESTING.md`*
+*As detailed in [`docs/TESTS.md`](TESTS.md) §4.*
 
-**2.1. ThreadSanitizer (TSAN) Integration**
-* **Status:** Impossible for this target; replaced
-* **Finding:** `clang: error: unsupported option '-fsanitize=thread' for target
-  'x86_64-w64-windows-gnu'`. Compiler-rt ships no TSAN runtime for Windows and
-  GCC no `libtsan` for mingw. Building the sources natively as ELF behind a
-  fake `windows.h` was rejected: neither module is portable, so TSAN would be
-  instrumenting a shim.
-* **Replacement:** `scripts/check_shared_state.py`, which requires every
-  namespace-scope mutable in `relay12-d3d11/*.cpp` to be an `INIT_ONCE`, a
-  `volatile LONG` moved only through `Interlocked*`, or annotated as published
-  through a named `INIT_ONCE` with the barrier ordered before every touch.
+**2.1. ThreadSanitizer (TSAN) & Shared-State Audits**
+* **Status:** TSAN is unsupported on MinGW-w64 Windows targets; replaced by `scripts/check_shared_state.py` static audits and the multi-threaded Wine storm test (`tests/ddi_thread_stress.c`). See `docs/TESTS.md` §4.4–4.5 for technical rationale.
 
 **2.2. Multi-threaded Stress Suite (`ddi_thread_stress.c`)**
 * **Status:** Done, against the code that has shared state
@@ -127,7 +118,7 @@ Below is the structured roadmap of what is yet to be done.
   `pfnDestroyShaderResourceView`, `pfnCalcPrivateRenderTargetViewSize`,
   `pfnCreateRenderTargetView`, and `pfnDestroyRenderTargetView`. Depth-stencil
   and unordered-access views are not part of this family and remain
-  unpromoted; per `docs/D3D11ON12-SKIPPABLE-ELEMENTS.md` the MVP path needs
+  unpromoted; per `docs/D3D11ON12.md` §Out-of-scope the MVP path needs
   only the SRV/RTV pair. `D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW` has no
   published WDDM 2.0-named page of its own (see the header's provenance note);
   its fields are the cross-validated base `D3D10DDIARG_CREATERENDERTARGETVIEW`

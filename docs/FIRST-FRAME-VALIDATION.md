@@ -99,6 +99,6 @@ continue with the wrapped-resource milestone described in
 [WRAPPED-RESOURCE-VALIDATION.md](WRAPPED-RESOURCE-VALIDATION.md), whose first
 RGBA/BGRA ownership slice now passes local hardware readback. The existing conformance probe needs BGRA
 creation support and pixel/state verification for that milestone. Presentation,
-PEAK's D3D12/On12 smoke test, and a hardware soak remain unqualified; the mock
+application-level D3D12/On12 smoke testing (such as PEAK), and a hardware soak remain unqualified; the mock
 soak and partial-publication coverage already in this commit do not replace
 those application and hardware runs.

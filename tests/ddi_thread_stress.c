@@ -4,7 +4,7 @@
  *
  * What this tests, and what it deliberately does not.
  *
- * docs/DDI-CONCURRENCY-TESTING.md asks for a suite that hammers the
+ * docs/TESTS.md §4 asks for a suite that hammers the
  * D3DWDDM2_6DDI_DEVICEFUNCS router from many threads.  That is not what this
  * is, because it cannot be yet: every one of that table's 178 slots holds
  * PFNWINE_D3D11DDI_UNDECLARED_CB, so a test calling them would be racing stubs
@@ -48,7 +48,7 @@
 /* The mock COM objects, shared with tests/d3d11on12coretest.c. */
 #include "d3d11on12mocks.h"
 
-/* Twelve threads, in the 8-to-16 band docs/DDI-CONCURRENCY-TESTING.md asks
+/* Twelve threads, in the 8-to-16 band docs/TESTS.md §4 asks
  * for, and more than any CI runner has cores: oversubscription is what makes
  * the scheduler preempt inside the boundary rather than between calls. */
 #define STRESS_THREADS 12

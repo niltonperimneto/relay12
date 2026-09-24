@@ -17,7 +17,7 @@
  * fence completion must succeed before a frame is accepted.
  *
  * Deliberately offscreen: no swap chain and no window.  Wine's DXGI emulates
- * presentation above the DDI (docs/D3D11ON12-SKIPPABLE-ELEMENTS.md section 1),
+ * presentation above the DDI (docs/D3D11ON12.md §Out-of-scope),
  * so involving it would test Wine's compositor rather than the relay.
  */
 

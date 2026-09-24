@@ -7,7 +7,7 @@ This is the method and specification for authoring the declaration groups in
 take precedence over anything here. `docs/D3D11ON12.md` is the macro design;
 this document is the single source of truth for how the DDI
 declarations get written, in what order, and against which sources.
-Project phase and milestone status lives only in `PORT-QUALITY-ROADMAP.md`.
+Project phase and milestone status lives in `docs/D3D11ON12.md` §Rollout and readiness.
 
 It exists because the surface is enumerable, the documentation sources are
 public, and the declaration sequence is determined strictly by risk: mistakes
@@ -465,7 +465,7 @@ pair.** Six slots, `pfnCalcPrivateShaderResourceViewSize`,
 `D3D10DDI_H(RT)SHADERRESOURCEVIEW` and `D3D10DDI_H(RT)RENDERTARGETVIEW`
 handles and the two creation-argument structures. Depth-stencil and
 unordered-access views are a separate slot family and stay behind
-placeholders; `docs/D3D11ON12-SKIPPABLE-ELEMENTS.md`'s MVP path needs only
+placeholders; `docs/D3D11ON12.md` §Out-of-scope's MVP path needs only
 this pair.
 
 **`D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW` has no published WDDM 2.0-named

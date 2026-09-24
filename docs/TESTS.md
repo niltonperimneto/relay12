@@ -35,7 +35,7 @@ D3D12TranslationLayer tree by category, occurrence count, and file. Its golden
 record is `docs/dtl-portability-baseline.json`. Unit tests verify comment
 filtering, locations, counts, and mutation detection. CI also performs a
 MinGW expected-failure compile that must reach exactly the currently recorded
-`atlbase.h` boundary. See `docs/PORT-QUALITY-ROADMAP.md` for the rule that each
+`atlbase.h` boundary. See `docs/D3D11ON12.md` §Policy for the rule that each
 negative milestone becomes a positive compile gate when its blocker is removed.
 
 ## 2. Memory & Boundary Security: Sanitizers & Padding Traps
@@ -176,9 +176,10 @@ barrier, residency, command submission, shader, or presentation correctness.
 
 The runtime checkpoints, in order, are:
 
-1. A deterministic triangle on a macOS self-hosted runner using the real
-   D3DMetal device and queue, with pixel readback or a screenshot hash.
-2. A timed PEAK smoke run whose log must select `Direct3D 12.0`, must not fall
+1. A deterministic triangle on a self-hosted runner using the real
+   D3D12 device and queue, with pixel readback or a screenshot hash.
+2. A timed application smoke run (currently validated using the Unity 6
+   game PEAK) whose log must select `Direct3D 12.0`, must not fall
    back to D3D11, and must show wrapped-resource activity and a presented
    frame without device removal, crash, or initialization timeout.
 3. A soak run that records memory growth, synchronization stalls, and device
@@ -210,12 +211,16 @@ to verify three acquire/clear/release cycles per RGBA/BGRA format. Run it with
 [WRAPPED-RESOURCE-VALIDATION.md](WRAPPED-RESOURCE-VALIDATION.md). It does not
 exercise DXGI surfaces, Direct2D, or presentation.
 
-## PEAK smoke run
+## Application smoke run (PEAK validation)
+
+To validate real-world application interoperability, `relay12` uses real-world
+engines and games as end-to-end smoke tests. The primary reference workload is
+PEAK (Unity 6 hybrid rendering).
 
 `scripts/check_peak_smoke_log.py` turns the second runtime checkpoint above into
 a verdict from Unity's `Player.log` and the Wine output of the same run. Every
 criterion needs positive evidence; tests in `tests/test_peak_smoke_log.py` use
-real PEAK logs for the D3D11 crash, the silent On12 fallback and Metal HUD
+real application logs for the D3D11 crash, the silent On12 fallback and Metal HUD
 output. Unity's D3D12 renderer presents through its own D3D12 swap chain, so a
 presented frame is read from Metal's performance HUD (`MTL_HUD_LOG_ENABLED=1`),
 whose frame count must rise across reports.

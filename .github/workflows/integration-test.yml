@@ -29,7 +29,7 @@ jobs:
             -ld3d11 -ld3d12 -ld3dcompiler -ldxgi -luuid
           # The compute harness is kept as a future target.  It exercises a
           # compute shader and a UAV, neither of which is in the MVP scope
-          # described by docs/D3D11ON12-SKIPPABLE-ELEMENTS.md, so it will stay
+          # described by docs/D3D11ON12.md §Out-of-scope, so it will stay
           # unrunnable for longer than the triangle does.
           x86_64-w64-mingw32-clang++ -std=c++17 -O2 \
             -o d3d11_e2e_harness.exe tests/e2e_d3d11_harness.cpp \

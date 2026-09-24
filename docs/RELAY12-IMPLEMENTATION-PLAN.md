@@ -29,29 +29,8 @@ The branch contains the complete experimental first-frame slice through patch
 0023. The full workflow for commit `7c554bb` and its three-iteration, byte-exact
 D3DMetal hardware run passed. See
 [FIRST-FRAME-VALIDATION.md](FIRST-FRAME-VALIDATION.md) for the log, artifact
-hashes, runtime, and limits. Wrapped-resource interoperability and PEAK
-compatibility are the next milestones and are not established by this result.
-
-### Verified baseline
-
-The following checks pass on the committed first-frame implementation:
-
-```text
-104 Python CI-gate tests
-DDI layout model: 54 structures and 469 fields
-DDI header provenance gate: 21 declaration groups
-Interface-acquisition audit
-Shared-state audit
-Wine patch-series application and frontend lifecycle audit through patch 0023
-Core/router PE export and import audits
-Real D3D11On12 driver and Wine host builds
-Mock core frame and compiled frontend lifetime/unsupported-operation tests
-```
-
-These portable/Wine checks prove structural consistency, PE compilation, and
-fail-closed lifetime behavior. The separately recorded hardware run proves
-pixel correctness and caller-queue fence completion for the offscreen slice;
-it does not cover wrapped-resource ownership or concurrent queue submission.
+hashes, runtime, and limits. Wrapped-resource interoperability and broader
+application compatibility are the next milestones and are not established by this result.
 
 ## 1. Basic shader lifecycle and binding — complete
 
