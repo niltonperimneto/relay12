@@ -85,7 +85,7 @@ Below is the structured roadmap of what is yet to be done.
   points and all seven diagnostic latches, with a bounded join so a deadlock
   is a named failure rather than a hung runner. The CI step captures stderr and
   requires each latch to have reported exactly once.
-* **Not the device function table.** 173 of its 178 slots are still
+* **Not the whole device function table.** 102 of its 178 slots are still
   non-callable placeholders, so a test hammering them would race its own stubs
   and pass regardless of the eventual implementation.
 
@@ -173,11 +173,8 @@ Below is the structured roadmap of what is yet to be done.
   typedef with no named constants because its page publishes names without
   numeric values, while `D3D10DDI_MAPPED_SUBRESOURCE` is fully modelled because
   the frame harness reads `pData`, `RowPitch`, and `DepthPitch`.
-* **Not promoted with that group, deliberately:** `PFNWDDM2_0DDI_FLUSH`'s
-  WDDM 2.0-named page is a 404 and the base `PFND3D10DDI_FLUSH` page's
-  one-parameter list cannot be attributed to the WDDM 2.0-named typedef the
-  table holds. `PFND3D10DDI_SETSCISSORRECTS` would need `D3D10_DDI_RECT` and
-  the frame does not require a scissor.
+* **Not promoted with that group, deliberately:** `PFND3D11_1DDI_FLUSH` (aliased as `PFNWDDM2_0DDI_FLUSH` in the table). The frame does not strictly require flushing the context early, and `PFND3D10DDI_SETSCISSORRECTS` would need `D3D10_DDI_RECT` which the frame also does not require.
+
 * **The mechanism the pilot established, and which every later promotion
   reuses:**
   * `PROMOTED_SLOTS` in `gen_ddi_layout.py` holds the promoted typedefs, and

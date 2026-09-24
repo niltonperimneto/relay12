@@ -1,0 +1,46 @@
+name: Build pinned DXBC converter
+
+# Runtime dependency of the real D3D11On12 driver. Kept separate from the
+# clean-room host; this job builds Microsoft's open-source converter.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/build-dxilconv.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build-converter:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: microsoft/DirectXShaderCompiler
+          ref: 416fab6b5c4ba956a320d9131102304da995edfc # v1.8.2407
+          path: dxc-source
+      - name: Configure converter
+        run: >-
+          cmake -S dxc-source -B dxc-build
+          -C dxc-source/cmake/caches/PredefinedParams.cmake
+          -G "Visual Studio 17 2022" -A x64
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          -DHLSL_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_TESTS=OFF
+          -DENABLE_SPIRV_CODEGEN=OFF -DSPIRV_BUILD_TESTS=OFF
+          -DHLSL_BUILD_DXILCONV=ON -DLLVM_USE_CRT_RELEASE=MT
+      - name: Build converter
+        run: cmake --build dxc-build --config Release --target dxilconv --parallel 4
+      - name: Package converter and licenses
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path converter
+          Copy-Item dxc-build/Release/bin/dxilconv.dll converter/
+          Copy-Item dxc-source/LICENSE* converter/
+          'microsoft/DirectXShaderCompiler 416fab6b5c4ba956a320d9131102304da995edfc' | Set-Content converter/SOURCE.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dxilconv-416fab6b-x64
+          path: converter/
+          if-no-files-found: error
+          retention-days: 14

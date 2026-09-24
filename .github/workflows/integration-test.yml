@@ -1,17 +1,8 @@
-name: "GPTK D3D11->Metal E2E (manual, not yet executable)"
+name: "Build experimental D3D11On12 GPU harnesses"
 
-# Manual only, and deliberately so.  This job cross-compiles the application-
-# level E2E harnesses and stops before running them, because there is nothing
-# to run them against yet: relay12-d3d11/d3d11on12core.cpp reports the device
-# as "validated but not yet translated to the DDI's create-device path", so no
-# host stands behind the DDI function table.  A run would fail at
-# D3D11CreateDevice for a reason that has nothing to do with the change under
-# test.
-#
-# It is not a pull_request trigger and it does not report a pass.  The gating
-# DDI coverage lives in pull-request.yml, whose triangle harness exercises the
-# promoted surface under Wine; this job exists so the harnesses that will
-# eventually replace it do not rot in the meantime.
+# Build-only on hosted macOS: actual GPU acceptance requires an isolated
+# Wine/GPTK runtime with D3DMetal and the separately built dxilconv dependency.
+# See docs/FIRST-FRAME-VALIDATION.md. A green build is not a rendering result.
 on:
   workflow_dispatch:
 
@@ -35,7 +26,7 @@ jobs:
           # level, what tests/d3d11ddi_triangle.c asserts at the DDI level.
           x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
             -o d3d11_e2e_triangle.exe tests/e2e_d3d11_triangle.cpp \
-            -ld3d11 -ld3dcompiler -ldxgi -luuid
+            -ld3d11 -ld3d12 -ld3dcompiler -ldxgi -luuid
           # The compute harness is kept as a future target.  It exercises a
           # compute shader and a UAV, neither of which is in the MVP scope
           # described by docs/D3D11ON12-SKIPPABLE-ELEMENTS.md, so it will stay
@@ -46,9 +37,11 @@ jobs:
 
       - name: Report why execution is skipped
         run: |
-          echo 'Both harnesses cross-compiled.  Neither was executed: no DDI'
-          echo 'host is implemented, so D3D11CreateDevice cannot reach the'
-          echo 'relay.  This job does not assert that the stack works.'
+          echo 'Both harnesses cross-compiled; neither executed on this runner.'
+          echo 'Triangle execution requires the experimental host, real driver,'
+          echo 'dxilconv.dll, and a configured isolated Wine/D3DMetal runtime.'
+          echo 'The compute harness remains outside the supported frame surface.'
+
 
       - name: Upload the harnesses
         uses: actions/upload-artifact@v7

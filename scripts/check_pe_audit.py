@@ -79,6 +79,17 @@ EXPECTED_EXPORTS = {
         16: "WineD3D11On12SetPixelShaderV1",
         17: "WineD3D11On12CreateTexture2DV1",
         18: "WineD3D11On12DestroyTexture2DV1",
+        19: "WineD3D11On12CreateRenderTargetViewV1",
+        20: "WineD3D11On12DestroyRenderTargetViewV1",
+        21: "WineD3D11On12SetRenderTargetV1",
+        22: "WineD3D11On12SetViewportV1",
+        23: "WineD3D11On12ClearRenderTargetV1",
+        24: "WineD3D11On12CopyTexture2DV1",
+        25: "WineD3D11On12MapTexture2DV1",
+        26: "WineD3D11On12UnmapTexture2DV1",
+        27: "WineD3D11On12CheckFrameSupportV1",
+        28: "WineD3D11On12CreateWrappedTexture2DV1",
+        29: "WineD3D11On12SetWrappedOwnershipV1",
     },
 }
 
