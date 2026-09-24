@@ -28,6 +28,7 @@
 #include <string.h>
 
 #include "d3d11on12core.h"
+#include "ddi/wine_d3d11ddi.h"
 #include "d3d11on12mocks.h"
 
 static int failures;
@@ -111,6 +112,7 @@ int main(void)
     typedef void (WINAPI *get_shader_counts_fn)(LONG *, LONG *, LONG *, LONG *,
             LONG *, void **, void **, int *);
     typedef void (WINAPI *fail_next_shader_fn)(void);
+    typedef void (WINAPI *fail_next_resource_fn)(void);
     typedef void (WINAPI *get_texture2d_record_fn)(LONG *, UINT *, UINT *,
             UINT *, UINT *, DXGI_FORMAT *, UINT *, int *, int *);
     WineD3D11On12AdapterDevice out;
@@ -126,6 +128,7 @@ int main(void)
     get_counts_fn get_counts;
     get_flush_count_fn get_flush_count;
     get_flush_count_fn get_draw_count;
+    get_flush_count_fn get_amortized_count;
     get_extended_draw_counts_fn get_extended_draw_counts;
     get_topology_fn get_topology;
     get_resource_counts_fn get_resource_counts;
@@ -134,6 +137,7 @@ int main(void)
     fail_next_input_layout_fn fail_next_input_layout;
     get_shader_counts_fn get_shader_counts;
     fail_next_shader_fn fail_next_shader;
+    fail_next_resource_fn fail_next_resource;
     get_texture2d_record_fn get_texture2d_record;
     D3D11_TEXTURE2D_DESC texture_desc;
     D3D11_SUBRESOURCE_DATA texture_initial_data;
@@ -260,6 +264,8 @@ int main(void)
             mock_driver, "WineD3D11On12MockDriverGetFlushCount") : NULL;
     get_draw_count = mock_driver ? (get_flush_count_fn)(void *)GetProcAddress(
             mock_driver, "WineD3D11On12MockDriverGetDrawCount") : NULL;
+    get_amortized_count = mock_driver ? (get_flush_count_fn)(void *)GetProcAddress(
+            mock_driver, "WineD3D11On12MockDriverGetAmortizedProcessingCount") : NULL;
     get_extended_draw_counts = mock_driver
             ? (get_extended_draw_counts_fn)(void *)GetProcAddress(mock_driver,
                     "WineD3D11On12MockDriverGetExtendedDrawCounts") : NULL;
@@ -283,11 +289,16 @@ int main(void)
     fail_next_shader = mock_driver
             ? (fail_next_shader_fn)(void *)GetProcAddress(mock_driver,
                     "WineD3D11On12MockDriverFailNextShader") : NULL;
+    fail_next_resource = mock_driver
+            ? (fail_next_resource_fn)(void *)GetProcAddress(mock_driver,
+                    "WineD3D11On12MockDriverFailNextResource") : NULL;
     get_texture2d_record = mock_driver
             ? (get_texture2d_record_fn)(void *)GetProcAddress(mock_driver,
                     "WineD3D11On12MockDriverGetTexture2DRecord") : NULL;
     check(get_counts != NULL, "the lifecycle mock driver is loaded");
     check(get_flush_count != NULL, "the flush counter is exported");
+    check(get_amortized_count != NULL,
+          "the amortized processing counter is exported");
     check(get_draw_count != NULL, "the draw counter is exported");
     check(get_extended_draw_counts != NULL,
           "the extended draw counters are exported");
@@ -300,13 +311,15 @@ int main(void)
           "the input-layout failure injector is exported");
     check(get_shader_counts != NULL, "the shader lifecycle recorder is exported");
     check(fail_next_shader != NULL, "the shader failure injector is exported");
+    check(fail_next_resource != NULL,
+          "the resource failure injector is exported");
     check(get_texture2d_record != NULL,
           "the Texture2D creation recorder is exported");
-    if (get_counts && get_flush_count && get_draw_count
-            && get_extended_draw_counts && get_topology
+    if (get_counts && get_flush_count && get_amortized_count
+            && get_draw_count && get_extended_draw_counts && get_topology
             && get_resource_counts && get_ia_bindings
             && get_input_layout_counts && fail_next_input_layout
-            && get_shader_counts && fail_next_shader
+            && get_shader_counts && fail_next_shader && fail_next_resource
             && get_texture2d_record)
     {
         device.support_device1 = 1;
@@ -332,6 +345,8 @@ int main(void)
                   "flush dispatches through the live DDI device");
             check(get_flush_count() == 1,
                   "flush invokes the driver callback exactly once");
+            check(get_amortized_count() == 1,
+                  "flush invokes the runtime amortized processing callback exactly once");
         }
         hr = WineD3D11On12DrawAdapterDeviceV1(&out, 3, 0);
         check(hr == S_OK && get_draw_count() == 1,
@@ -394,6 +409,51 @@ int main(void)
                 &stride, &offset);
         check(hr == E_INVALIDARG,
               "a destroyed vertex buffer is rejected before DDI dispatch");
+
+        /* Partial publication.  The core links a resource into two registries
+         * and allocates three side tables before it calls the driver, and
+         * only writes the caller's handle once the driver has agreed.  A
+         * failure therefore has to leave nothing behind in either registry
+         * and nothing published in the handle -- and the proof that the
+         * registries really were restored is that the *same* handle can then
+         * be created successfully and destroyed again. */
+        memset(&buffer_handle, 0, sizeof(buffer_handle));
+        buffer_handle.size = sizeof(buffer_handle);
+        fail_next_resource();
+        hr = WineD3D11On12CreateBufferV1(&out, &buffer_desc, NULL,
+                &buffer_handle);
+        check(hr == E_OUTOFMEMORY && !buffer_handle.hDrvResource
+                && !buffer_handle.runtimeState && !buffer_handle.reserved,
+              "a DDI creation error publishes no buffer handle");
+        check(buffer_handle.size == sizeof(buffer_handle),
+              "a rejected buffer creation leaves the handle reusable");
+        get_resource_counts(&resource_created, &resource_destroyed,
+                &bad_resource_description);
+        check(resource_created == 2 && resource_destroyed == 1
+                && !bad_resource_description,
+              "a rejected resource is reclaimed without a destroy callback");
+        hr = WineD3D11On12SetVertexBuffersV1(&out, 0, 1, buffers,
+                &stride, &offset);
+        check(hr == E_INVALIDARG,
+              "an unpublished buffer cannot be bound");
+        hr = WineD3D11On12DestroyBufferV1(&buffer_handle);
+        check(hr == S_OK, "destroying an unpublished buffer is inert");
+        get_resource_counts(&resource_created, &resource_destroyed,
+                &bad_resource_description);
+        check(resource_created == 2 && resource_destroyed == 1,
+              "destroying an unpublished buffer reaches no DDI callback");
+        hr = WineD3D11On12CreateBufferV1(&out, &buffer_desc, NULL,
+                &buffer_handle);
+        check(hr == S_OK && buffer_handle.hDrvResource
+                && buffer_handle.runtimeState,
+              "the same handle creates successfully after a rejected attempt");
+        hr = WineD3D11On12DestroyBufferV1(&buffer_handle);
+        check(hr == S_OK, "the recovered buffer destroys cleanly");
+        get_resource_counts(&resource_created, &resource_destroyed,
+                &bad_resource_description);
+        check(resource_created == 3 && resource_destroyed == 2
+                && !bad_resource_description,
+              "failure and recovery leave the resource counts balanced");
 
         memset(&buffer_desc, 0, sizeof(buffer_desc));
         buffer_desc.ByteWidth = 256;
@@ -483,6 +543,14 @@ int main(void)
                 &layout_bound, &bound_layout, &bad_layout_description);
         check(layout_created == 2 && layout_destroyed == 1,
               "a rejected DDI handle is reclaimed without a destroy callback");
+        check(input_layout.size == sizeof(input_layout),
+              "a rejected input-layout creation leaves the handle reusable");
+        hr = WineD3D11On12DestroyInputLayoutV1(&input_layout);
+        check(hr == S_OK, "destroying an unpublished input layout is inert");
+        get_input_layout_counts(&layout_created, &layout_destroyed,
+                &layout_bound, &bound_layout, &bad_layout_description);
+        check(layout_created == 2 && layout_destroyed == 1,
+              "destroying an unpublished layout reaches no DDI callback");
 
         input_layout.size = sizeof(input_layout);
         hr = WineD3D11On12CreateInputLayoutV1(&out, &input_element,
@@ -505,6 +573,9 @@ int main(void)
         check(hr == S_OK && !layout_stress.unexpected,
               "concurrent input-layout binding and destruction stays bounded");
 
+        check(!out.deviceFuncs->pfnCreateVertexShader
+                && !out.deviceFuncs->pfnCreatePixelShader,
+              "the immediate driver leaves shader creation table slots null");
         memset(&vertex_shader, 0, sizeof(vertex_shader));
         vertex_shader.size = sizeof(vertex_shader);
         hr = WineD3D11On12CreateVertexShaderV1(&out, shader_byte_code,
@@ -564,8 +635,18 @@ int main(void)
         hr = WineD3D11On12CreatePixelShaderV1(&out, shader_byte_code,
                 sizeof(shader_byte_code), &pixel_shader);
         check(hr == E_OUTOFMEMORY && !pixel_shader.hDrvShader
-                && !pixel_shader.runtimeState,
+                && !pixel_shader.runtimeState && !pixel_shader.stage,
               "a DDI creation error publishes no shader handle");
+        check(pixel_shader.size == sizeof(pixel_shader),
+              "a rejected shader creation leaves the handle reusable");
+        hr = WineD3D11On12DestroyShaderV1(&pixel_shader);
+        check(hr == S_OK, "destroying an unpublished shader is inert");
+        hr = WineD3D11On12CreatePixelShaderV1(&out, shader_byte_code,
+                sizeof(shader_byte_code), &pixel_shader);
+        check(hr == S_OK && pixel_shader.hDrvShader && pixel_shader.runtimeState,
+              "the same shader handle creates after a rejected attempt");
+        hr = WineD3D11On12DestroyShaderV1(&pixel_shader);
+        check(hr == S_OK, "the recovered shader destroys cleanly");
 
         memset(&shader_stress, 0, sizeof(shader_stress));
         shader_stress.adapter = &out;
@@ -748,7 +829,10 @@ int main(void)
               "device teardown invalidates every surviving Texture2D handle");
         get_resource_counts(&resource_created, &resource_destroyed,
                 &bad_resource_description);
-        check(resource_created == 6 && resource_destroyed == 6,
+        /* One more creation than destruction, and exactly one: the injected
+         * resource failure above is a create call the driver rejected, so it
+         * never earned a destroy.  Every other resource is accounted for. */
+        check(resource_created == 8 && resource_destroyed == 7,
               "device teardown destroys each surviving DDI resource");
         get_input_layout_counts(&layout_created, &layout_destroyed,
                 &layout_bound, &bound_layout, &bad_layout_description);
@@ -758,8 +842,8 @@ int main(void)
                 &shader_destroyed, &vertex_shader_bound, &pixel_shader_bound,
                 &bound_vertex_shader, &bound_pixel_shader,
                 &bad_shader_description);
-        check(vertex_shader_created == 2 && pixel_shader_created == 2
-                && shader_destroyed == 3 && !bad_shader_description,
+        check(vertex_shader_created == 2 && pixel_shader_created == 3
+                && shader_destroyed == 4 && !bad_shader_description,
               "shader failures and teardown preserve exact callback counts");
         get_counts(&opened, &created, &destroyed, &closed);
         check(destroyed == 3 && closed == 3,
