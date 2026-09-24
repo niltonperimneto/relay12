@@ -1,0 +1,21 @@
+Subject: [PATCH] dtl: propagate the DXCore class-layout definition to consumers
+
+ImmediateContext contains m_DXCore only when DYNAMIC_LOAD_DXCORE is enabled.
+Keeping the definition PRIVATE compiles consumers such as D3D11On12 against
+an ImmediateContext with a different size and member offsets. Its inline
+GetViewAllocator then addresses unrelated memory and hangs taking the wrong
+mutex during render-target-view creation. Publish the definition with the
+library so all translation units agree on the class ABI.
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -100,7 +100,7 @@
+ 
+ target_link_libraries(d3d12translationlayer Microsoft::DirectX-Headers d3d12 dxgi)
+ 
+-target_compile_definitions(d3d12translationlayer PRIVATE DYNAMIC_LOAD_DXCORE=1)
++target_compile_definitions(d3d12translationlayer PUBLIC DYNAMIC_LOAD_DXCORE=1)
+ target_compile_definitions(d3d12translationlayer PRIVATE TRANSLATION_LAYER_SUPPORTS_D3DKMT_PRESENT=1)
+ 
+ if(USE_PIX)
