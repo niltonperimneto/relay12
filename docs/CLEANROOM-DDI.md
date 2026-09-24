@@ -511,7 +511,7 @@ declaration nothing yet needs.
 | # | Group | Scope | Rationale and dependencies |
 | :--- | :--- | :--- | :--- |
 | 1 | Surface discovery | MIT tree test build against clean-room header | Turns remaining clean-room work into a measurable compiler worklist |
-| 2 | Signature promotion | Promote slots in `D3DWDDM2_6DDI_DEVICEFUNCS` | 58 of 138 distinct callback types promoted covering 74 of 178 slots (including WDDM 2.6 scanout caps query, element layout, draw, pipeline states, resources, and command lists). See the gating table in `DDI-REMAINING-ROADMAP.md` |
+| 2 | Signature promotion | Promote slots in `D3DWDDM2_6DDI_DEVICEFUNCS` | 59 of 138 distinct callback types promoted covering 76 of 178 slots (including WDDM 2.6 scanout caps query, element layout, draw, pipeline states, resources, views, and command lists). See the gating table in `DDI-REMAINING-ROADMAP.md` |
 | 3 | DXGI DDI interop | `DXGI_DDI_BASE_CALLBACKS`, `DXGI1_6_1_DDI_BASE_FUNCTIONS` | Required by `DXGIBaseDDI` pointers in creation arguments |
 
 ## Resolved items & open questions

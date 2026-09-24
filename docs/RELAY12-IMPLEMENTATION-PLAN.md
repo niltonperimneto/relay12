@@ -11,42 +11,47 @@ combining all remaining callbacks into one large change.
 
 ## Current implementation status
 
-Status as of 2026-09-19. This table distinguishes code present in the working
+Status as of 2026-09-23. This table distinguishes code present in the working
 tree from functionality proven on the real D3DMetal path.
 
 | Milestone | Working-tree status | Completion evidence still required |
 | :--- | :--- | :--- |
-| Input-layout lifecycle and `IASetInputLayout` | Implemented as patch 0013 | MinGW PE build in CI |
-| Vertex/pixel shader lifecycle and binding | Implemented as patch 0014 | MinGW PE build in CI |
-| Texture2D core lifecycle | Implemented as patch 0015 | MinGW PE build in CI, and the mock-driver run under Wine |
-| Render-target views | Not started | Patch 0016 and lifecycle tests |
-| Output merger, viewport, and clear | Not started | Patch 0017 and exact DDI-dispatch tests |
-| Copy, map, unmap, and readback | Not started | Patch 0018 and byte-exact readback tests |
-| D3D11 device/context publication | Deliberately disabled | Complete readiness check and COM publication tests |
-| Real D3DMetal triangle | Not proven | Apple Silicon hardware execution with pixel readback |
+| Input-layout lifecycle and `IASetInputLayout` | Implemented by patch 0013 | Included in the passing portable and Wine validation lanes |
+| Vertex/pixel shader lifecycle and binding | Implemented by patch 0014 | Portable/Wine validation and real D3DMetal triangle shader conversion passed |
+| Texture2D core lifecycle | Implemented by patch 0015 | Mock-driver lifecycle and Wine frontend tests pass |
+| Render-target views | Implemented by patch 0016 | Mock frame and retained-resource lifetime tests pass |
+| Output merger, viewport, and clear | Implemented by patch 0017 | Exact DDI-dispatch and mock-frame tests pass |
+| Copy, map, unmap, and readback | Implemented by patch 0018 | Mock byte-exact readback and failure tests pass |
+| D3D11 device/context publication | Implemented by patches 0019–0023 behind `RELAY12_EXPERIMENTAL_FRAME=1` | Compiled frontend tests and three real GPU create/render/teardown cycles passed; publication remains opt-in |
+| Real D3DMetal triangle | Passed on 2026-09-23 at commit `7c554bb` | Three byte-exact readbacks, caller-queue fence completion, and device teardowns on Apple A18 Pro; evidence in FIRST-FRAME-VALIDATION.md |
 
-The branch tip does not yet contain patches 0013 to 0015. A clean status or a
-green Python gate alone must not be interpreted as first-frame completion: no
-part of the Texture2D slice has been compiled, because the MinGW toolchain is
-CI-only.
+The branch contains the complete experimental first-frame slice through patch
+0023. The full workflow for commit `7c554bb` and its three-iteration, byte-exact
+D3DMetal hardware run passed. See
+[FIRST-FRAME-VALIDATION.md](FIRST-FRAME-VALIDATION.md) for the log, artifact
+hashes, runtime, and limits. Wrapped-resource interoperability and PEAK
+compatibility are the next milestones and are not established by this result.
 
 ### Verified baseline
 
-After the shader slice and the initial Texture2D core changes, the following
-portable checks pass:
+The following checks pass on the committed first-frame implementation:
 
 ```text
-96 Python CI-gate tests
-DDI layout model: 53 structures and 463 fields
-DDI header provenance gate
+104 Python CI-gate tests
+DDI layout model: 54 structures and 469 fields
+DDI header provenance gate: 21 declaration groups
 Interface-acquisition audit
 Shared-state audit
-Wine patch-series application and frontend lifecycle audit through patch 0014
+Wine patch-series application and frontend lifecycle audit through patch 0023
+Core/router PE export and import audits
+Real D3D11On12 driver and Wine host builds
+Mock core frame and compiled frontend lifetime/unsupported-operation tests
 ```
 
-These checks prove structural consistency and fail-closed lifetime behavior.
-They do not prove PE compilation, GPU command execution, synchronization,
-Metal rendering, or pixel correctness.
+These portable/Wine checks prove structural consistency, PE compilation, and
+fail-closed lifetime behavior. The separately recorded hardware run proves
+pixel correctness and caller-queue fence completion for the offscreen slice;
+it does not cover wrapped-resource ownership or concurrent queue submission.
 
 ## 1. Basic shader lifecycle and binding — complete
 
@@ -154,9 +159,9 @@ rather than its first entry, because the core derives that array itself.
   takes only a handle, so the check the binding entry points can make is not
   expressible here.
 
-## 3. Render-target-view ownership
+## 3. Render-target-view ownership — complete
 
-Create `0016-d3d11-route-render-target-views.patch`.
+Implemented by `0016-d3d11-route-render-target-views.patch`.
 
 Add an owned RTV handle and registry supporting:
 
@@ -174,9 +179,9 @@ Validate that:
 - The view format and resource dimension agree.
 - Releasing a resource with live views follows D3D11 lifetime semantics.
 
-## 4. Basic output-merger and rasterizer state
+## 4. Basic output-merger and rasterizer state — complete
 
-Create `0017-d3d11-route-basic-frame-state.patch`.
+Implemented by `0017-d3d11-route-basic-frame-state.patch`.
 
 Implement:
 
@@ -199,9 +204,9 @@ Binding methods should hold shared registry locks while resolving handles and
 calling the DDI. Destruction should remove objects under an exclusive lock,
 drain existing binders, and only then destroy the driver object.
 
-## 5. Copy and readback
+## 5. Copy and readback — complete
 
-Create `0018-d3d11-route-readback.patch`.
+Implemented by `0018-d3d11-route-readback.patch`.
 
 Implement:
 
@@ -222,12 +227,12 @@ The mapping implementation must:
 This milestone enables deterministic pixel validation without relying on
 screenshots.
 
-## 6. Publish the complete D3D11 device
+## 6. Publish the experimental D3D11 device — complete and opt-in
 
-Keep the standalone Wine device unpublished until every operation required by
-the E2E triangle is routed.
-
-Then update `WineD3D11On12CreateDeviceV1` to return the real:
+Patches 0019–0023 register and build the host, publish the standalone Wine
+device only when `RELAY12_EXPERIMENTAL_FRAME=1` is set, retain objects bound to
+the immediate context, and reject unsupported backend operations before they
+can touch absent WineD3D objects. The public boundary returns the real:
 
 - `ID3D11Device`
 - Immediate `ID3D11DeviceContext`
@@ -237,11 +242,59 @@ Before publishing the device, perform an internal readiness check that every
 mandatory backend operation exists. Relay12 must not return a valid-looking
 device that fails on its first normal API call.
 
+### Current device-creation state
+
+The validation and ownership foundations are already implemented:
+
+- `WineD3D11On12CreateDeviceV1` validates flags, feature-level arrays, the
+  supplied D3D12 device, one direct command queue, node mask, queue ownership,
+  and COM identity.
+- `WineD3D11On12OpenAdapterV1` negotiates the DDI version, allocates private
+  adapter/device storage, installs runtime callbacks, and owns deterministic
+  teardown.
+- The Wine host loads the versioned core interface and mandatory operation
+  exports, opens the adapter/device, retains the D3D12 device, and transfers
+  the lifetime token into `backend_private`.
+- The standalone Wine D3D11 controlling object and immediate context already
+  have correct inner-`IUnknown` ownership and final-release teardown.
+
+Without the environment opt-in, publication remains fail-closed with
+`DXGI_ERROR_UNSUPPORTED` and zeroed outputs. With it, the core loads the
+separately named host, requires all frame-operation exports and its readiness
+check, and publishes the controlling object and optional immediate context.
+
+### Device-creation completion checklist
+
+The implementation now satisfies the code and mock-test portions of the
+checklist:
+
+- RTV creation/destruction is routed and included in the mandatory backend
+  operation set.
+- `OMSetRenderTargets`, `RSSetViewports`, and `ClearRenderTargetView` are
+  routed and included in readiness checks.
+- Staging Texture2D, `CopyResource`, `Map`, and `Unmap` are routed and included
+  in readiness checks.
+- The Wine host returns the controlling `ID3D11Device`, retains and returns the
+  immediate context when requested, and reports the selected feature level.
+- Every failure path zeros outputs and releases the unpublished controlling
+  object, backend token, D3D12 references, and loaded core module exactly once.
+- The core/router reaches the Wine host without recursive
+  `D3D11On12CreateDevice` dispatch and rejects a host missing any mandatory
+  export or readiness capability.
+- COM identity, optional-output, final-release, injected-failure, and repeated
+  create/destroy tests pass.
+- The deterministic triangle and byte-exact readback passed on the real
+  D3DMetal stack at `7c554bb`. The opt-in remains necessary: general device
+  usability still requires wrapped resources and application validation.
+
 ## 7. Execute the real D3DMetal triangle
 
 Use `tests/e2e_d3d11_triangle.cpp` with as few changes as possible.
 
-The acceptance criteria are:
+The three-cycle pixel/fence/teardown gate passed on 2026-09-23; see
+[FIRST-FRAME-VALIDATION.md](FIRST-FRAME-VALIDATION.md). That run does not measure
+long-term memory growth or every internal object's reference count, and did
+not enable a graphics validation layer. The broader conformance targets are:
 
 - The corner pixel exactly matches the clear color.
 - The center pixel exactly matches the triangle color.
@@ -265,6 +318,15 @@ D3D11 application
 
 ## 8. Wrapped resources and synchronization
 
+**First slice implemented:** patch 0024 and exports 28–29 wrap single-mip,
+single-sample RGBA/BGRA render targets, implement acquire/release and
+release-all, and use driver state transitions on the caller's queue. Native
+failure/lifetime tests and the D3D12-owned texture hardware readback test pass.
+See [WRAPPED-RESOURCE-VALIDATION.md](WRAPPED-RESOURCE-VALIDATION.md) for evidence
+and restrictions. Broad resource support, concurrent GPU submission, hardware
+soak, presentation, and Direct2D/DirectWrite remain separate work.
+
+
 After the first real frame works, implement the functionality needed by hybrid
 D3D11/D3D12 applications:
 
@@ -279,6 +341,33 @@ D3D11/D3D12 applications:
 - Safe shutdown while work remains in flight.
 - Swapchain and presentation integration.
 - Direct2D and DirectWrite interoperability.
+
+## Immediate next steps
+
+Work should now proceed by evidence and compatibility value rather than by
+adding more first-frame callbacks:
+
+1. **First-frame acceptance — complete.** The full branch workflow and the
+   three-cycle Apple Silicon run passed at `7c554bb`. The module list,
+   pixel results, caller-queue fence completion, teardown, and artifact hashes
+   are preserved in `FIRST-FRAME-VALIDATION.md` and its linked evidence.
+2. **Fix only the boundary the real run exposes.** If it fails, classify the
+   first failing stage as loading, adapter/device creation, shader conversion,
+   resource creation, command submission, synchronization, or readback. Add a
+   focused regression at the nearest portable boundary before changing code.
+3. **Harden the accepted slice.** Mock soak and partial-publication failure
+   coverage are present. Hardware repeated-process and longer in-process runs,
+   memory-growth measurements, and device-removal tracking remain. Keep the
+   environment opt-in while extending the wrapped-resource path.
+4. **Wrapped-resource ownership — first slice implemented.** RGBA/BGRA
+   Texture2D create/acquire/release, release-all, state transition, flush, and
+   caller-queue fence/readback tests pass locally. Finish branch CI before
+   expanding this experimentally supported slice; preserve the restrictions
+   documented in `WRAPPED-RESOURCE-VALIDATION.md`.
+5. **Add presentation after synchronization.** Introduce the minimum DXGI DDI
+   surface required for one swapchain path, then validate a presented frame.
+   Broader shader stages, state objects, formats, and deferred contexts follow
+   measured application demand rather than preceding the ownership work.
 
 ## Engineering rules
 
