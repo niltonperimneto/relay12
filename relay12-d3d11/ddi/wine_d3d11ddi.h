@@ -1427,16 +1427,37 @@ typedef struct D3D10_DDIARG_SUBRESOURCE_UP
 typedef struct DXGI_DDI_PRIMARY_DESC DXGI_DDI_PRIMARY_DESC;
 typedef struct D3DDDI_OPENALLOCATIONINFO D3DDDI_OPENALLOCATIONINFO;
 typedef struct D3DDDI_OPENALLOCATIONINFO2 D3DDDI_OPENALLOCATIONINFO2;
+/* Public declaration and documentation mirror (checked 2026-09-23):
+ * https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ne-d3d10umddi-d3d10ddiresource_type
+ * https://github.com/MicrosoftDocs/windows-driver-docs-ddi/blob/staging/wdk-ddi-src/content/d3d10umddi/ne-d3d10umddi-d3d10ddiresource_type.md
+ * Both omit numeric initializers. Do not infer a zero origin from that
+ * rendering: a separately compiled ABI probe against the external licensed
+ * overlay establishes the 1-based values. No overlay declaration is copied.
+ */
 typedef UINT D3D10DDIRESOURCE_TYPE;
-#define D3D10DDIRESOURCE_BUFFER 0u
-#define D3D10DDIRESOURCE_TEXTURE1D 1u
-#define D3D10DDIRESOURCE_TEXTURE2D 2u
-#define D3D10DDIRESOURCE_TEXTURE3D 3u
-#define D3D10DDIRESOURCE_TEXTURECUBE 4u
-#define D3D11DDIRESOURCE_BUFFEREX 5u
+#define D3D10DDIRESOURCE_BUFFER 1u
+#define D3D10DDIRESOURCE_TEXTURE1D 2u
+#define D3D10DDIRESOURCE_TEXTURE2D 3u
+#define D3D10DDIRESOURCE_TEXTURE3D 4u
+#define D3D10DDIRESOURCE_TEXTURECUBE 5u
+#define D3D11DDIRESOURCE_BUFFEREX 6u
 typedef UINT D3D11_1DDI_VIDEO_DECODER_BUFFER_TYPE;
 typedef UINT D3DWDDM2_0DDI_TEXTURE_LAYOUT;
-typedef void *D3D10DDI_HKMRESOURCE;
+/* Kernel handles carry a 32-bit token, not a pointer. Public declaration and
+ * documentation mirror checked 2026-09-23:
+ * https://learn.microsoft.com/en-us/windows-hardware/drivers/display/direct3d-version-10-kernel-handles
+ * https://github.com/MicrosoftDocs/windows-driver-docs/blob/staging/windows-driver-docs-pr/display/direct3d-version-10-kernel-handles.md
+ * The separately compiled driver ABI probe verifies the token width. The
+ * host uses UINT as its transport spelling and imports no kernel header.
+ */
+typedef struct D3D10DDI_HKMRESOURCE
+{
+    UINT handle;
+} D3D10DDI_HKMRESOURCE;
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_HKMRESOURCE);
+WINE_DDI_ASSERT_SIZE(D3D10DDI_HKMRESOURCE, 4);
+WINE_DDI_ASSERT_ALIGN(D3D10DDI_HKMRESOURCE, 4);
+WINE_DDI_ASSERT_FIELD(D3D10DDI_HKMRESOURCE, handle, 0);
 
 WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDI_MIPINFO);
 WINE_DDI_ASSERT_SIZE(D3D10DDI_MIPINFO, 24);
@@ -1501,9 +1522,10 @@ typedef struct D3D10DDIARG_OPENRESOURCE
         D3DDDI_OPENALLOCATIONINFO2 *pOpenAllocationInfo2;
     };
     D3D10DDI_HKMRESOURCE hKMResource;
+    UINT WinePad1;
     void *pPrivateDriverData;
     UINT PrivateDriverDataSize;
-    UINT WinePad1;
+    UINT WinePad2;
 } D3D10DDIARG_OPENRESOURCE;
 
 WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10DDIARG_CREATERESOURCE);
@@ -1552,7 +1574,8 @@ WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENRESOURCE, pOpenAllocationInfo2, 8);
 WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENRESOURCE, hKMResource, 16);
 WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENRESOURCE, pPrivateDriverData, 24);
 WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENRESOURCE, PrivateDriverDataSize, 32);
-WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENRESOURCE, WinePad1, 36);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENRESOURCE, WinePad1, 20);
+WINE_DDI_ASSERT_FIELD(D3D10DDIARG_OPENRESOURCE, WinePad2, 36);
 
 /*
  * Group: shader resource view and render target view creation arguments

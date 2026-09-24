@@ -300,3 +300,43 @@ WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11CreateDeviceAndSwapChainV2(
         const D3D_FEATURE_LEVEL *, UINT, UINT, const DXGI_SWAP_CHAIN_DESC *,
         IDXGISwapChain **, ID3D11Device **, D3D_FEATURE_LEVEL *,
         ID3D11DeviceContext **) WINE_D3D11ON12_NOEXCEPT;
+
+/* First-frame operations. Existing ordinals and interface-table layout stay
+ * unchanged; consumers resolve these exports as a mandatory group. */
+typedef struct WineD3D11On12RenderTargetView
+{
+    UINT size;
+    UINT reserved;
+    void *hDrvView;
+    void *runtimeState;
+} WineD3D11On12RenderTargetView;
+WINE_D3D11ON12_ASSERT(sizeof(WineD3D11On12RenderTargetView) == 24);
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12CreateRenderTargetViewV1(
+        WineD3D11On12AdapterDevice *, WineD3D11On12Texture2D *,
+        const D3D11_RENDER_TARGET_VIEW_DESC *, WineD3D11On12RenderTargetView *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12DestroyRenderTargetViewV1(
+        WineD3D11On12RenderTargetView *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12SetRenderTargetV1(
+        WineD3D11On12AdapterDevice *, WineD3D11On12RenderTargetView *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12SetViewportV1(
+        WineD3D11On12AdapterDevice *, const D3D11_VIEWPORT *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12ClearRenderTargetV1(
+        WineD3D11On12AdapterDevice *, WineD3D11On12RenderTargetView *, const FLOAT *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12CopyTexture2DV1(
+        WineD3D11On12AdapterDevice *, WineD3D11On12Texture2D *, WineD3D11On12Texture2D *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12MapTexture2DV1(
+        WineD3D11On12AdapterDevice *, WineD3D11On12Texture2D *, UINT, D3D11_MAP,
+        UINT, D3D11_MAPPED_SUBRESOURCE *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12UnmapTexture2DV1(
+        WineD3D11On12AdapterDevice *, WineD3D11On12Texture2D *, UINT) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12CheckFrameSupportV1(
+        WineD3D11On12AdapterDevice *) WINE_D3D11ON12_NOEXCEPT;
+
+/* Wrapped Texture2D interop. These append-only exports preserve ABI v3. */
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12CreateWrappedTexture2DV1(
+        WineD3D11On12AdapterDevice *, IUnknown *, const D3D11_RESOURCE_FLAGS *,
+        D3D12_RESOURCE_STATES, D3D12_RESOURCE_STATES,
+        D3D11_TEXTURE2D_DESC *, WineD3D11On12Texture2D *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12SetWrappedOwnershipV1(
+        WineD3D11On12AdapterDevice *, WineD3D11On12Texture2D *const *, UINT,
+        BOOL) WINE_D3D11ON12_NOEXCEPT;
