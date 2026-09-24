@@ -93,43 +93,11 @@ follows a wrapped `InitOnceExecuteOnce` through its helper.
 
 ## 3. Subsystem Architecture
 
-```text
- ┌──────────────────────────────────────────────────────────────┐
- │                        Application                           │
- └──────────────────────────────┬───────────────────────────────┘
-                                │
-                                ▼
- ┌──────────────────────────────────────────────────────────────┐
- │                     Router: d3d11shim.dll                    │
- │                                                              │
- │  Ordinal 1 & 2 (D3D11):           Ordinal 3 (D3D11On12):     │
- │  Forwards to d3d11mt.dll          Routes to d3d11on12core    │
- └──────────────────────────────┬───────────────────────────────┘
-                                │
-                                ▼
- ┌──────────────────────────────────────────────────────────────┐
- │                Core Boundary: d3d11on12core.dll              │
- │  Validates ID3D12Device and direct ID3D12CommandQueue        │
- └──────────────────────────────┬───────────────────────────────┘
-                                │
-                                ▼
- ┌──────────────────────────────────────────────────────────────┐
- │             Clean-Room DDI Host (wine_d3d11ddi.h)            │
- │  Driver fills: DEVICEFUNCS ............ 178 slots, 1424 B    │
- │  Host fills:   CORELAYER_DEVICECALLBACKS  47 slots,  376 B   │
- │                D3DDDI_DEVICECALLBACKS ..  66 slots,  528 B   │
- └──────────────────────────────┬───────────────────────────────┘
-                                │
-                                ▼
- ┌──────────────────────────────────────────────────────────────┐
- │     Microsoft D3D11On12 Driver & D3D12TranslationLayer       │
- └──────────────────────────────┬───────────────────────────────┘
-                                │
-                                ▼
- ┌──────────────────────────────────────────────────────────────┐
- │                   Caller's ID3D12Device                      │
- └──────────────────────────────────────────────────────────────┘
-```
+See [`README.md`](README.md) for the Mermaid architecture flowchart and
+[`docs/D3D11ON12.md`](docs/D3D11ON12.md) for the detailed text-form pipeline.
+The summary: Application → Router (`d3d11shim.dll`) → Core Boundary
+(`d3d11on12core.dll`) → Clean-Room DDI Host → Microsoft D3D11On12 Driver →
+D3D12TranslationLayer → Caller's `ID3D12Device`.
 
 ### Component Breakdown
 
@@ -141,7 +109,7 @@ links: they break for every other checkout and on GitHub's web view.
 | [`relay12-d3d11/`](relay12-d3d11) | Implementation: `d3d11shim.cpp`/`.h`, `d3d11on12core.cpp`/`.h`, `wine_d3d11_diag.h`, `wine_d3d11ddi_negotiate.h`, `ddi/wine_d3d11ddi.h`, and the `.def` export contracts. |
 | [`scripts/`](scripts) | Eleven `check_*.py` gates plus `gen_ddi_layout.py`; the `prepare-*.sh` scripts that materialize the patched third-party trees and the SDK overlay; `package-d3d11on12-source.sh`. See §5 for which run with no arguments. |
 | [`tests/`](tests) | ~50 files: the Python gate suite (`test_ci_gates.py`), the DDI layout and negotiation tests, the mock driver (`d3d11on12mockdriver.c`) and the lifecycle suite that drives it (`d3d11on12openadapter.c`), per-group promoted-slot negative tests, `compat/` unit tests, and probes. [`docs/TESTS.md`](docs/TESTS.md) is the inventory and the rationale. |
-| [`docs/`](docs) | [`D3D11ON12.md`](docs/D3D11ON12.md) (design and readiness — source of truth for what is done), [`CLEANROOM-DDI.md`](docs/CLEANROOM-DDI.md) (DDI authoring roadmap), [`TESTS.md`](docs/TESTS.md), [`PORT-QUALITY-ROADMAP.md`](docs/PORT-QUALITY-ROADMAP.md) (phase/milestone authority), [`DDI-REMAINING-ROADMAP.md`](docs/DDI-REMAINING-ROADMAP.md), [`DDI-CONCURRENCY-TESTING.md`](docs/DDI-CONCURRENCY-TESTING.md), [`D3D11ON12-SKIPPABLE-ELEMENTS.md`](docs/D3D11ON12-SKIPPABLE-ELEMENTS.md), [`RELAY12-IMPLEMENTATION-PLAN.md`](docs/RELAY12-IMPLEMENTATION-PLAN.md). |
+| [`docs/`](docs) | [`D3D11ON12.md`](docs/D3D11ON12.md) (design, readiness, milestones — source of truth for what is done), [`CLEANROOM-DDI.md`](docs/CLEANROOM-DDI.md) (DDI authoring roadmap), [`TESTS.md`](docs/TESTS.md) (testing strategy and concurrency), [`DDI-REMAINING-ROADMAP.md`](docs/DDI-REMAINING-ROADMAP.md), [`RELAY12-IMPLEMENTATION-PLAN.md`](docs/RELAY12-IMPLEMENTATION-PLAN.md), [`FIRST-FRAME-VALIDATION.md`](docs/FIRST-FRAME-VALIDATION.md), [`WRAPPED-RESOURCE-VALIDATION.md`](docs/WRAPPED-RESOURCE-VALIDATION.md). |
 | [`third_party/`](third_party) | Pinned submodules (MIT): `D3D11On12`, `D3D12TranslationLayer`, `DirectX-Headers`. Never edited in place — see §2.5. |
 | [`patches/`](patches) | The reviewable portability series. `patches/d3d11on12/` and `patches/dtl/` are applied to the pinned submodules by `scripts/prepare-*.sh`; `patches/*.patch` at the top level are the Wine frontend patches. |
 
@@ -302,11 +270,6 @@ relay12 into standalone repositories` on the Whisky side.
 git remote -v                                   # confirm before pushing
 git push origin "$(git branch --show-current)"
 ```
-
-> Older notes describe the nested layout, where `origin` and `rh` were local
-> filesystem paths and `github` was the GitHub remote. That layout is gone, and
-> its `git push origin` warning no longer applies. `git remote -v` is the
-> authority.
 
 ## 6. Agent Identity and Commit Guidelines
 

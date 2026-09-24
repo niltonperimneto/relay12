@@ -77,6 +77,6 @@ The clean-room `D3D10DDI_HKMRESOURCE` declaration now matches the documented
 40-byte enclosing layout is unchanged. The independent model and separately
 compiled driver ABI probe check the layout. No proprietary header was copied.
 
-The next application milestone is a presented frame followed by PEAK's
-D3D12/On12 smoke test. Keep the experimental opt-in until those paths and the
-longer hardware soak are qualified.
+The next application milestone is a presented frame followed by application-level
+D3D12/On12 smoke testing (using reference workloads such as PEAK). Keep the
+experimental opt-in until those paths and the longer hardware soak are qualified.

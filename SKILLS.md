@@ -150,18 +150,7 @@ a new gate lands with both a positive and a negative test.
 
 ### Execution Recipe
 
-The full local set, in the order worth running. All exit `0` and none needs a
-toolchain:
-
-```bash
-python3 -m unittest discover -s tests -p "test_*.py"   # 103 tests
-python3 scripts/gen_ddi_layout.py --check              # 54 structures, 469 fields
-python3 scripts/check_ddi_header.py                    # 21 declaration groups
-python3 scripts/check_interface_acquisition.py         # strictResult() funnel
-python3 scripts/check_shared_state.py                  # InitOnce annotations
-python3 scripts/check_adapter_args.py                  # adapter-arg transcription
-python3 scripts/check_secure_code.py relay12-d3d11     # refcount/alloc lints
-```
+Run the local verification gates listed in [`AGENTS.md`](AGENTS.md) §5.1. All exit `0` and require no toolchain, Wine, or network.
 
 Gates needing an artifact CI builds or a tree CI materializes:
 

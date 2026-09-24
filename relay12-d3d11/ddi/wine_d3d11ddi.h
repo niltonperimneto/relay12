@@ -1974,7 +1974,7 @@ typedef struct D3D11_1DDIARG_STAGE_IO_SIGNATURES D3D11_1DDIARG_STAGE_IO_SIGNATUR
  * argument structures exist would be a type nothing yet constrains.  Note
  * what this does and does not enable: a promoted SetRenderTargets can be
  * handed a depth-stencil or unordered-access view, but no promoted slot can
- * produce one, which is the state docs/D3D11ON12-SKIPPABLE-ELEMENTS.md
+ * produce one, which is the state docs/D3D11ON12.md §Out-of-scope
  * describes for the MVP.
  */
 typedef struct D3D10DDI_HELEMENTLAYOUT
@@ -2505,7 +2505,7 @@ typedef SIZE_T (*PFND3D11_1DDI_CALCPRIVATETESSELLATIONSHADERSIZE)(
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_setrasterizerstate
  *
  * This is the group that turns the objects the earlier groups can create into
- * a frame.  It is what docs/D3D11ON12-SKIPPABLE-ELEMENTS.md calls the
+ * a frame.  It is what docs/D3D11ON12.md calls the
  * "Triangle on Screen" path, past creation: bind an element layout and a
  * vertex buffer, bind the two shaders and the three state objects, name a
  * render target, clear it, and draw.

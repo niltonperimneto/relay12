@@ -245,13 +245,13 @@ For plain-text and terminal inspection, the architecture layout is presented bel
 
 ### End-to-End Execution Flow
 
-1. **Initialization:** The game creates its Direct3D 12 device and direct command queue via standard Direct3D 12 APIs.
-2. **On12 Invocation:** The game invokes `D3D11On12CreateDevice(pDevice, flags, ..., pCommandQueues, numQueues, ..., ppDevice, ppImmediateContext)`.
-3. **PE Routing:** `d3d11shim.dll` intercepts the call, zero-initializes all caller output pointers, verifies `d3d11on12core.dll` availability, and forwards the arguments.
-4. **Validation & Identity Check:** `d3d11on12core.dll` confirms the command queue description is `D3D12_COMMAND_LIST_TYPE_DIRECT`, performs two-tier COM identity verification, and funnels interface queries through `strictResult()`.
-5. **DDI Adapter Negotiation:** The core initializes the Clean-Room WDDM DDI Host, negotiating WDDM 2.6 / 2.7 contracts and populating the 47-slot core layer callback table (`D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS`).
-6. **UMD Activation:** `OpenAdapter_D3D11On12` is called in Microsoft's D3D11On12 driver, receiving driver function tables (`D3DWDDM2_6DDI_DEVICEFUNCS`).
-7. **Command Recording & Submission:** D3D11 operations (e.g., video frame blits, UI draw calls) are recorded through Microsoft's `D3D12TranslationLayer` directly into command lists dispatched to the application's supplied Direct3D 12 command queue.
+1. **Initialization:** The application creates its Direct3D 12 device and direct command queue.
+2. **On12 Invocation:** The application invokes `D3D11On12CreateDevice(pDevice, flags, ..., pCommandQueues, numQueues, ..., ppDevice, ppImmediateContext)`.
+3. **PE Routing & Validation:** `d3d11shim.dll` intercepts the call, initializes outputs, and forwards to `d3d11on12core.dll`, which validates queue types (`DIRECT`), checks two-tier COM identity, and funnels queries through `strictResult()`.
+4. **DDI Host & UMD Activation:** The clean-room DDI host negotiates WDDM 2.6/2.7 tables and invokes `OpenAdapter_D3D11On12` in Microsoft's D3D11On12 driver.
+5. **Command Submission:** D3D11 rendering operations are translated by Microsoft's `D3D12TranslationLayer` directly into D3D12 command lists submitted to the application's queue.
+
+For detailed sequence diagrams, state models, and design invariants, see [`docs/D3D11ON12.md`](docs/D3D11ON12.md).
 
 ---
 
@@ -259,7 +259,7 @@ For plain-text and terminal inspection, the architecture layout is presented bel
 
 ### 1. PE Router (`relay12-d3d11/d3d11shim.cpp`)
 
-Applications link against `d3d11.dll`. The router satisfies this dependency while maintaining exact Windows and Apple Game Porting Toolkit export compatibility:
+Drop-in router for `d3d11.dll` providing exact Windows and Wine export compatibility:
 
 | Export Ordinal | Function Name | Routing Behavior | Failure Mode |
 | ---: | :--- | :--- | :--- |
@@ -268,47 +268,29 @@ Applications link against `d3d11.dll`. The router satisfies this dependency whil
 | **3** | `D3D11On12CreateDevice` | Routes to `d3d11on12core.dll` | Returns `DXGI_ERROR_UNSUPPORTED`, zeroes all output pointers |
 | **4** | `WineD3D11ShimGetStatus` | Queries runtime readiness flags | Returns `HRESULT` with status bitmask |
 
-> [!NOTE]
-> During transactional deployment on macOS, Apple's original `d3d11.dll` is renamed to `d3d11mt.dll`. Standard Direct3D 11 creation paths transparently forward to `d3d11mt.dll`, ensuring zero performance overhead or behavioral drift for traditional Direct3D 11 workloads.
+During deployment alongside native D3D11 implementations (e.g. Apple D3DMetal or WineD3D), the native library is named `d3d11mt.dll`. Ordinary D3D11 creation calls forward transparently with zero overhead.
 
 ### 2. Core Validation Boundary (`relay12-d3d11/d3d11on12core.cpp`)
 
-The core module encapsulates safety validation before any Direct3D 12 state is altered:
-
-- **Command Queue Type Verification:** Inspects the caller-supplied `ID3D12CommandQueue` description. Only `D3D12_COMMAND_LIST_TYPE_DIRECT` queues are accepted; compute and copy queues cannot serve as primary presentation queues.
-- **Two-Tier COM Identity Checks:** Confirms the supplied queue was created by the provided `ID3D12Device`. It compares typed `ID3D12Device` pointers first; only if they differ does it perform an `IUnknown` identity query.
-- **The `strictResult()` Funnel:** Every `QueryInterface` and `GetDevice` call routes through `strictResult()`. If a query returns `S_OK` but leaves the output pointer null, it is treated as an immediate failure, preventing undefined behavior and null-pointer dereferences.
-- **C ABI Boundary:** Exports versioned entry points (`WineD3D11On12GetABIVersion`, `WineD3D11On12CreateDeviceV1`, `WineD3D11On12OpenAdapterV1`) to isolate the router from internal driver layout changes.
+Encapsulates defensive validation before translation layer state is touched:
+- **Queue Type Verification:** Restricts queue usage to `D3D12_COMMAND_LIST_TYPE_DIRECT`.
+- **Two-Tier COM Identity:** Verifies queue/device ownership via typed pointer comparisons first, falling back to `IUnknown` identity queries only when pointers differ.
+- **The `strictResult()` Funnel:** Ensures every interface acquisition validates non-null returns on `S_OK`.
+- **Versioned C ABI:** Exports stable ordinal interfaces (`WineD3D11On12CreateDeviceV1`, `WineD3D11On12OpenAdapterV1`, etc.) to isolate the router from driver internals.
 
 ### 3. Clean-Room WDDM DDI Host (`relay12-d3d11/ddi/wine_d3d11ddi.h`)
 
-Microsoft's `D3D11On12` communicates with the host through the WDDM User-Mode Driver Interface (DDI). Because proprietary Windows Driver Kit (WDK) headers cannot be redistributed:
-
-- **Clean-Room Authored:** All structures, handles, and function tables are authored strictly from public documentation (Microsoft Learn and public GitHub mirrors).
-- **Dual-Source Validation:** Field names, types, alignments, and member counts are verified across both documentation sources and checked by static compliance gates.
-- **WDDM 2.6 / 2.7 Negotiation:** Implements `D3DWDDM2_6DDI_DEVICEFUNCS` (178 function slots), `D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS` (47 callback slots), and `D3DDDI_DEVICECALLBACKS` (66 slots).
-- **Natural 8-Byte Alignment (`/Zp8`):** Direct3D DDI structures assume 64-bit Windows natural alignment. `#pragma pack` is strictly prohibited.
+Provides clean-room authored WDDM 2.6/2.7 DDI interface declarations without proprietary Windows Driver Kit (WDK) dependencies. Natural 8-byte alignment (`/Zp8`) is strictly enforced; `#pragma pack` is prohibited.
 
 ### 4. Microsoft D3D11On12 & DTL Portability
 
-Microsoft's upstream `D3D11On12` and `D3D12TranslationLayer` (DTL) were originally written exclusively for the MSVC compiler on Windows. `relay12` bridges them to the MinGW-w64 GCC and Clang ecosystems via dedicated compatibility headers:
-
-- **`compat/relay_hresult_error.hpp`:** Standardizes HRESULT exceptions across compilers.
-- **`compat/relay_atl_compat.hpp`:** Replaces MSVC-specific Active Template Library (ATL) headers (`CComPtr`, `_com_error`) with clean C++17 implementations.
-- **`compat/relay_d3d12_struct_return.hpp`:** Resolves ABI discrepancies in D3D12 structure returns between MinGW-w64 GCC and MSVC.
-- **Portability Baseline:** Tracked in [`docs/dtl-portability-baseline.json`](docs/dtl-portability-baseline.json) to measure and enforce compatibility across commits.
+Enables Microsoft's upstream `D3D11On12` and `D3D12TranslationLayer` (DTL) to compile cleanly under MinGW-w64 (GCC and Clang) in C++17 mode without MSVC, ATL, or ETW telemetry dependencies.
 
 ---
 
 ## Architectural Philosophy & Invariants
 
-All contributions to `relay12` must preserve these non-negotiable invariants:
-
-1. **Standalone Modularity:** `relay12` is isolated from the main `winecx` tree. This avoids upstream merge churn and ensures clear git bisection for translation layer regressions.
-2. **Fail-Closed Semantics:** Never return `S_OK` with incomplete, mock, or partially initialized COM objects. If any validation step fails, immediately clear all output pointers and return documented Direct3D error codes (`DXGI_ERROR_UNSUPPORTED`).
-3. **No Secondary Device Fallbacks:** Always submit rendering work through the caller-supplied `ID3D12Device` and direct `ID3D12CommandQueue`. Never spawn independent WineD3D, DXVK, or unmanaged D3D12 devices behind the caller's back.
-4. **Natural Alignment:** Keep all DDI structures naturally aligned (`/Zp8`). `#pragma pack` is strictly prohibited.
-5. **Clean-Room Legal Hygiene:** No proprietary Windows Driver Kit (WDK) headers (`d3d10umddi.h`, `d3d11umddi.h`, `dxgiddi.h`, `d3dkmthk.h`) are stored in this repository.
+All contributions to `relay12` must preserve the project's non-negotiable invariants: fail-closed routing, natural 8-byte alignment, clean-room boundary isolation, strict interface acquisition, and dedicated device ownership. See [`AGENTS.md`](AGENTS.md) §2 and [`docs/D3D11ON12.md`](docs/D3D11ON12.md) §2 for the normative specifications.
 
 ---
 
@@ -383,7 +365,7 @@ python3 -m unittest discover -s tests -p "test_*.py"
 
 ## Implementation Roadmap
 
-For complete milestone tracking and task breakdowns, refer to [`docs/DDI-REMAINING-ROADMAP.md`](docs/DDI-REMAINING-ROADMAP.md) and [`docs/PORT-QUALITY-ROADMAP.md`](docs/PORT-QUALITY-ROADMAP.md):
+For complete milestone tracking and task breakdowns, refer to [`docs/DDI-REMAINING-ROADMAP.md`](docs/DDI-REMAINING-ROADMAP.md) and [`docs/D3D11ON12.md`](docs/D3D11ON12.md):
 
 - [x] **Phase 1: Safe Routing & PE Boundary** — Drop-in `d3d11shim.dll` with fail-closed semantics, ordinal routing, and diagnostic query support.
 - [x] **Phase 2: Core Validation & Clean-Room DDI Host** — Direct queue validation, two-tier COM identity, and full clean-room WDDM 2.6/2.7 table definitions.
@@ -394,11 +376,13 @@ For complete milestone tracking and task breakdowns, refer to [`docs/DDI-REMAINI
 
 ## Further Reading
 
-- **[docs/D3D11ON12.md](docs/D3D11ON12.md):** Complete system architecture, component boundaries, failure modes, and rollout checklist.
+- **[docs/D3D11ON12.md](docs/D3D11ON12.md):** Complete system architecture, component boundaries, failure modes, policy, and rollout checklist.
 - **[docs/CLEANROOM-DDI.md](docs/CLEANROOM-DDI.md):** Clean-room WDDM DDI authoring guidelines, version negotiation proof, and implementation worklist.
-- **[docs/DDI-CONCURRENCY-TESTING.md](docs/DDI-CONCURRENCY-TESTING.md):** Concurrency, thread-safety, and CPU/GPU memory barrier validation strategy.
+- **[docs/TESTS.md](docs/TESTS.md):** Testing architecture, concurrency testing, and mock/hardware test suites.
 - **[docs/DDI-REMAINING-ROADMAP.md](docs/DDI-REMAINING-ROADMAP.md):** Structured roadmap for upcoming ABI hardening and placeholder eradication.
-- **[docs/PORT-QUALITY-ROADMAP.md](docs/PORT-QUALITY-ROADMAP.md):** Port quality, compilation health, and cross-platform verification plans.
+- **[docs/RELAY12-IMPLEMENTATION-PLAN.md](docs/RELAY12-IMPLEMENTATION-PLAN.md):** Step-by-step milestone execution and verification plan.
+- **[docs/FIRST-FRAME-VALIDATION.md](docs/FIRST-FRAME-VALIDATION.md):** First-frame rendering acceptance evidence and reproduction steps.
+- **[docs/WRAPPED-RESOURCE-VALIDATION.md](docs/WRAPPED-RESOURCE-VALIDATION.md):** Wrapped Texture2D resource validation evidence.
 - **[AGENTS.md](AGENTS.md):** Architecture invariants, safety rules, and guidelines for automated coding agents.
 - **[SKILLS.md](SKILLS.md):** Step-by-step developer runbook for layout generation, compilation, and test execution.
 

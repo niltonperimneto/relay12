@@ -21,7 +21,7 @@
  *
  * What this deliberately does not claim: nothing here proves the driver can be
  * opened or a device created. That is the next milestone and it needs a real
- * D3D12 underneath. See docs/PORT-QUALITY-ROADMAP.md.
+ * D3D12 underneath. See docs/D3D11ON12.md.
  */
 
 #include <stdio.h>

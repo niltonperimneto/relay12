@@ -86,7 +86,7 @@ def inventory(source_dir, revision=EXPECTED_REVISION):
 def check_high_water(baseline):
     """Reject a category that rose without someone saying why.
 
-    The rule in docs/PORT-QUALITY-ROADMAP.md is that unexplained count
+    The rule in docs/D3D11ON12.md is that unexplained count
     increases fail CI, but comparing the baseline to a freshly generated
     inventory cannot enforce it: the patch that raises a count regenerates the
     baseline in the same commit and the comparison passes. wdk_headers went
