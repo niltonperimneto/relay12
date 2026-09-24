@@ -37,6 +37,7 @@ import gen_ddi_layout  # noqa: E402
 import check_dtl_struct_return  # noqa: E402
 import check_dtl_include_case  # noqa: E402
 import check_adapter_args  # noqa: E402
+import check_core_callbacks  # noqa: E402
 import check_cleanroom_isolation  # noqa: E402
 import inventory_dtl_portability  # noqa: E402
 
@@ -108,6 +109,24 @@ class WineD3D11BackendGate(unittest.TestCase):
         (root / "dlls/d3d11on12host/Makefile.in").unlink()
         errors = check_wine_d3d11_backend.check_tree(root)
         self.assertTrue(any("Makefile.in is missing" in error for error in errors))
+
+    def test_on12_dxgi_device_regression_is_rejected(self):
+        # Without the IDXGIDevice branch Unity's D3D12 renderer discards the
+        # On12 device and falls back to D3D11, as PEAK did before patch 0025.
+        markers = list(check_wine_d3d11_backend.REQUIRED_DEVICE)
+        markers.remove("*out = &device->IDXGIDevice_iface;")
+        root = self.make_tree("\n".join(
+            check_wine_d3d11_backend.REQUIRED_HEADER), "\n".join(markers))
+        errors = check_wine_d3d11_backend.check_tree(root)
+        self.assertTrue(any("IDXGIDevice_iface" in error for error in errors))
+
+    def test_on12_private_store_leak_is_rejected(self):
+        markers = list(check_wine_d3d11_backend.REQUIRED_DEVICE)
+        markers.remove("wined3d_private_store_cleanup(&device->private_store);")
+        root = self.make_tree("\n".join(
+            check_wine_d3d11_backend.REQUIRED_HEADER), "\n".join(markers))
+        errors = check_wine_d3d11_backend.check_tree(root)
+        self.assertTrue(any("private_store_cleanup" in error for error in errors))
 
     def test_shader_lifecycle_regression_is_rejected(self):
         root = self.make_tree("\n".join(
@@ -234,6 +253,53 @@ struct SOpenAdapterArgs
     PrivateCallbacks2 *Callbacks2;
 };
 """
+
+
+class ShaderInterfaceTranscription(unittest.TestCase):
+    """The shader vtable prefix and SHADER_DESC are transcribed, not included.
+
+    Both are read by address across a module boundary, so a reordered slot or
+    a retyped field would not fail to compile here -- the driver would call
+    the wrong method or read the wrong offset.  Each mutation is asserted to
+    have changed the header, because a `replace` that matched nothing would
+    otherwise be indistinguishable from a gate that caught it.
+    """
+
+    DRIVER = REPOSITORY / "third_party/D3D11On12/interface/D3D11On12DDI.h"
+    HEADER = REPOSITORY / "relay12-d3d11/wine_d3d11on12_shader.h"
+
+    def setUp(self):
+        # errors="replace" to match how the gate itself reads the pinned MIT
+        # header, which is not this project's file and not guaranteed UTF-8.
+        self.driver = self.DRIVER.read_text(encoding="utf-8", errors="replace")
+        self.header = self.HEADER.read_text(encoding="utf-8")
+
+    def test_the_committed_header_passes(self):
+        self.assertEqual(
+            check_adapter_args.check_shader_interface(self.driver, self.header),
+            [])
+
+    def test_a_reordered_vtable_slot_is_rejected(self):
+        mutation = self.header.replace("*Signal", "*WrongSlot")
+        self.assertNotEqual(mutation, self.header)
+        self.assertTrue(
+            any("vtable prefix differs" in error for error in
+                check_adapter_args.check_shader_interface(
+                    self.driver, mutation)))
+
+    def test_a_reordered_resource_vtable_is_rejected(self):
+        mutation = self.header.replace("*SetGraphicsCurrentState", "*WrongResourceSlot")
+        self.assertNotEqual(mutation, self.header)
+        self.assertTrue(any("resource interface: vtable order" in error for error in
+            check_adapter_args.check_shader_interface(self.driver, mutation)))
+
+    def test_a_retyped_descriptor_field_is_rejected(self):
+        mutation = self.header.replace("UINT SizeInBytes", "SIZE_T SizeInBytes")
+        self.assertNotEqual(mutation, self.header)
+        self.assertTrue(
+            any("SHADER_DESC layout differs" in error for error in
+                check_adapter_args.check_shader_interface(
+                    self.driver, mutation)))
 
 
 class AdapterArgsTranscription(unittest.TestCase):
@@ -996,7 +1062,7 @@ class LayoutModel(unittest.TestCase):
             "D3D11DDIARG_CREATEDEFERREDCONTEXT": [(36, 4)],
             "D3D11DDIARG_CREATERESOURCE": [(76, 4)],
             "D3D11DDI_HANDLESIZE": [(4, 4)],
-            "D3D10DDIARG_OPENRESOURCE": [(4, 4), (36, 4)],
+            "D3D10DDIARG_OPENRESOURCE": [(4, 4), (20, 4), (36, 4)],
             "D3DDDICB_ESCAPE": [(12, 4), (28, 4)],
             "D3DDDICB_SYNCTOKEN": [(12, 4)],
             "D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW": [(28, 4)],
@@ -1174,10 +1240,10 @@ enum EnumTag;
     def test_a_touch_before_the_barrier_is_rejected(self):
         broken = self.shim.replace(
             "    initialize();\n"
-            "    if (!backend.on12Interface.createDirectDevice)",
-            "    if (!backend.on12Interface.createDirectDevice)\n"
+            "    if (!backend.createDevice)",
+            "    if (!backend.createDevice)\n"
             "        initialize();\n"
-            "    if (!backend.on12Interface.createDirectDevice)")
+            "    if (!backend.createDevice)")
         self.assertNotEqual(broken, self.shim)
         self.assertTrue(any("before it executes 'initOnce'" in error
                             for error in self.check(broken)))
@@ -1204,6 +1270,7 @@ class GateEntryPoints(unittest.TestCase):
         for gate in (["scripts/check_ddi_header.py"],
                      ["scripts/check_interface_acquisition.py"],
                      ["scripts/check_shared_state.py"],
+                     ["scripts/check_core_callbacks.py"],
                      ["scripts/gen_ddi_layout.py", "--check"]):
             with self.subTest(gate=gate[0]):
                 result = self.run_gate(*gate)
@@ -1232,6 +1299,106 @@ class GateEntryPoints(unittest.TestCase):
             cwd=os.path.dirname(os.path.dirname(__file__))
         )
         self.assertEqual(0, proc.returncode, "check_secure_code rejected tests")
+
+
+class CoreCallbacksGate(unittest.TestCase):
+    """The core-layer callback table handed to the driver must be complete.
+
+    pfnPerformAmortizedProcessingCb is the entry that bites: D3D11On12's
+    Device::PostSubmit dereferences it on every batch flush, so leaving it
+    null crashes inside the driver rather than failing anything here.  The
+    table is zeroed at allocation, so the omission compiles and links.
+
+    Every rule the gate claims is given something that breaks it, and each
+    mutation is checked to have actually changed the source -- a `replace`
+    that quietly matched nothing would otherwise leave these passing against
+    an unmodified core.
+    """
+
+    CORE = REPOSITORY / "relay12-d3d11" / "d3d11on12core.cpp"
+
+    def setUp(self):
+        self.header = DDI_HEADER.read_text(encoding="utf-8")
+        self.core = self.CORE.read_text(encoding="utf-8")
+
+    def check(self, core=None, header=None):
+        return check_core_callbacks.check_core_callbacks(
+            self.header if header is None else header,
+            self.core if core is None else core)
+
+    def mutated(self, pattern, replacement, count=0):
+        """The core with a regex substitution that is asserted to have bitten."""
+        broken = re.sub(pattern, replacement, self.core, count=count)
+        self.assertNotEqual(broken, self.core,
+                            f"the mutation {pattern!r} matched nothing")
+        return broken
+
+    def test_the_committed_core_passes(self):
+        self.assertEqual(self.check(), [])
+
+    def test_every_mandatory_callback_carries_a_reason(self):
+        """The list is the gate's own documentation; an entry without a
+        rationale is an entry the next reader will delete."""
+        for name, why in check_core_callbacks.MANDATORY.items():
+            with self.subTest(callback=name):
+                self.assertTrue(why.strip(), name)
+
+    def test_an_unassigned_callback_is_rejected(self):
+        for name in check_core_callbacks.MANDATORY:
+            with self.subTest(callback=name):
+                broken = self.mutated(
+                    rf"\n *state->coreCallbacks\.{name} = \w+;", "")
+                self.assertTrue(
+                    any(f"{name} is never assigned" in error
+                        for error in self.check(broken)),
+                    self.check(broken))
+
+    def test_a_null_callback_is_rejected(self):
+        for name in check_core_callbacks.MANDATORY:
+            with self.subTest(callback=name):
+                broken = self.mutated(
+                    rf"(state->coreCallbacks\.{name} = )\w+;",
+                    r"\1nullptr;")
+                self.assertTrue(
+                    any(f"{name} is assigned nullptr" in error
+                        for error in self.check(broken)),
+                    self.check(broken))
+
+    def test_a_callback_with_no_definition_is_rejected(self):
+        broken = self.mutated(
+            r"(state->coreCallbacks\.pfnPerformAmortizedProcessingCb = )\w+;",
+            r"\1hostPerformAmortizedProcessingTypo;")
+        self.assertTrue(
+            any("does not define as a CALLBACK" in error
+                for error in self.check(broken)),
+            self.check(broken))
+
+    def test_a_callback_assigned_after_create_device_is_rejected(self):
+        """CreateDevice is when the driver takes the table's address."""
+        assignment = ("    state->coreCallbacks.pfnPerformAmortizedProcessingCb"
+                      " = hostPerformAmortizedProcessing;\n")
+        self.assertIn(assignment, self.core)
+        broken = self.core.replace(assignment, "")
+        landed = '    traceCreation("leave driver CreateDevice", hr);\n'
+        self.assertIn(landed, broken)
+        broken = broken.replace(landed, landed + assignment)
+        self.assertTrue(
+            any("after the driver's CreateDevice" in error
+                for error in self.check(broken)),
+            self.check(broken))
+
+    def test_a_mandatory_name_the_header_lost_is_rejected(self):
+        """The list must not go on checking a field that was renamed upstream:
+        that is the silent pass every gate here exists to prevent."""
+        header = self.header.replace(
+            "PFND3D11DDI_PERFORM_AMORTIZED_PROCESSING_CB pfnPerformAmortizedProcessingCb;",
+            "PFND3D11DDI_PERFORM_AMORTIZED_PROCESSING_CB pfnRenamedUpstreamCb;")
+        self.assertNotEqual(header, self.header)
+        self.assertTrue(
+            any("has drifted from the header" in error
+                for error in self.check(header=header)),
+            self.check(header=header))
+
 
 if __name__ == "__main__":
     unittest.main()
