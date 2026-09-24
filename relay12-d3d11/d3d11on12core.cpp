@@ -2,12 +2,15 @@
  * D3D11On12 core ABI and input validation.
  */
 #define WIN32_LEAN_AND_MEAN
+#include <cstdio>
 #include <windows.h>
 #include <initguid.h>
 #include <d3d12.h>
 
 #include "d3d11on12core.h"
+#include "wine_d3d11on12_shader.h"
 #include "wine_d3d11_diag.h"
+#include "../compat/relay_d3d12_struct_return.hpp"
 
 /* The clean-room DDI declarations, then the driver's own boundary header.
  *
@@ -169,6 +172,19 @@ void clearOutputs(ID3D11Device **device, ID3D11DeviceContext **context,
         *featureLevel = static_cast<D3D_FEATURE_LEVEL>(0);
 }
 
+/* Opt-in stage markers also identify a driver call that never returns. */
+void traceCreation(const char *stage, HRESULT hr = S_OK) noexcept
+{
+    wchar_t enabled[2] = {};
+    if (GetEnvironmentVariableW(L"RELAY12_TRACE_CREATION", enabled, 2) != 1
+            || enabled[0] != L'1')
+        return;
+    char message[256];
+    std::snprintf(message, sizeof(message), "d3d11on12core: %s (hr=0x%08lx)\n",
+            stage, static_cast<unsigned long>(hr));
+    wineD3D11DiagReport(message);
+}
+
 /* Decide whether two objects are the same COM object.
  *
  * IUnknown is the canonical test: it is the only interface COM requires to
@@ -314,9 +330,29 @@ BOOL CALLBACK initializeDriver(PINIT_ONCE, PVOID, PVOID *) noexcept
     return TRUE;
 }
 
+using HostCreateFn = HRESULT (WINAPI *)(IUnknown *, UINT, const D3D_FEATURE_LEVEL *,
+        UINT, IUnknown *const *, UINT, UINT, ID3D11Device **,
+        ID3D11DeviceContext **, D3D_FEATURE_LEVEL *);
+INIT_ONCE hostInitOnce = INIT_ONCE_STATIC_INIT;
+/* shared-state: published once through hostInitOnce */
+HMODULE hostModule;
+/* shared-state: published once through hostInitOnce */
+HostCreateFn hostCreate;
+BOOL CALLBACK initializeHost(PINIT_ONCE, PVOID, PVOID *) noexcept
+{
+    hostModule = LoadLibraryW(L"d3d11on12host.dll");
+    if (hostModule)
+    {
+        FARPROC address = GetProcAddress(hostModule, "D3D11On12CreateDevice");
+        memcpy(&hostCreate, &address, sizeof(hostCreate));
+    }
+    return TRUE;
+}
+
 struct AdapterState;
 struct InputLayoutState;
 struct ShaderState;
+struct RenderTargetState;
 struct ResourceState
 {
     ResourceState *registryNext;
@@ -324,11 +360,17 @@ struct ResourceState
     AdapterState *owner;
     void *publicHandle;
     UINT kind;
+    D3D11_TEXTURE2D_DESC description;
+    BYTE *mapped;
+    UINT viewCount;
     D3D11_RESOURCE_FLAGS flags;
     D3D10DDI_HRESOURCE driverHandle;
     D3D10DDI_HRTRESOURCE runtimeHandle;
     bool created;
-    unsigned char privateResource[1];
+    ID3D12Resource *wrappedResource;
+    D3D12_RESOURCE_STATES inputState, outputState;
+    bool acquired;
+    alignas(8) unsigned char privateResource[1];
 };
 
 #define RESOURCE_KIND_BUFFER 1u
@@ -343,6 +385,8 @@ ResourceState *resourceRegistry;
 InputLayoutState *inputLayoutRegistry;
 /* shared-state: published once through resourceRegistryOnce */
 ShaderState *shaderRegistry;
+/* shared-state: published once through resourceRegistryOnce */
+RenderTargetState *renderTargetRegistry;
 
 BOOL CALLBACK initializeResourceRegistry(PINIT_ONCE, PVOID, PVOID *) noexcept
 {
@@ -352,6 +396,16 @@ BOOL CALLBACK initializeResourceRegistry(PINIT_ONCE, PVOID, PVOID *) noexcept
     shaderRegistry = nullptr;
     return TRUE;
 }
+
+struct FrameLock
+{
+    FrameLock() noexcept
+    {
+        InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry, nullptr, nullptr);
+        AcquireSRWLockExclusive(&resourceRegistryLock);
+    }
+    ~FrameLock() noexcept { ReleaseSRWLockExclusive(&resourceRegistryLock); }
+};
 
 /* The two callbacks the driver copies out of SOpenAdapterArgs and calls back
  * into. They are not reached during adapter or device creation, but the
@@ -365,6 +419,7 @@ BOOL CALLBACK initializeResourceRegistry(PINIT_ONCE, PVOID, PVOID *) noexcept
 D3D11_RESOURCE_FLAGS CALLBACK hostGetResourceFlags(D3D10DDI_HRESOURCE resource,
         bool *acquireableOnWrite) noexcept
 {
+    traceCreation("enter resource flags callback");
     if (acquireableOnWrite)
         *acquireableOnWrite = false;
     D3D11_RESOURCE_FLAGS flags = {};
@@ -377,8 +432,10 @@ D3D11_RESOURCE_FLAGS CALLBACK hostGetResourceFlags(D3D10DDI_HRESOURCE resource,
     {
         if (entry->driverHandle.pDrvPrivate == resource.pDrvPrivate)
         {
+            traceCreation("found resource flags");
             flags = entry->flags;
             ReleaseSRWLockShared(&resourceRegistryLock);
+            traceCreation("leave resource flags callback");
             return flags;
         }
     }
@@ -436,9 +493,12 @@ struct AdapterState
     bool deviceCreated;
     volatile LONG lastDdiError;
     ResourceState *resources;
+    ResourceState *boundRenderTarget;
+    HRESULT wrappedOwnershipError; // guarded by resourceRegistryLock
     InputLayoutState *inputLayouts;
     ShaderState *shaders;
-    unsigned char privateDevice[1];
+    RenderTargetState *renderTargets;
+    alignas(8) unsigned char privateDevice[1];
 };
 
 struct ShaderState
@@ -451,7 +511,7 @@ struct ShaderState
     D3D10DDI_HSHADER driverHandle;
     D3D10DDI_HRTSHADER runtimeHandle;
     bool created;
-    unsigned char privateShader[1];
+    alignas(8) unsigned char privateShader[1];
 };
 
 void unlinkShader(ShaderState *shader) noexcept
@@ -503,7 +563,7 @@ struct InputLayoutState
     D3D10DDI_HELEMENTLAYOUT driverHandle;
     D3D10DDI_HRTELEMENTLAYOUT runtimeHandle;
     bool created;
-    unsigned char privateLayout[1];
+    alignas(8) unsigned char privateLayout[1];
 };
 
 void unlinkInputLayout(InputLayoutState *layout) noexcept
@@ -576,10 +636,18 @@ void destroyResourceState(ResourceState *resource) noexcept
     if (!resource)
         return;
     AdapterState *owner = resource->owner;
+    if (resource->mapped && owner && owner->deviceCreated)
+        for (UINT i = 0; i < resource->description.MipLevels * resource->description.ArraySize; ++i)
+            if (resource->mapped[i] && owner->deviceFuncs.pfnStagingResourceUnmap)
+                owner->deviceFuncs.pfnStagingResourceUnmap(owner->hDevice, resource->driverHandle, i);
     if (resource->created && owner && owner->deviceCreated
             && owner->deviceFuncs.pfnDestroyResource)
         owner->deviceFuncs.pfnDestroyResource(owner->hDevice,
                 resource->driverHandle);
+    {
+        FrameLock lock;
+        if (owner && owner->boundRenderTarget == resource) owner->boundRenderTarget = nullptr;
+    }
     unlinkResource(resource);
     if (resource->publicHandle)
     {
@@ -588,6 +656,8 @@ void destroyResourceState(ResourceState *resource) noexcept
         handle->hDrvResource = nullptr;
         handle->runtimeState = nullptr;
     }
+    if (resource->wrappedResource) resource->wrappedResource->Release();
+    if (resource->mapped) HeapFree(GetProcessHeap(), 0, resource->mapped);
     HeapFree(GetProcessHeap(), 0, resource);
 }
 
@@ -600,11 +670,20 @@ void CALLBACK hostSetError(D3D10DDI_HRTCORELAYER runtimeDevice,
         InterlockedExchange(&state->lastDdiError, result);
 }
 
+void CALLBACK hostPerformAmortizedProcessing(D3D10DDI_HRTCORELAYER runtimeDevice) noexcept
+{
+    (void)runtimeDevice;
+}
+
+void destroyRenderTargetState(RenderTargetState *view) noexcept;
+void destroyAllRenderTargets(AdapterState *owner) noexcept;
+
 void destroyAdapterState(AdapterState *state) noexcept
 {
     if (!state)
         return;
 
+    destroyAllRenderTargets(state);
     while (state->inputLayouts)
     {
         InputLayoutState *layout = state->inputLayouts;
@@ -708,11 +787,14 @@ HRESULT createDriverDevice(AdapterState **statePtr,
     createDevice.ppfnRetrieveSubObject = &state->retrieveSubObject;
     createDevice.hRTCoreLayer.handle = state;
     state->coreCallbacks.pfnSetErrorCb = hostSetError;
+    state->coreCallbacks.pfnPerformAmortizedProcessingCb = hostPerformAmortizedProcessing;
 
     state->hDevice.pDrvPrivate = state->privateDevice;
     createDevice.hDrvDevice = state->hDevice;
 
+    traceCreation("enter driver CreateDevice");
     hr = state->adapterFuncs.pfnCreateDevice(state->hAdapter, &createDevice);
+    traceCreation("leave driver CreateDevice", hr);
     if (FAILED(hr))
     {
         wineD3D11DiagReportOnce(&reportedCreateDeviceFailed,
@@ -884,6 +966,7 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateDeviceV1(IUnknown *deviceObject,
     ComRef<ID3D12CommandQueue> queue;
     HRESULT hr = acquireDeviceAndQueue(deviceObject, queueObjects, queueCount,
             nodeMask, device12, queue);
+    traceCreation("validate caller device and queue", hr);
     if (FAILED(hr))
         return hr;
 
@@ -894,35 +977,44 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateDeviceV1(IUnknown *deviceObject,
         levels.pFeatureLevelsRequested = featureLevels;
         hr = device12.get()->CheckFeatureSupport(D3D12_FEATURE_FEATURE_LEVELS,
                 &levels, sizeof(levels));
+        traceCreation("check requested feature levels", hr);
         if (FAILED(hr) || !levels.MaxSupportedFeatureLevel)
             return FAILED(hr) ? hr : E_INVALIDARG;
     }
 
-    /* Exercise the real adapter/device construction path here rather than
-     * leaving the public entry point disconnected from it.  The lifetime is
-     * closed again before returning because the Wine frontend cannot own the
-     * token yet.  Once that frontend supplies a controlling ID3D11Device, the
-     * same token moves into its backend_private member instead.
-     *
-     * Failure remains DXGI_ERROR_UNSUPPORTED at this public boundary.  The
-     * detailed adapter diagnostic has already been emitted, and exposing its
-     * private HRESULT here would make availability depend on deployment
-     * details instead of the documented D3D11 fallback result. */
-    WineD3D11On12AdapterDevice adapterDevice = {};
-    adapterDevice.size = sizeof(adapterDevice);
-    hr = WineD3D11On12OpenAdapterV1(deviceObject, queueObjects, queueCount,
-            nodeMask, &adapterDevice);
-    if (SUCCEEDED(hr))
-        WineD3D11On12CloseAdapterDeviceV1(&adapterDevice);
-
-    /* Still no ID3D11Device, and deliberately so.  Never return success until
-     * genuine device and context objects own the DDI lifetime and all methods
-     * they expose have truthful backing behavior. */
-    wineD3D11DiagReportOnce(&reportedNoHost,
-            "d3d11on12core: device and queue accepted, but no D3D11 "
-            "runtime/DDI host is implemented in this milestone; returning "
-            "DXGI_ERROR_UNSUPPORTED instead of a fabricated device.\n");
-    return DXGI_ERROR_UNSUPPORTED;
+    /* Publication is experimental until the hardware acceptance run is green.
+     * The host opens the adapter exactly once and owns its lifetime. Never
+     * call the public d3d11.dll export here: that would recurse into us. */
+    wchar_t enabled[2] = {};
+    if ((flags & ~D3D11_CREATE_DEVICE_BGRA_SUPPORT) || GetEnvironmentVariableW(L"RELAY12_EXPERIMENTAL_FRAME", enabled, 2) != 1
+            || enabled[0] != L'1')
+    {
+        wineD3D11DiagReportOnce(&reportedNoHost,
+                "d3d11on12core: experimental frame publication is disabled.\n");
+        return DXGI_ERROR_UNSUPPORTED;
+    }
+    traceCreation("load runtime host");
+    InitOnceExecuteOnce(&hostInitOnce, initializeHost, nullptr, nullptr);
+    if (!hostCreate)
+    {
+        wineD3D11DiagReportOnce(&reportedNoHost,
+                "d3d11on12core: no compatible D3D11 runtime host is installed.\n");
+        return DXGI_ERROR_UNSUPPORTED;
+    }
+    ComRef<ID3D11Device> createdDevice;
+    ComRef<ID3D11DeviceContext> createdContext;
+    D3D_FEATURE_LEVEL selected = static_cast<D3D_FEATURE_LEVEL>(0);
+    traceCreation("enter runtime host creation");
+    hr = hostCreate(deviceObject, flags, featureLevels, featureLevelCount,
+            queueObjects, queueCount, nodeMask, createdDevice.put(), createdContext.put(), &selected);
+    traceCreation("leave runtime host creation", hr);
+    if (FAILED(hr)) return hr;
+    if (!createdDevice.get() || !createdContext.get() || !selected)
+        return DXGI_ERROR_UNSUPPORTED;
+    if (device11) *device11 = createdDevice.detach();
+    if (context11) *context11 = createdContext.detach();
+    if (chosenFeatureLevel) *chosenFeatureLevel = selected;
+    return S_OK;
 }
 
 extern "C" HRESULT WINAPI WineD3D11On12OpenAdapterV1(IUnknown *deviceObject,
@@ -1027,7 +1119,9 @@ extern "C" HRESULT WINAPI WineD3D11On12OpenAdapterV1(IUnknown *deviceObject,
     openAdapter.pAdapterCallbacks = nullptr;
     openAdapter.pAdapterFuncs_2 = &state->adapterFuncs;
 
+    traceCreation("enter driver OpenAdapter");
     hr = driverOpenAdapter(&openAdapter, &driverArgs);
+    traceCreation("leave driver OpenAdapter", hr);
     if (FAILED(hr))
     {
         wineD3D11DiagReportOnce(&reportedOpenAdapterFailed,
@@ -1106,6 +1200,7 @@ extern "C" HRESULT WINAPI WineD3D11On12DrawAdapterDeviceV1(
         WineD3D11On12AdapterDevice *adapterDevice, UINT vertexCount,
         UINT startVertexLocation) noexcept
 {
+    FrameLock lock;
     if (!adapterDevice || adapterDevice->size != sizeof(*adapterDevice))
         return E_INVALIDARG;
 
@@ -1114,6 +1209,9 @@ extern "C" HRESULT WINAPI WineD3D11On12DrawAdapterDeviceV1(
     if (!state || !state->deviceCreated || !state->deviceFuncs.pfnDraw)
         return DXGI_ERROR_UNSUPPORTED;
 
+    if (state->boundRenderTarget && state->boundRenderTarget->wrappedResource
+            && (FAILED(state->wrappedOwnershipError) || !state->boundRenderTarget->acquired))
+        return FAILED(state->wrappedOwnershipError) ? state->wrappedOwnershipError : E_INVALIDARG;
     state->deviceFuncs.pfnDraw(state->hDevice, vertexCount,
             startVertexLocation);
     return S_OK;
@@ -1156,6 +1254,7 @@ extern "C" HRESULT WINAPI WineD3D11On12DispatchDrawV1(
         WineD3D11On12AdapterDevice *adapterDevice, UINT kind, UINT count0,
         UINT count1, UINT start0, INT baseVertex, UINT startInstance) noexcept
 {
+    FrameLock lock;
     if (!adapterDevice || adapterDevice->size != sizeof(*adapterDevice))
         return E_INVALIDARG;
 
@@ -1164,6 +1263,9 @@ extern "C" HRESULT WINAPI WineD3D11On12DispatchDrawV1(
     if (!state || !state->deviceCreated)
         return DXGI_ERROR_UNSUPPORTED;
 
+    if (state->boundRenderTarget && state->boundRenderTarget->wrappedResource
+            && (FAILED(state->wrappedOwnershipError) || !state->boundRenderTarget->acquired))
+        return FAILED(state->wrappedOwnershipError) ? state->wrappedOwnershipError : E_INVALIDARG;
     switch (kind)
     {
         case WINE_D3D11ON12_DRAW_INDEXED:
@@ -1256,6 +1358,7 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateBufferV1(
     args.ArraySize = 1;
     args.ByteStride = description->StructureByteStride;
 
+    traceCreation("calculate buffer storage");
     SIZE_T privateSize = owner->deviceFuncs.pfnCalcPrivateResourceSize(
             owner->hDevice, &args);
     if (!privateSize || privateSize > ~static_cast<SIZE_T>(0)
@@ -1287,8 +1390,10 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateBufferV1(
     ReleaseSRWLockExclusive(&resourceRegistryLock);
 
     InterlockedExchange(&owner->lastDdiError, S_OK);
+    traceCreation("enter driver buffer creation");
     owner->deviceFuncs.pfnCreateResource(owner->hDevice, &args,
             resource->driverHandle, resource->runtimeHandle);
+    traceCreation("leave driver buffer creation");
     HRESULT hr = InterlockedCompareExchange(&owner->lastDdiError, S_OK, S_OK);
     if (FAILED(hr))
     {
@@ -1468,6 +1573,17 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateTexture2DV1(
     resource->owner = owner;
     resource->publicHandle = texture;
     resource->kind = RESOURCE_KIND_TEXTURE2D;
+    resource->description = *description;
+    resource->description.MipLevels = mipLevels;
+    resource->mapped = static_cast<BYTE *>(HeapAlloc(GetProcessHeap(),
+            HEAP_ZERO_MEMORY, subresourceCount));
+    if (!resource->mapped)
+    {
+        if (uploads) HeapFree(GetProcessHeap(), 0, uploads);
+        HeapFree(GetProcessHeap(), 0, mips);
+        HeapFree(GetProcessHeap(), 0, resource);
+        return E_OUTOFMEMORY;
+    }
     resource->flags.BindFlags = description->BindFlags;
     resource->flags.MiscFlags = description->MiscFlags;
     resource->flags.CPUAccessFlags = description->CPUAccessFlags;
@@ -1494,6 +1610,7 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateTexture2DV1(
         unlinkOwnerResource(resource);
         ReleaseSRWLockExclusive(&resourceRegistryLock);
         unlinkResource(resource);
+        HeapFree(GetProcessHeap(), 0, resource->mapped);
         HeapFree(GetProcessHeap(), 0, resource);
         return hr;
     }
@@ -1508,8 +1625,7 @@ extern "C" HRESULT WINAPI WineD3D11On12DestroyTexture2DV1(
 {
     if (!texture || texture->size != sizeof(*texture))
         return E_INVALIDARG;
-    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry,
-            nullptr, nullptr);
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry, nullptr, nullptr);
     AcquireSRWLockExclusive(&resourceRegistryLock);
     ResourceState *resource = nullptr;
     for (ResourceState *entry = resourceRegistry; entry; entry = entry->registryNext)
@@ -1517,18 +1633,24 @@ extern "C" HRESULT WINAPI WineD3D11On12DestroyTexture2DV1(
                 && entry->kind == RESOURCE_KIND_TEXTURE2D
                 && entry->driverHandle.pDrvPrivate == texture->hDrvResource)
         {
-            resource = entry;
-            unlinkOwnerResource(entry);
+            for (UINT i = 0; i < entry->description.MipLevels * entry->description.ArraySize; ++i)
+                if (entry->mapped[i])
+                {
+                    ReleaseSRWLockExclusive(&resourceRegistryLock);
+                    return DXGI_ERROR_INVALID_CALL;
+                }
+            entry->publicHandle = nullptr;
+            if (!entry->viewCount)
+            {
+                resource = entry;
+                unlinkOwnerResource(entry);
+            }
             break;
         }
+    texture->hDrvResource = nullptr;
+    texture->runtimeState = nullptr;
     ReleaseSRWLockExclusive(&resourceRegistryLock);
-    if (resource)
-        destroyResourceState(resource);
-    else
-    {
-        texture->hDrvResource = nullptr;
-        texture->runtimeState = nullptr;
-    }
+    if (resource) destroyResourceState(resource);
     return S_OK;
 }
 
@@ -1781,15 +1903,19 @@ HRESULT createBasicShader(WineD3D11On12AdapterDevice *adapterDevice,
     shader->hDrvShader = nullptr;
     shader->runtimeState = nullptr;
     AdapterState *owner = static_cast<AdapterState *>(adapterDevice->runtimeState);
-    PFND3D11_1DDI_CREATEVERTEXSHADER createVertex = owner
-            ? owner->deviceFuncs.pfnCreateVertexShader : nullptr;
-    PFND3D11_1DDI_CREATEPIXELSHADER createPixel = owner
-            ? owner->deviceFuncs.pfnCreatePixelShader : nullptr;
-    if (!owner || !owner->deviceCreated
+    if (!owner || !owner->deviceCreated || byteCodeLength > UINT_MAX
             || !owner->deviceFuncs.pfnCalcPrivateShaderSize
-            || !owner->deviceFuncs.pfnDestroyShader
-            || (stage == WINE_D3D11ON12_SHADER_VERTEX && !createVertex)
-            || (stage == WINE_D3D11ON12_SHADER_PIXEL && !createPixel))
+            || !owner->deviceFuncs.pfnDestroyShader)
+        return DXGI_ERROR_UNSUPPORTED;
+    /* The MIT interface's CastFrom uses this exact address. It is not COM:
+     * there is no QueryInterface, AddRef or Release on the DDI sub-object. */
+    auto *ddiDevice = static_cast<WineD3D11On12DDIDevice *>(owner->hDevice.pDrvPrivate);
+    if (!ddiDevice || !ddiDevice->lpVtbl)
+        return DXGI_ERROR_UNSUPPORTED;
+    auto createShader = stage == WINE_D3D11ON12_SHADER_VERTEX
+            ? ddiDevice->lpVtbl->CreateVertexShader
+            : ddiDevice->lpVtbl->CreatePixelShader;
+    if (!createShader)
         return DXGI_ERROR_UNSUPPORTED;
 
     const unsigned char *bytes = static_cast<const unsigned char *>(byteCode);
@@ -1800,26 +1926,18 @@ HRESULT createBasicShader(WineD3D11On12AdapterDevice *adapterDevice,
     if (magic != 0x43425844 || containerSize != byteCodeLength
             || chunkCount > (byteCodeLength - 32) / sizeof(UINT))
         return E_INVALIDARG;
-    UINT *tokens = static_cast<UINT *>(HeapAlloc(GetProcessHeap(), 0,
-            byteCodeLength));
-    if (!tokens)
-        return E_OUTOFMEMORY;
-    memcpy(tokens, byteCode, byteCodeLength);
+    /* Sizing takes driver tokens, creation takes a DXBC container. The pinned
+     * driver's sizing callback ignores both arguments and returns sizeof;
+     * never pass container bytes as a token stream. */
     const SIZE_T privateSize = owner->deviceFuncs.pfnCalcPrivateShaderSize(
-            owner->hDevice, tokens, nullptr);
+            owner->hDevice, nullptr, nullptr);
     if (!privateSize || privateSize > ~static_cast<SIZE_T>(0)
             - offsetof(ShaderState, privateShader))
-    {
-        HeapFree(GetProcessHeap(), 0, tokens);
         return E_FAIL;
-    }
     ShaderState *state = static_cast<ShaderState *>(HeapAlloc(GetProcessHeap(),
             HEAP_ZERO_MEMORY, offsetof(ShaderState, privateShader) + privateSize));
     if (!state)
-    {
-        HeapFree(GetProcessHeap(), 0, tokens);
         return E_OUTOFMEMORY;
-    }
     state->owner = owner;
     state->publicHandle = shader;
     state->stage = stage;
@@ -1835,15 +1953,13 @@ HRESULT createBasicShader(WineD3D11On12AdapterDevice *adapterDevice,
     owner->shaders = state;
     ReleaseSRWLockExclusive(&resourceRegistryLock);
 
+    WineD3D11On12ShaderDesc desc = {};
+    desc.pFunction = bytes;
+    desc.SizeInBytes = static_cast<UINT>(byteCodeLength);
     InterlockedExchange(&owner->lastDdiError, S_OK);
-    if (stage == WINE_D3D11ON12_SHADER_VERTEX)
-        createVertex(owner->hDevice, tokens, state->driverHandle,
-                state->runtimeHandle, nullptr);
-    else
-        createPixel(owner->hDevice, tokens, state->driverHandle,
-                state->runtimeHandle, nullptr);
-    HeapFree(GetProcessHeap(), 0, tokens);
-    HRESULT hr = InterlockedCompareExchange(&owner->lastDdiError, S_OK, S_OK);
+    HRESULT hr = createShader(ddiDevice, state->driverHandle, &desc);
+    if (SUCCEEDED(hr))
+        hr = InterlockedCompareExchange(&owner->lastDdiError, S_OK, S_OK);
     if (FAILED(hr))
     {
         AcquireSRWLockExclusive(&resourceRegistryLock);
@@ -2109,4 +2225,526 @@ extern "C" HRESULT WINAPI WineD3D11CreateDeviceAndSwapChainV2(
     if (context11)
         *context11 = context.detach();
     return S_OK;
+}
+
+namespace
+{
+/* All frame handles are resolved while the registry lock pins their storage.
+ * The immediate context serializes calls; the lock additionally drains a
+ * racing binder before destruction reaches the driver. */
+struct RenderTargetState
+{
+    RenderTargetState *registryNext;
+    RenderTargetState *ownerNext;
+    AdapterState *owner;
+    ResourceState *resource;
+    WineD3D11On12RenderTargetView *publicHandle;
+    D3D10DDI_HRENDERTARGETVIEW driverHandle;
+    bool created;
+    alignas(8) unsigned char privateView[1];
+};
+
+AdapterState *frameOwner(WineD3D11On12AdapterDevice *device) noexcept
+{
+    if (!device || device->size != sizeof(*device)) return nullptr;
+    auto *owner = static_cast<AdapterState *>(device->runtimeState);
+    return owner && owner->deviceCreated ? owner : nullptr;
+}
+
+ResourceState *findTextureLocked(AdapterState *owner, WineD3D11On12Texture2D *texture) noexcept
+{
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry, nullptr, nullptr);
+    if (!texture || texture->size != sizeof(*texture)) return nullptr;
+    for (auto *r = resourceRegistry; r; r = r->registryNext)
+        if (r == texture->runtimeState && r->publicHandle == texture && r->owner == owner
+                && r->kind == RESOURCE_KIND_TEXTURE2D && r->created
+                && r->driverHandle.pDrvPrivate == texture->hDrvResource)
+            return r;
+    return nullptr;
+}
+
+RenderTargetState *findViewLocked(AdapterState *owner, WineD3D11On12RenderTargetView *view) noexcept
+{
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry, nullptr, nullptr);
+    if (!view || view->size != sizeof(*view)) return nullptr;
+    for (auto *v = renderTargetRegistry; v; v = v->registryNext)
+        if (v == view->runtimeState && v->publicHandle == view && v->owner == owner
+                && v->created && v->driverHandle.pDrvPrivate == view->hDrvView)
+            return v;
+    return nullptr;
+}
+
+HRESULT frameError(AdapterState *owner) noexcept
+{
+    return InterlockedCompareExchange(&owner->lastDdiError, S_OK, S_OK);
+}
+
+void destroyRenderTargetState(RenderTargetState *view) noexcept
+{
+    /* Caller holds the registry lock and has removed the view from both lists. */
+    if (view->created)
+        view->owner->deviceFuncs.pfnDestroyRenderTargetView(view->owner->hDevice, view->driverHandle);
+    if (view->publicHandle)
+    {
+        view->publicHandle->runtimeState = nullptr;
+        view->publicHandle->hDrvView = nullptr;
+    }
+    --view->resource->viewCount;
+    HeapFree(GetProcessHeap(), 0, view);
+}
+
+void destroyAllRenderTargets(AdapterState *owner) noexcept
+{
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry, nullptr, nullptr);
+    FrameLock lock;
+    while (owner->renderTargets)
+    {
+        auto *v = owner->renderTargets;
+        owner->renderTargets = v->ownerNext;
+        auto **link = &renderTargetRegistry;
+        while (*link && *link != v) link = &(*link)->registryNext;
+        if (*link) *link = v->registryNext;
+        destroyRenderTargetState(v);
+    }
+}
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12CreateRenderTargetViewV1(
+        WineD3D11On12AdapterDevice *device, WineD3D11On12Texture2D *texture,
+        const D3D11_RENDER_TARGET_VIEW_DESC *desc, WineD3D11On12RenderTargetView *out) noexcept
+{
+    if (!out || out->size != sizeof(*out)) return E_INVALIDARG;
+    out->hDrvView = nullptr;
+    out->runtimeState = nullptr;
+    FrameLock lock;
+    auto *owner = frameOwner(device);
+    auto *resource = findTextureLocked(owner, texture);
+    if (!owner || !resource) return E_INVALIDARG;
+    const auto &d = resource->description;
+    if (!(d.BindFlags & D3D11_BIND_RENDER_TARGET)) return E_INVALIDARG;
+    if ((d.Format != DXGI_FORMAT_R8G8B8A8_UNORM && d.Format != DXGI_FORMAT_B8G8R8A8_UNORM) || d.ArraySize != 1 || d.SampleDesc.Count != 1)
+        return DXGI_ERROR_UNSUPPORTED;
+    if (desc && (desc->Format != d.Format || desc->ViewDimension != D3D11_RTV_DIMENSION_TEXTURE2D
+            || desc->Texture2D.MipSlice >= d.MipLevels)) return E_INVALIDARG;
+    auto &f = owner->deviceFuncs;
+    if (!f.pfnCalcPrivateRenderTargetViewSize || !f.pfnCreateRenderTargetView || !f.pfnDestroyRenderTargetView)
+        return DXGI_ERROR_UNSUPPORTED;
+    D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW args = {};
+    args.hDrvResource = resource->driverHandle;
+    args.Format = d.Format;
+    args.ResourceDimension = D3D10DDIRESOURCE_TEXTURE2D;
+    args.Tex2D.MipSlice = desc ? desc->Texture2D.MipSlice : 0;
+    args.Tex2D.ArraySize = 1;
+    traceCreation("calculate view storage");
+    const SIZE_T size = f.pfnCalcPrivateRenderTargetViewSize(owner->hDevice, &args);
+    if (!size || size > SIZE_MAX - offsetof(RenderTargetState, privateView)) return E_OUTOFMEMORY;
+    auto *v = static_cast<RenderTargetState *>(HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+            offsetof(RenderTargetState, privateView) + size));
+    if (!v) return E_OUTOFMEMORY;
+    v->owner = owner;
+    v->resource = resource;
+    v->publicHandle = out;
+    v->driverHandle.pDrvPrivate = v->privateView;
+    D3D10DDI_HRTRENDERTARGETVIEW runtime = {v};
+    InterlockedExchange(&owner->lastDdiError, S_OK);
+    traceCreation("enter driver view creation");
+    f.pfnCreateRenderTargetView(owner->hDevice, &args, v->driverHandle, runtime);
+    traceCreation("leave driver view creation");
+    HRESULT hr = frameError(owner);
+    if (FAILED(hr)) { HeapFree(GetProcessHeap(), 0, v); return hr; }
+    v->created = true;
+    ++resource->viewCount;
+    v->ownerNext = owner->renderTargets;
+    owner->renderTargets = v;
+    v->registryNext = renderTargetRegistry;
+    renderTargetRegistry = v;
+    out->hDrvView = v->driverHandle.pDrvPrivate;
+    out->runtimeState = v;
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12DestroyRenderTargetViewV1(WineD3D11On12RenderTargetView *view) noexcept
+{
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry, nullptr, nullptr);
+    if (!view || view->size != sizeof(*view)) return E_INVALIDARG;
+    ResourceState *orphan = nullptr;
+    {
+        FrameLock lock;
+        auto **link = &renderTargetRegistry;
+        while (*link && !((*link)->publicHandle == view && *link == view->runtimeState
+                && (*link)->driverHandle.pDrvPrivate == view->hDrvView)) link = &(*link)->registryNext;
+        if (*link)
+        {
+            auto *v = *link;
+            *link = v->registryNext;
+            auto **ownerLink = &v->owner->renderTargets;
+            while (*ownerLink && *ownerLink != v) ownerLink = &(*ownerLink)->ownerNext;
+            if (*ownerLink) *ownerLink = v->ownerNext;
+            auto *r = v->resource;
+            destroyRenderTargetState(v);
+            if (!r->viewCount && !r->publicHandle)
+            {
+                orphan = r;
+                unlinkOwnerResource(r);
+            }
+        }
+        view->hDrvView = nullptr;
+        view->runtimeState = nullptr;
+    }
+    if (orphan) destroyResourceState(orphan);
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12SetRenderTargetV1(
+        WineD3D11On12AdapterDevice *device, WineD3D11On12RenderTargetView *view) noexcept
+{
+    FrameLock lock;
+    auto *owner = frameOwner(device);
+    if (!owner || !owner->deviceFuncs.pfnSetRenderTargets) return DXGI_ERROR_UNSUPPORTED;
+    auto *v = findViewLocked(owner, view);
+    if (view && !v) return E_INVALIDARG;
+    D3D10DDI_HRENDERTARGETVIEW handle = v ? v->driverHandle : D3D10DDI_HRENDERTARGETVIEW{};
+    InterlockedExchange(&owner->lastDdiError, S_OK);
+    owner->deviceFuncs.pfnSetRenderTargets(owner->hDevice, &handle, v ? 1 : 0,
+            v ? 7 : 8, {}, nullptr, nullptr, 0, 0, 0, 0);
+    const HRESULT hr = frameError(owner);
+    if (SUCCEEDED(hr)) owner->boundRenderTarget = v ? v->resource : nullptr;
+    return hr;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12SetViewportV1(
+        WineD3D11On12AdapterDevice *device, const D3D11_VIEWPORT *viewport) noexcept
+{
+    FrameLock lock;
+    auto *owner = frameOwner(device);
+    if (!owner || !owner->deviceFuncs.pfnSetViewports) return DXGI_ERROR_UNSUPPORTED;
+    if (viewport && (!(viewport->Width >= 0 && viewport->Width <= 32767)
+            || !(viewport->Height >= 0 && viewport->Height <= 32767)
+            || !(viewport->TopLeftX >= -32768 && viewport->TopLeftX <= 32767)
+            || !(viewport->TopLeftY >= -32768 && viewport->TopLeftY <= 32767)
+            || !(viewport->MinDepth >= 0 && viewport->MaxDepth <= 1
+                && viewport->MinDepth <= viewport->MaxDepth))) return E_INVALIDARG;
+    D3D10_DDI_VIEWPORT ddi = {};
+    static_assert(sizeof(ddi) == sizeof(*viewport), "viewport transport");
+    if (viewport) memcpy(&ddi, viewport, sizeof(ddi));
+    InterlockedExchange(&owner->lastDdiError, S_OK);
+    owner->deviceFuncs.pfnSetViewports(owner->hDevice, viewport ? 1 : 0,
+            viewport ? 15 : 16, viewport ? &ddi : nullptr);
+    return frameError(owner);
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12ClearRenderTargetV1(
+        WineD3D11On12AdapterDevice *device, WineD3D11On12RenderTargetView *view, const FLOAT *color) noexcept
+{
+    FrameLock lock;
+    auto *owner = frameOwner(device);
+    auto *v = findViewLocked(owner, view);
+    if (!owner || !v || !color) return E_INVALIDARG;
+    if (v->resource->wrappedResource && (FAILED(owner->wrappedOwnershipError) || !v->resource->acquired))
+        return FAILED(owner->wrappedOwnershipError) ? owner->wrappedOwnershipError : E_INVALIDARG;
+    if (!owner->deviceFuncs.pfnClearRenderTargetView) return DXGI_ERROR_UNSUPPORTED;
+    FLOAT rgba[4];
+    memcpy(rgba, color, sizeof(rgba));
+    InterlockedExchange(&owner->lastDdiError, S_OK);
+    owner->deviceFuncs.pfnClearRenderTargetView(owner->hDevice, v->driverHandle, rgba);
+    return frameError(owner);
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12CopyTexture2DV1(WineD3D11On12AdapterDevice *device,
+        WineD3D11On12Texture2D *destination, WineD3D11On12Texture2D *source) noexcept
+{
+    FrameLock lock;
+    auto *owner = frameOwner(device);
+    auto *dst = findTextureLocked(owner, destination);
+    auto *src = findTextureLocked(owner, source);
+    if (!owner || !dst || !src || dst == src) return E_INVALIDARG;
+    const auto &d = dst->description;
+    const auto &s = src->description;
+    if ((src->wrappedResource || dst->wrappedResource) && FAILED(owner->wrappedOwnershipError))
+        return owner->wrappedOwnershipError;
+    if ((src->wrappedResource && !src->acquired) || (dst->wrappedResource && !dst->acquired))
+        return E_INVALIDARG;
+    if (d.Width != s.Width || d.Height != s.Height || d.Format != s.Format
+            || d.MipLevels != s.MipLevels || d.ArraySize != s.ArraySize
+            || d.SampleDesc.Count != s.SampleDesc.Count || d.SampleDesc.Quality != s.SampleDesc.Quality
+            || d.Usage == D3D11_USAGE_IMMUTABLE) return E_INVALIDARG;
+    for (UINT i = 0; i < d.MipLevels * d.ArraySize; ++i)
+        if (dst->mapped[i] || src->mapped[i]) return DXGI_ERROR_INVALID_CALL;
+    if (!owner->deviceFuncs.pfnResourceCopy) return DXGI_ERROR_UNSUPPORTED;
+    InterlockedExchange(&owner->lastDdiError, S_OK);
+    owner->deviceFuncs.pfnResourceCopy(owner->hDevice, dst->driverHandle, src->driverHandle);
+    return frameError(owner);
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12MapTexture2DV1(WineD3D11On12AdapterDevice *device,
+        WineD3D11On12Texture2D *texture, UINT subresource, D3D11_MAP mode, UINT flags,
+        D3D11_MAPPED_SUBRESOURCE *out) noexcept
+{
+    if (!out) return E_INVALIDARG;
+    ZeroMemory(out, sizeof(*out));
+    FrameLock lock;
+    auto *owner = frameOwner(device);
+    auto *r = findTextureLocked(owner, texture);
+    if (!owner || !r || subresource >= r->description.MipLevels * r->description.ArraySize)
+        return E_INVALIDARG;
+    const auto &d = r->description;
+    if (d.Usage != D3D11_USAGE_STAGING || mode != D3D11_MAP_READ
+            || !(d.CPUAccessFlags & D3D11_CPU_ACCESS_READ) || flags) return DXGI_ERROR_UNSUPPORTED;
+    if (r->mapped[subresource]) return DXGI_ERROR_INVALID_CALL;
+    if (d.Format != DXGI_FORMAT_R8G8B8A8_UNORM || d.SampleDesc.Count != 1) return DXGI_ERROR_UNSUPPORTED;
+    auto &f = owner->deviceFuncs;
+    if (!f.pfnStagingResourceMap || !f.pfnStagingResourceUnmap) return DXGI_ERROR_UNSUPPORTED;
+    D3D10DDI_MAPPED_SUBRESOURCE mapped = {};
+    InterlockedExchange(&owner->lastDdiError, S_OK);
+    /* The pinned driver's staging Map synchronizes the copy with the GPU. */
+    f.pfnStagingResourceMap(owner->hDevice, r->driverHandle, subresource,
+            static_cast<D3D10_DDI_MAP>(mode), flags, &mapped);
+    HRESULT hr = frameError(owner);
+    if (FAILED(hr)) return hr;
+    UINT width = d.Width >> (subresource % d.MipLevels);
+    UINT height = d.Height >> (subresource % d.MipLevels);
+    if (!width) width = 1;
+    if (!height) height = 1;
+    if (!mapped.pData || static_cast<UINT64>(width) * 4 > mapped.RowPitch
+            || static_cast<UINT64>(mapped.RowPitch) * height > SIZE_MAX
+            || (mapped.DepthPitch && static_cast<UINT64>(mapped.RowPitch) * height > mapped.DepthPitch))
+    {
+        f.pfnStagingResourceUnmap(owner->hDevice, r->driverHandle, subresource);
+        return E_FAIL;
+    }
+    r->mapped[subresource] = 1;
+    out->pData = mapped.pData;
+    out->RowPitch = mapped.RowPitch;
+    out->DepthPitch = mapped.DepthPitch;
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12UnmapTexture2DV1(WineD3D11On12AdapterDevice *device,
+        WineD3D11On12Texture2D *texture, UINT subresource) noexcept
+{
+    FrameLock lock;
+    auto *owner = frameOwner(device);
+    auto *r = findTextureLocked(owner, texture);
+    if (!owner || !r || subresource >= r->description.MipLevels * r->description.ArraySize
+            || !r->mapped[subresource]) return E_INVALIDARG;
+    InterlockedExchange(&owner->lastDdiError, S_OK);
+    owner->deviceFuncs.pfnStagingResourceUnmap(owner->hDevice, r->driverHandle, subresource);
+    r->mapped[subresource] = 0;
+    return frameError(owner);
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12CheckFrameSupportV1(WineD3D11On12AdapterDevice *device) noexcept
+{
+    auto *owner = frameOwner(device);
+    if (!owner) return E_INVALIDARG;
+    const auto &f = owner->deviceFuncs;
+    auto *ddi = static_cast<WineD3D11On12DDIDevice *>(owner->hDevice.pDrvPrivate);
+    if (!ddi || !ddi->lpVtbl || !ddi->lpVtbl->CreateVertexShader || !ddi->lpVtbl->CreatePixelShader
+            || !f.pfnCalcPrivateShaderSize || !f.pfnDestroyShader || !f.pfnVsSetShader || !f.pfnPsSetShader
+            || !f.pfnCalcPrivateResourceSize || !f.pfnCreateResource || !f.pfnDestroyResource
+            || !f.pfnCalcPrivateElementLayoutSize || !f.pfnCreateElementLayout || !f.pfnDestroyElementLayout
+            || !f.pfnIaSetInputLayout || !f.pfnIaSetVertexBuffers || !f.pfnIaSetTopology
+            || !f.pfnCalcPrivateRenderTargetViewSize || !f.pfnCreateRenderTargetView || !f.pfnDestroyRenderTargetView
+            || !f.pfnSetRenderTargets || !f.pfnSetViewports || !f.pfnClearRenderTargetView
+            || !f.pfnResourceCopy || !f.pfnStagingResourceMap || !f.pfnStagingResourceUnmap
+            || !f.pfnDraw || !f.pfnFlush) return DXGI_ERROR_UNSUPPORTED;
+    return S_OK;
+}
+
+/* In-process wrapping uses the driver's local handle map, not a Windows
+ * shared handle. The driver consumes one resource reference on a successful
+ * OpenResource; DestroyKMTHandle owns that reference on failure. */
+extern "C" HRESULT WINAPI WineD3D11On12CreateWrappedTexture2DV1(
+        WineD3D11On12AdapterDevice *device, IUnknown *object,
+        const D3D11_RESOURCE_FLAGS *flags, D3D12_RESOURCE_STATES inputState,
+        D3D12_RESOURCE_STATES outputState, D3D11_TEXTURE2D_DESC *description,
+        WineD3D11On12Texture2D *texture) noexcept
+{
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry, nullptr, nullptr);
+    if (!texture || texture->size != sizeof(*texture)) return E_INVALIDARG;
+    texture->hDrvResource = nullptr;
+    texture->runtimeState = nullptr;
+    texture->reserved = 0;
+    if (description) *description = {};
+    auto *owner = frameOwner(device);
+    if (!owner || !object || !flags || !description) return E_INVALIDARG;
+    /* The first wrapped slice supports a single ordinary render target.
+     * Shared/keyed-mutex heaps, arrays, multisampling and other views remain
+     * explicit unsupported cases rather than partially described resources. */
+    if (flags->BindFlags != D3D11_BIND_RENDER_TARGET || flags->MiscFlags
+            || flags->CPUAccessFlags || flags->StructureByteStride)
+        return DXGI_ERROR_UNSUPPORTED;
+    const UINT allowedStates = D3D12_RESOURCE_STATE_RENDER_TARGET
+            | D3D12_RESOURCE_STATE_COPY_SOURCE | D3D12_RESOURCE_STATE_COPY_DEST
+            | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    const auto validState = [allowedStates](UINT s) noexcept {
+        const UINT writes = s & (D3D12_RESOURCE_STATE_RENDER_TARGET | D3D12_RESOURCE_STATE_COPY_DEST);
+        return !(s & ~allowedStates) && (!writes || s == D3D12_RESOURCE_STATE_RENDER_TARGET
+                || s == D3D12_RESOURCE_STATE_COPY_DEST);
+    };
+    if (!validState(inputState) || !validState(outputState)) return E_INVALIDARG;
+    ComRef<ID3D12Resource> original;
+    HRESULT hr = strictResult(object->QueryInterface(IID_ID3D12Resource,
+            reinterpret_cast<void **>(original.put())), original);
+    if (FAILED(hr)) return hr;
+    ComRef<ID3D12Device> originalDevice;
+    hr = strictResult(original.get()->GetDevice(IID_ID3D12Device,
+            reinterpret_cast<void **>(originalDevice.put())), originalDevice);
+    if (FAILED(hr)) return hr;
+    if (originalDevice.get() != owner->device12)
+    {
+        bool same = false;
+        hr = comObjectsIdentical(originalDevice.get(), owner->device12, &same);
+        if (FAILED(hr)) return hr;
+        if (!same) return E_INVALIDARG;
+    }
+    const auto d = RelayD3D12ResourceDesc(original.get());
+    if (d.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || !d.Width || !d.Height
+            || d.Width > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION
+            || d.Height > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION
+            || d.DepthOrArraySize != 1 || d.MipLevels != 1 || d.SampleDesc.Count != 1
+            || d.SampleDesc.Quality || !(d.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
+            || (d.Format != DXGI_FORMAT_R8G8B8A8_UNORM && d.Format != DXGI_FORMAT_B8G8R8A8_UNORM))
+        return DXGI_ERROR_UNSUPPORTED;
+    D3D12_HEAP_PROPERTIES heap = {};
+    D3D12_HEAP_FLAGS heapFlags = {};
+    hr = original.get()->GetHeapProperties(&heap, &heapFlags);
+    if (FAILED(hr)) return hr;
+    if (heap.Type != D3D12_HEAP_TYPE_DEFAULT
+            || (heapFlags & (D3D12_HEAP_FLAG_SHARED | D3D12_HEAP_FLAG_SHARED_CROSS_ADAPTER)))
+        return DXGI_ERROR_UNSUPPORTED;
+    auto *ddi = static_cast<WineD3D11On12DDIDevice *>(owner->hDevice.pDrvPrivate);
+    auto &f = owner->deviceFuncs;
+    if (!ddi || !ddi->lpVtbl || !ddi->lpVtbl->GetResourcePrivateDataSize
+            || !ddi->lpVtbl->CreateWrappingHandle || !ddi->lpVtbl->DestroyKMTHandle
+            || !ddi->lpVtbl->TransitionResourceForRelease || !ddi->lpVtbl->ApplyAllResourceTransitions
+            || !f.pfnCalcPrivateOpenedResourceSize || !f.pfnOpenResource || !f.pfnDestroyResource)
+        return DXGI_ERROR_UNSUPPORTED;
+    const UINT dataSize = ddi->lpVtbl->GetResourcePrivateDataSize(ddi);
+    if (!dataSize) return E_FAIL;
+    void *data = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, dataSize);
+    if (!data) return E_OUTOFMEMORY;
+    UINT handle = 0;
+    original.get()->AddRef(); // transferred only if CreateWrappingHandle succeeds
+    hr = ddi->lpVtbl->CreateWrappingHandle(ddi, original.get(), 1, data, dataSize, &handle);
+    if (FAILED(hr) || !handle)
+    {
+        original.get()->Release();
+        HeapFree(GetProcessHeap(), 0, data);
+        return FAILED(hr) ? hr : E_FAIL;
+    }
+    D3D10DDIARG_OPENRESOURCE args = {};
+    args.hKMResource.handle = handle;
+    args.pPrivateDriverData = data;
+    args.PrivateDriverDataSize = dataSize;
+    const SIZE_T size = f.pfnCalcPrivateOpenedResourceSize(owner->hDevice, &args);
+    ResourceState *r = nullptr;
+    if (size && size <= SIZE_MAX - offsetof(ResourceState, privateResource))
+        r = static_cast<ResourceState *>(HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                offsetof(ResourceState, privateResource) + size));
+    if (!r)
+    {
+        ddi->lpVtbl->DestroyKMTHandle(ddi, handle);
+        HeapFree(GetProcessHeap(), 0, data);
+        return E_OUTOFMEMORY;
+    }
+    r->mapped = static_cast<BYTE *>(HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 1));
+    if (!r->mapped)
+    {
+        ddi->lpVtbl->DestroyKMTHandle(ddi, handle);
+        HeapFree(GetProcessHeap(), 0, data);
+        HeapFree(GetProcessHeap(), 0, r);
+        return E_OUTOFMEMORY;
+    }
+    r->owner = owner;
+    r->publicHandle = texture;
+    r->kind = RESOURCE_KIND_TEXTURE2D;
+    r->flags = *flags;
+    r->description = {static_cast<UINT>(d.Width), d.Height, 1, 1, d.Format,
+            d.SampleDesc, D3D11_USAGE_DEFAULT, flags->BindFlags, 0, 0};
+    r->inputState = inputState;
+    r->outputState = outputState;
+    r->driverHandle.pDrvPrivate = r->privateResource;
+    r->runtimeHandle.handle = r;
+    {
+        FrameLock lock;
+        r->registryNext = resourceRegistry;
+        resourceRegistry = r;
+        r->ownerNext = owner->resources;
+        owner->resources = r;
+    }
+    InterlockedExchange(&owner->lastDdiError, S_OK);
+    f.pfnOpenResource(owner->hDevice, &args, r->driverHandle, r->runtimeHandle);
+    hr = frameError(owner);
+    HeapFree(GetProcessHeap(), 0, data);
+    if (FAILED(hr))
+    {
+        ddi->lpVtbl->DestroyKMTHandle(ddi, handle);
+        { FrameLock lock; unlinkOwnerResource(r); }
+        destroyResourceState(r);
+        return hr;
+    }
+    r->created = true;
+    auto *resourceDDI = reinterpret_cast<WineD3D11On12DDIResource *>(r->privateResource);
+    if (!resourceDDI->lpVtbl || !resourceDDI->lpVtbl->SetGraphicsCurrentState)
+    {
+        { FrameLock lock; unlinkOwnerResource(r); }
+        destroyResourceState(r);
+        return DXGI_ERROR_UNSUPPORTED;
+    }
+    FrameLock publicationLock;
+    r->wrappedResource = original.detach();
+    resourceDDI->lpVtbl->SetGraphicsCurrentState(resourceDDI, inputState, 0 /* Create */);
+    texture->hDrvResource = r->driverHandle.pDrvPrivate;
+    texture->runtimeState = r;
+    *description = r->description;
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12SetWrappedOwnershipV1(
+        WineD3D11On12AdapterDevice *device, WineD3D11On12Texture2D *const *textures,
+        UINT count, BOOL acquire) noexcept
+{
+    FrameLock lock;
+    auto *owner = frameOwner(device);
+    if (!owner || (acquire != TRUE && acquire != FALSE)) return E_INVALIDARG;
+    if (FAILED(owner->wrappedOwnershipError)) return owner->wrappedOwnershipError;
+    if (acquire && count && !textures) return E_INVALIDARG;
+    // Validate the entire list before changing any state; duplicate entries
+    // otherwise turn a batch into a double acquisition or unmatched release.
+    if (textures)
+        for (UINT i = 0; i < count; ++i)
+        {
+            auto *r = findTextureLocked(owner, textures[i]);
+            if (!r || !r->wrappedResource || r->acquired == !!acquire) return E_INVALIDARG;
+            for (UINT j = 0; j < i; ++j)
+                if (textures[i] == textures[j]) return E_INVALIDARG;
+        }
+    auto *ddi = static_cast<WineD3D11On12DDIDevice *>(owner->hDevice.pDrvPrivate);
+    InterlockedExchange(&owner->lastDdiError, S_OK);
+    for (auto *r = owner->resources; r; r = r->ownerNext)
+    {
+        if (!r->wrappedResource) continue;
+        bool selected = !textures && !acquire && r->acquired;
+        for (UINT i = 0; textures && i < count; ++i)
+            selected |= r->publicHandle == textures[i];
+        if (!selected) continue;
+        auto *resourceDDI = reinterpret_cast<WineD3D11On12DDIResource *>(r->privateResource);
+        if (acquire)
+            resourceDDI->lpVtbl->SetGraphicsCurrentState(resourceDDI, r->inputState, 1 /* Acquire */);
+        else
+            ddi->lpVtbl->TransitionResourceForRelease(ddi, resourceDDI, r->outputState);
+        if (FAILED(frameError(owner)))
+        {
+            // GPU transitions cannot be rolled back safely. Refuse further
+            // wrapped use on this device until it is destroyed and recreated.
+            owner->wrappedOwnershipError = frameError(owner);
+            return owner->wrappedOwnershipError;
+        }
+        r->acquired = !!acquire;
+    }
+    if (!acquire) ddi->lpVtbl->ApplyAllResourceTransitions(ddi);
+    const HRESULT hr = frameError(owner);
+    if (FAILED(hr)) owner->wrappedOwnershipError = hr;
+    return hr;
 }
