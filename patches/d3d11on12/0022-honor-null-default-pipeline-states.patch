@@ -1,0 +1,27 @@
+Subject: use API defaults for absent pipeline state objects
+
+The Wine host starts with the D3D11 default state rather than allocating
+private state objects solely to encode those defaults. SetRasterizerState
+already accepts a null handle, but PSO conversion unconditionally dereferences
+all three state pointers. Resolve absent states to the standard D3D12
+default descriptors, preserving explicitly bound descriptors. This keeps the
+untextured first-frame path from dereferencing null while retaining API
+default semantics.
+
+diff --git a/include/PipelineState.hpp b/include/PipelineState.hpp
+index d117b13..4fdd6b3 100644
+--- a/include/PipelineState.hpp
++++ b/include/PipelineState.hpp
+@@ -71,9 +71,9 @@ namespace D3D11On12
+             Ret.StreamOutput = (pGeometryShader && pGeometryShader->m_bIsStreamOutput) ?
+                 static_cast<StreamOutShader*>(pGeometryShader)->ProduceDesc(pVertexShader, pDomainShader) : D3D12_STREAM_OUTPUT_DESC{};
+             Ret.InputLayout = pInputLayout ? pInputLayout->ProduceDesc(pVertexShader, InputElements) : D3D12_INPUT_LAYOUT_DESC{};
+-            Ret.BlendState = pBlendState->m_UnderlyingDesc;
+-            Ret.DepthStencilState = pDepthStencilState->m_UnderlyingDesc;
+-            Ret.RasterizerState = pRasterizerState->m_UnderlyingDesc;
++            Ret.BlendState = pBlendState ? pBlendState->m_UnderlyingDesc : CD3DX12_BLEND_DESC(D3D12_DEFAULT);
++            Ret.DepthStencilState = pDepthStencilState ? pDepthStencilState->m_UnderlyingDesc : CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
++            Ret.RasterizerState = pRasterizerState ? pRasterizerState->m_UnderlyingDesc : CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+ 
+             Ret.NumRenderTargets = NumRenderTargets;
+             Ret.SampleDesc = SampleDesc;
