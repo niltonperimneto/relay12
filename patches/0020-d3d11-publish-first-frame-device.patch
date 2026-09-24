@@ -1,0 +1,138 @@
+Subject: d3d11: publish the first-frame device after checking driver support
+
+d3d11: publish the first-frame device after checking driver support. The separate On12 host has no WineD3D resource to dispatch through;
+route only backend-owned objects and preserve the ordinary WineD3D path.
+
+diff --git a/dlls/d3d11/d3d11_main.c b/dlls/d3d11/d3d11_main.c
+index c54e632e..5e80d799 100644
+--- a/dlls/d3d11/d3d11_main.c
++++ b/dlls/d3d11/d3d11_main.c
+@@ -521,6 +521,7 @@ struct d3d11_on12_backend
+     HRESULT (WINAPI *map_texture)(struct wine_d3d11on12_adapter_device *, void *, UINT,
+             D3D11_MAP, UINT, D3D11_MAPPED_SUBRESOURCE *);
+     HRESULT (WINAPI *unmap_texture)(struct wine_d3d11on12_adapter_device *, void *, UINT);
++    HRESULT (WINAPI *check_frame_support)(struct wine_d3d11on12_adapter_device *);
+     wine_d3d11on12_create_texture2d_fn create_texture2d;
+     wine_d3d11on12_destroy_texture2d_fn destroy_texture2d;
+     wine_d3d11on12_set_vertex_buffers_fn set_vertex_buffers;
+@@ -1017,10 +1018,11 @@ static const struct d3d11_backend_ops d3d11_on12_backend_ops =
+     .get_d3d12_device = d3d11_on12_backend_get_d3d12_device,
+ };
+ 
+-static HRESULT d3d11_on12_create_unpublished_backend(IUnknown *device,
++static HRESULT d3d11_on12_create_frame_backend(IUnknown *device,
+         UINT flags, const D3D_FEATURE_LEVEL *feature_levels,
+         UINT feature_level_count, IUnknown *const *queues, UINT queue_count,
+-        UINT node_mask)
++        UINT node_mask, ID3D11Device **device_out, ID3D11DeviceContext **context_out,
++        D3D_FEATURE_LEVEL *level_out)
+ {
+     struct wine_d3d11on12_core_interface core = {0};
+     struct d3d11_on12_backend *backend;
+@@ -1174,6 +1176,15 @@ static HRESULT d3d11_on12_create_unpublished_backend(IUnknown *device,
+         return DXGI_ERROR_UNSUPPORTED;
+     }
+ 
++    address = GetProcAddress(backend->core_module, "WineD3D11On12CheckFrameSupportV1");
++    memcpy(&backend->check_frame_support, &address, sizeof(backend->check_frame_support));
++    if (!backend->check_frame_support)
++    {
++        FreeLibrary(backend->core_module);
++        free(backend);
++        return DXGI_ERROR_UNSUPPORTED;
++    }
++
+     address = GetProcAddress(backend->core_module,
+             "WineD3D11On12OpenAdapterV1");
+     memcpy(&open_adapter, &address, sizeof(open_adapter));
+@@ -1193,6 +1204,14 @@ static HRESULT d3d11_on12_create_unpublished_backend(IUnknown *device,
+         return hr;
+     }
+ 
++    if (FAILED(hr = backend->check_frame_support(&backend->adapter)))
++    {
++        backend->core.close_adapter_device(&backend->adapter);
++        FreeLibrary(backend->core_module);
++        free(backend);
++        return hr;
++    }
++
+     hr = IUnknown_QueryInterface(device, &IID_ID3D12Device,
+             (void **)&backend->device12);
+     if (SUCCEEDED(hr) && !backend->device12)
+@@ -1204,8 +1223,24 @@ static HRESULT d3d11_on12_create_unpublished_backend(IUnknown *device,
+         free(backend);
+         return hr;
+     }
+-    backend->feature_level = feature_level_count ? feature_levels[0]
+-            : D3D_FEATURE_LEVEL_11_0;
++    {
++        const D3D_FEATURE_LEVEL default_level = D3D_FEATURE_LEVEL_11_0;
++        D3D12_FEATURE_DATA_FEATURE_LEVELS levels;
++        levels.NumFeatureLevels = feature_level_count ? feature_level_count : 1;
++        levels.pFeatureLevelsRequested = feature_level_count ? feature_levels : &default_level;
++        levels.MaxSupportedFeatureLevel = 0;
++        hr = ID3D12Device_CheckFeatureSupport(backend->device12, D3D12_FEATURE_FEATURE_LEVELS,
++                &levels, sizeof(levels));
++        if (FAILED(hr) || !levels.MaxSupportedFeatureLevel)
++        {
++            backend->core.close_adapter_device(&backend->adapter);
++            ID3D12Device_Release(backend->device12);
++            FreeLibrary(backend->core_module);
++            free(backend);
++            return FAILED(hr) ? hr : DXGI_ERROR_UNSUPPORTED;
++        }
++        backend->feature_level = levels.MaxSupportedFeatureLevel;
++    }
+     backend->creation_flags = flags;
+ 
+     if (!(d3d_device = d3d_device_create_backend(&d3d11_on12_backend_ops,
+@@ -1218,10 +1253,14 @@ static HRESULT d3d11_on12_create_unpublished_backend(IUnknown *device,
+         return E_OUTOFMEMORY;
+     }
+ 
+-    /* Prove that the token is owned by the controlling object and destroyed
+-     * through its final Release. Publication comes in a later patch. */
+-    IUnknown_Release(&d3d_device->IUnknown_inner);
+-    return DXGI_ERROR_UNSUPPORTED;
++    if (context_out)
++        ID3D11Device5_GetImmediateContext(&d3d_device->ID3D11Device5_iface, context_out);
++    if (level_out) *level_out = backend->feature_level;
++    if (device_out)
++        *device_out = (ID3D11Device *)&d3d_device->ID3D11Device5_iface;
++    else
++        IUnknown_Release(&d3d_device->IUnknown_inner);
++    return S_OK;
+ }
+ #endif
+ 
+@@ -1239,7 +1278,7 @@ HRESULT WINAPI D3D11On12CreateDevice(IUnknown *device, UINT flags,
+     if (obtained_feature_level)
+         *obtained_feature_level = 0;
+ 
+-    return d3d11_on12_create_unpublished_backend(device, flags,
++    return d3d11_on12_create_frame_backend(device, flags,
+             feature_levels, feature_level_count, queues, queue_count,
+             node_mask);
+ #else
+diff --git a/dlls/d3d11/device.c b/dlls/d3d11/device.c
+index a54b7155..bb9d4f32 100644
+--- a/dlls/d3d11/device.c
++++ b/dlls/d3d11/device.c
+@@ -8476,6 +8476,16 @@ struct d3d_device *d3d_device_create_backend(
+             || !backend_ops->draw_instanced
+             || !backend_ops->draw_indexed_instanced
+             || !backend_ops->set_primitive_topology
++            || !backend_ops->create_buffer
++            || !backend_ops->destroy_buffer
++            || !backend_ops->create_rtv
++            || !backend_ops->destroy_rtv
++            || !backend_ops->set_render_targets
++            || !backend_ops->set_viewports
++            || !backend_ops->clear_render_target
++            || !backend_ops->copy_resource
++            || !backend_ops->map_resource
++            || !backend_ops->unmap_resource
+             || !backend_ops->create_texture2d
+             || !backend_ops->destroy_texture2d
+             || !backend_ops->set_vertex_buffers

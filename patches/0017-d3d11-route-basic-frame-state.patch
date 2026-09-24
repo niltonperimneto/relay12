@@ -1,0 +1,151 @@
+Subject: d3d11: route offscreen target binding viewport and clear
+
+d3d11: route offscreen target binding viewport and clear. The separate On12 host has no WineD3D resource to dispatch through;
+route only backend-owned objects and preserve the ordinary WineD3D path.
+
+diff --git a/dlls/d3d11/d3d11_main.c b/dlls/d3d11/d3d11_main.c
+index 52b6bffe..b061d7a7 100644
+--- a/dlls/d3d11/d3d11_main.c
++++ b/dlls/d3d11/d3d11_main.c
+@@ -514,6 +514,9 @@ struct d3d11_on12_backend
+     HRESULT (WINAPI *create_rtv)(struct wine_d3d11on12_adapter_device *, void *,
+             const D3D11_RENDER_TARGET_VIEW_DESC *, void *);
+     HRESULT (WINAPI *destroy_rtv)(void *);
++    HRESULT (WINAPI *set_render_target)(struct wine_d3d11on12_adapter_device *, void *);
++    HRESULT (WINAPI *set_viewport)(struct wine_d3d11on12_adapter_device *, const D3D11_VIEWPORT *);
++    HRESULT (WINAPI *clear_render_target)(struct wine_d3d11on12_adapter_device *, void *, const float *);
+     wine_d3d11on12_create_texture2d_fn create_texture2d;
+     wine_d3d11on12_destroy_texture2d_fn destroy_texture2d;
+     wine_d3d11on12_set_vertex_buffers_fn set_vertex_buffers;
+@@ -881,8 +884,52 @@ static void d3d11_on12_backend_destroy_rtv(struct d3d_device *device, struct d3d
+     if (FAILED(hr)) WARN("On12 RTV destruction failed, hr %#lx.\n", hr);
+ }
+ 
++static void d3d11_on12_backend_set_render_targets(struct d3d11_device_context *context,
++        UINT count, ID3D11RenderTargetView *const *views, ID3D11DepthStencilView *depth)
++{
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    struct d3d_rendertarget_view *view;
++    HRESULT hr;
++    if (count > 1 || depth || (count && !views))
++    {
++        WARN("On12 supports one render target and no depth view.\n");
++        return;
++    }
++    view = count ? unsafe_impl_from_ID3D11RenderTargetView(views[0]) : NULL;
++    hr = backend->set_render_target(&backend->adapter, view ? &view->backend_view : NULL);
++    if (FAILED(hr)) WARN("On12 target binding failed, hr %#lx.\n", hr);
++}
++
++static void d3d11_on12_backend_set_viewports(struct d3d11_device_context *context,
++        UINT count, const D3D11_VIEWPORT *viewports)
++{
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    HRESULT hr;
++    if (count > 1 || (count && !viewports))
++    {
++        WARN("On12 supports one viewport.\n");
++        return;
++    }
++    hr = backend->set_viewport(&backend->adapter, count ? viewports : NULL);
++    if (FAILED(hr)) WARN("On12 viewport failed, hr %#lx.\n", hr);
++}
++
++static void d3d11_on12_backend_clear_render_target(struct d3d11_device_context *context,
++        ID3D11RenderTargetView *iface, const float *color)
++{
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    struct d3d_rendertarget_view *view = unsafe_impl_from_ID3D11RenderTargetView(iface);
++    HRESULT hr = backend->clear_render_target(&backend->adapter,
++            view ? &view->backend_view : NULL, color);
++    if (FAILED(hr)) WARN("On12 clear failed, hr %#lx.\n", hr);
++}
++
+ static const struct d3d11_backend_ops d3d11_on12_backend_ops =
+ {
++    .set_render_targets = d3d11_on12_backend_set_render_targets,
++    .set_viewports = d3d11_on12_backend_set_viewports,
++    .clear_render_target = d3d11_on12_backend_clear_render_target,
++
+     .create_rtv = d3d11_on12_backend_create_rtv,
+     .destroy_rtv = d3d11_on12_backend_destroy_rtv,
+ 
+@@ -1048,6 +1095,19 @@ static HRESULT d3d11_on12_create_unpublished_backend(IUnknown *device,
+         return DXGI_ERROR_UNSUPPORTED;
+     }
+ 
++    address = GetProcAddress(backend->core_module, "WineD3D11On12SetRenderTargetV1");
++    memcpy(&backend->set_render_target, &address, sizeof(backend->set_render_target));
++    address = GetProcAddress(backend->core_module, "WineD3D11On12SetViewportV1");
++    memcpy(&backend->set_viewport, &address, sizeof(backend->set_viewport));
++    address = GetProcAddress(backend->core_module, "WineD3D11On12ClearRenderTargetV1");
++    memcpy(&backend->clear_render_target, &address, sizeof(backend->clear_render_target));
++    if (!backend->set_render_target || !backend->set_viewport || !backend->clear_render_target)
++    {
++        FreeLibrary(backend->core_module);
++        free(backend);
++        return DXGI_ERROR_UNSUPPORTED;
++    }
++
+     address = GetProcAddress(backend->core_module,
+             "WineD3D11On12OpenAdapterV1");
+     memcpy(&open_adapter, &address, sizeof(open_adapter));
+diff --git a/dlls/d3d11/d3d11_private.h b/dlls/d3d11/d3d11_private.h
+index a2bce6e7..b2f6c5fc 100644
+--- a/dlls/d3d11/d3d11_private.h
++++ b/dlls/d3d11/d3d11_private.h
+@@ -605,6 +605,11 @@ struct d3d11_device_context
+  * immediate context. WineD3D remains the default backend. */
+ struct d3d11_backend_ops
+ {
++    void (*set_render_targets)(struct d3d11_device_context *, UINT,
++            ID3D11RenderTargetView *const *, ID3D11DepthStencilView *);
++    void (*set_viewports)(struct d3d11_device_context *, UINT, const D3D11_VIEWPORT *);
++    void (*clear_render_target)(struct d3d11_device_context *, ID3D11RenderTargetView *, const float *);
++
+     HRESULT (*create_rtv)(struct d3d_device *, ID3D11Resource *,
+             const D3D11_RENDER_TARGET_VIEW_DESC *, struct d3d_rendertarget_view *);
+     void (*destroy_rtv)(struct d3d_device *, struct d3d_rendertarget_view *);
+diff --git a/dlls/d3d11/device.c b/dlls/d3d11/device.c
+index 1a157be5..e6f39780 100644
+--- a/dlls/d3d11/device.c
++++ b/dlls/d3d11/device.c
+@@ -1220,6 +1220,12 @@ static void STDMETHODCALLTYPE d3d11_device_context_OMSetRenderTargets(ID3D11Devi
+ 
+     TRACE("iface %p, rtv_count %u, rtvs %p, depth_stencil_view %p.\n", iface, rtv_count, rtvs, depth_stencil_view);
+ 
++    if (context->device->backend_ops->set_render_targets)
++    {
++        context->device->backend_ops->set_render_targets(context, rtv_count, rtvs, depth_stencil_view);
++        return;
++    }
++
+     if (rtv_count > ARRAY_SIZE(wined3d_rtvs))
+     {
+         WARN("View count %u exceeds limit.\n", rtv_count);
+@@ -1440,6 +1446,12 @@ static void STDMETHODCALLTYPE d3d11_device_context_RSSetViewports(ID3D11DeviceCo
+ 
+     TRACE("iface %p, viewport_count %u, viewports %p.\n", iface, viewport_count, viewports);
+ 
++    if (context->device->backend_ops->set_viewports)
++    {
++        context->device->backend_ops->set_viewports(context, viewport_count, viewports);
++        return;
++    }
++
+     if (viewport_count > ARRAY_SIZE(wined3d_vp))
+         return;
+ 
+@@ -1555,6 +1567,12 @@ static void STDMETHODCALLTYPE d3d11_device_context_ClearRenderTargetView(ID3D11D
+     TRACE("iface %p, render_target_view %p, color_rgba %s.\n",
+             iface, render_target_view, debug_float4(color_rgba));
+ 
++    if (context->device->backend_ops->clear_render_target)
++    {
++        context->device->backend_ops->clear_render_target(context, render_target_view, color_rgba);
++        return;
++    }
++
+     if (!view)
+         return;
+ 

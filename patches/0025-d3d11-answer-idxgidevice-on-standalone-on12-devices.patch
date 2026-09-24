@@ -1,0 +1,260 @@
+Subject: d3d11: answer IDXGIDevice on standalone On12 devices
+
+Unity's D3D12 renderer queries IDXGIDevice on the device D3D11On12CreateDevice
+returns and discards it when the query fails, so PEAK reported "failed to
+create D3D11On12 device (0x80004002)" and fell back to D3D11. A standalone
+device has no DXGI device aggregating it, and patch 0023 refused the IID.
+Answer IDXGIDevice and IDXGIObject from the device itself. GetAdapter returns
+the adapter DXGI reports for the caller's D3D12 device LUID, and GetParent
+queries that adapter. Private data is stored on the device, which also makes
+ID3D11Device private data work, because those methods forward here. Surface
+creation, residency and GPU thread priority return DXGI_ERROR_UNSUPPORTED.
+IDXGIDevice1 and later stay refused.
+---
+diff --git a/dlls/d3d11/d3d11_private.h b/dlls/d3d11/d3d11_private.h
+index ae910f63..10854d1a 100644
+--- a/dlls/d3d11/d3d11_private.h
++++ b/dlls/d3d11/d3d11_private.h
+@@ -743,6 +743,10 @@ struct d3d_device
+     const struct d3d11_backend_ops *backend_ops;
+     void *backend_private;
+     BOOL standalone_allocation;
++    /* Standalone devices only: no DXGI device aggregates them, so they answer
++     * IDXGIDevice themselves and keep the private data it carries. */
++    IDXGIDevice IDXGIDevice_iface;
++    struct wined3d_private_store private_store;
+ 
+     BOOL d3d11_only;
+ 
+diff --git a/dlls/d3d11/device.c b/dlls/d3d11/device.c
+index 8432ca18..a1f62b5f 100644
+--- a/dlls/d3d11/device.c
++++ b/dlls/d3d11/device.c
+@@ -5240,6 +5240,183 @@ static const struct ID3D11On12Device1Vtbl d3d11_on12_device_vtbl =
+     d3d11_on12_device_GetD3D12Device,
+ };
+ 
++/* A standalone On12 device has no DXGI device to aggregate it, yet callers
++ * identify the adapter through IDXGIDevice: Unity's D3D12 renderer discards
++ * the device when the query fails.  The adapter is the one the caller's D3D12
++ * device reports by LUID, and private data is stored here because the
++ * ID3D11Device private-data methods forward to this interface.  Surface
++ * creation, residency and GPU thread priority are refused rather than
++ * approximated. */
++static inline struct d3d_device *impl_from_IDXGIDevice(IDXGIDevice *iface)
++{
++    return CONTAINING_RECORD(iface, struct d3d_device, IDXGIDevice_iface);
++}
++
++static HRESULT STDMETHODCALLTYPE d3d11_on12_dxgi_device_QueryInterface(IDXGIDevice *iface,
++        REFIID iid, void **out)
++{
++    struct d3d_device *device = impl_from_IDXGIDevice(iface);
++    return IUnknown_QueryInterface(device->outer_unk, iid, out);
++}
++
++static ULONG STDMETHODCALLTYPE d3d11_on12_dxgi_device_AddRef(IDXGIDevice *iface)
++{
++    struct d3d_device *device = impl_from_IDXGIDevice(iface);
++    return IUnknown_AddRef(device->outer_unk);
++}
++
++static ULONG STDMETHODCALLTYPE d3d11_on12_dxgi_device_Release(IDXGIDevice *iface)
++{
++    struct d3d_device *device = impl_from_IDXGIDevice(iface);
++    return IUnknown_Release(device->outer_unk);
++}
++
++static HRESULT STDMETHODCALLTYPE d3d11_on12_dxgi_device_SetPrivateData(IDXGIDevice *iface,
++        REFGUID guid, UINT data_size, const void *data)
++{
++    struct d3d_device *device = impl_from_IDXGIDevice(iface);
++
++    TRACE("iface %p, guid %s, data_size %u, data %p.\n", iface, debugstr_guid(guid), data_size, data);
++
++    return d3d_set_private_data(&device->private_store, guid, data_size, data);
++}
++
++static HRESULT STDMETHODCALLTYPE d3d11_on12_dxgi_device_SetPrivateDataInterface(IDXGIDevice *iface,
++        REFGUID guid, const IUnknown *object)
++{
++    struct d3d_device *device = impl_from_IDXGIDevice(iface);
++
++    TRACE("iface %p, guid %s, object %p.\n", iface, debugstr_guid(guid), object);
++
++    return d3d_set_private_data_interface(&device->private_store, guid, object);
++}
++
++static HRESULT STDMETHODCALLTYPE d3d11_on12_dxgi_device_GetPrivateData(IDXGIDevice *iface,
++        REFGUID guid, UINT *data_size, void *data)
++{
++    struct d3d_device *device = impl_from_IDXGIDevice(iface);
++
++    TRACE("iface %p, guid %s, data_size %p, data %p.\n", iface, debugstr_guid(guid), data_size, data);
++
++    return d3d_get_private_data(&device->private_store, guid, data_size, data);
++}
++
++static HRESULT STDMETHODCALLTYPE d3d11_on12_dxgi_device_GetAdapter(IDXGIDevice *iface,
++        IDXGIAdapter **adapter)
++{
++    struct d3d_device *device = impl_from_IDXGIDevice(iface);
++    IDXGIFactory4 *factory = NULL;
++    ID3D12Device *device12 = NULL;
++    LUID luid;
++    HRESULT hr;
++
++    TRACE("iface %p, adapter %p.\n", iface, adapter);
++
++    if (!adapter)
++        return E_INVALIDARG;
++    *adapter = NULL;
++
++    hr = device->backend_ops->get_d3d12_device(device, &IID_ID3D12Device, &device12);
++    if (SUCCEEDED(hr) && !device12)
++        hr = E_NOINTERFACE;
++    if (FAILED(hr))
++        return hr;
++    luid = ID3D12Device_GetAdapterLuid(device12);
++    ID3D12Device_Release(device12);
++
++    hr = CreateDXGIFactory1(&IID_IDXGIFactory4, (void **)&factory);
++    if (SUCCEEDED(hr) && !factory)
++        hr = E_NOINTERFACE;
++    if (FAILED(hr))
++        return hr;
++    hr = IDXGIFactory4_EnumAdapterByLuid(factory, luid, &IID_IDXGIAdapter, (void **)adapter);
++    IDXGIFactory4_Release(factory);
++    if (SUCCEEDED(hr) && !*adapter)
++        hr = DXGI_ERROR_NOT_FOUND;
++    if (FAILED(hr))
++    {
++        WARN("No DXGI adapter has the D3D12 device's LUID, hr %#lx.\n", hr);
++        *adapter = NULL;
++    }
++    return hr;
++}
++
++static HRESULT STDMETHODCALLTYPE d3d11_on12_dxgi_device_GetParent(IDXGIDevice *iface,
++        REFIID iid, void **parent)
++{
++    IDXGIAdapter *adapter;
++    HRESULT hr;
++
++    TRACE("iface %p, iid %s, parent %p.\n", iface, debugstr_guid(iid), parent);
++
++    if (!parent)
++        return E_INVALIDARG;
++    *parent = NULL;
++
++    if (FAILED(hr = d3d11_on12_dxgi_device_GetAdapter(iface, &adapter)))
++        return hr;
++    hr = IDXGIAdapter_QueryInterface(adapter, iid, parent);
++    IDXGIAdapter_Release(adapter);
++    return hr;
++}
++
++static HRESULT STDMETHODCALLTYPE d3d11_on12_dxgi_device_CreateSurface(IDXGIDevice *iface,
++        const DXGI_SURFACE_DESC *desc, UINT surface_count, DXGI_USAGE usage,
++        const DXGI_SHARED_RESOURCE *shared_resource, IDXGISurface **surface)
++{
++    UINT i;
++
++    WARN("On12 CreateSurface is not supported.\n");
++    if (surface)
++    {
++        for (i = 0; i < surface_count; ++i)
++            surface[i] = NULL;
++    }
++    return DXGI_ERROR_UNSUPPORTED;
++}
++
++static HRESULT STDMETHODCALLTYPE d3d11_on12_dxgi_device_QueryResourceResidency(IDXGIDevice *iface,
++        IUnknown *const *resources, DXGI_RESIDENCY *residency, UINT resource_count)
++{
++    WARN("On12 QueryResourceResidency is not supported.\n");
++    return DXGI_ERROR_UNSUPPORTED;
++}
++
++static HRESULT STDMETHODCALLTYPE d3d11_on12_dxgi_device_SetGPUThreadPriority(IDXGIDevice *iface,
++        INT priority)
++{
++    WARN("On12 SetGPUThreadPriority is not supported.\n");
++    return DXGI_ERROR_UNSUPPORTED;
++}
++
++static HRESULT STDMETHODCALLTYPE d3d11_on12_dxgi_device_GetGPUThreadPriority(IDXGIDevice *iface,
++        INT *priority)
++{
++    WARN("On12 GetGPUThreadPriority is not supported.\n");
++    if (priority)
++        *priority = 0;
++    return DXGI_ERROR_UNSUPPORTED;
++}
++
++static const struct IDXGIDeviceVtbl d3d11_on12_dxgi_device_vtbl =
++{
++    /* IUnknown methods */
++    d3d11_on12_dxgi_device_QueryInterface,
++    d3d11_on12_dxgi_device_AddRef,
++    d3d11_on12_dxgi_device_Release,
++    /* IDXGIObject methods */
++    d3d11_on12_dxgi_device_SetPrivateData,
++    d3d11_on12_dxgi_device_SetPrivateDataInterface,
++    d3d11_on12_dxgi_device_GetPrivateData,
++    d3d11_on12_dxgi_device_GetParent,
++    /* IDXGIDevice methods */
++    d3d11_on12_dxgi_device_GetAdapter,
++    d3d11_on12_dxgi_device_CreateSurface,
++    d3d11_on12_dxgi_device_QueryResourceResidency,
++    d3d11_on12_dxgi_device_SetGPUThreadPriority,
++    d3d11_on12_dxgi_device_GetGPUThreadPriority,
++};
++
+ static HRESULT STDMETHODCALLTYPE d3d11_device_CreateBuffer(ID3D11Device5 *iface, const D3D11_BUFFER_DESC *desc,
+         const D3D11_SUBRESOURCE_DATA *data, ID3D11Buffer **buffer)
+ {
+@@ -7145,7 +7322,9 @@ static HRESULT STDMETHODCALLTYPE d3d_device_inner_QueryInterface(IUnknown *iface
+             && !IsEqualGUID(riid, &IID_IUnknown)
+             && !IsEqualGUID(riid, &IID_ID3D11Device)
+             && !IsEqualGUID(riid, &d3d11_on12_device_iid)
+-            && !IsEqualGUID(riid, &d3d11_on12_device1_iid))
++            && !IsEqualGUID(riid, &d3d11_on12_device1_iid)
++            && !IsEqualGUID(riid, &IID_IDXGIDevice)
++            && !IsEqualGUID(riid, &IID_IDXGIObject))
+     {
+         *out = NULL;
+         return E_NOINTERFACE;
+@@ -7179,6 +7358,12 @@ static HRESULT STDMETHODCALLTYPE d3d_device_inner_QueryInterface(IUnknown *iface
+     {
+         *out = &device->ID3D11On12Device1_iface;
+     }
++    else if (device->standalone_allocation
++            && (IsEqualGUID(riid, &IID_IDXGIDevice)
++            || IsEqualGUID(riid, &IID_IDXGIObject)))
++    {
++        *out = &device->IDXGIDevice_iface;
++    }
+     else if (IsEqualGUID(riid, &IID_IWineDXGIDeviceParent))
+     {
+         *out = &device->IWineDXGIDeviceParent_iface;
+@@ -7232,7 +7417,10 @@ static ULONG STDMETHODCALLTYPE d3d_device_inner_Release(IUnknown *iface)
+         wine_rb_destroy(&device->depthstencil_states, NULL, NULL);
+         wine_rb_destroy(&device->blend_states, NULL, NULL);
+         if (device->standalone_allocation)
++        {
++            wined3d_private_store_cleanup(&device->private_store);
+             free(device);
++        }
+     }
+ 
+     return refcount;
+@@ -9886,6 +10074,8 @@ struct d3d_device *d3d_device_create_backend(
+     device->backend_ops = backend_ops;
+     device->backend_private = backend_private;
+     device->standalone_allocation = TRUE;
++    device->IDXGIDevice_iface.lpVtbl = &d3d11_on12_dxgi_device_vtbl;
++    wined3d_private_store_init(&device->private_store);
+     device->d3d11_only = TRUE;
+     return device;
+ }
