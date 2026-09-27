@@ -39,6 +39,16 @@
 # rises across two lines is frames being presented; one line, or a count that
 # never moves, is not.
 #
+# The same HUD lines give the frame rate, which is reported and never judged:
+# it is the before/after figure for performance work, and a slow run is still
+# a qualified one.  Only the frame count and the NSLog timestamp in front of
+# each line are used -- the HUD's other fields are undocumented -- so a window's
+# rate is frames presented between two lines over the time between them.
+# Windows are about a second long, which makes "p1_low" the 1st percentile of
+# per-second rates, not of individual frame times; with fewer than a hundred
+# windows it is the slowest second.  Lines are grouped by process, and the
+# process that presented the most frames is the one measured.
+#
 # The "On12 <Operation> is not supported." WARNs from patch 0023 are reported
 # as an inventory and do not fail the run: the smoke criteria do not mention
 # them, and the list is the most direct statement of what PEAK needs next.
@@ -47,11 +57,16 @@
 #   python3 scripts/check_peak_smoke_log.py \
 #       --player-log Player.log --wine-log wine.log [--json result.json]
 #
+# result.json carries the verdict, the checks, the unsupported inventory and a
+# "frame_rate" object (null when the HUD lines carry no timestamps).
+#
 # Exit status: 0 qualified, 1 not qualified, 2 unusable input.
 
 import argparse
 import collections
+import datetime
 import json
+import math
 import pathlib
 import re
 import sys
@@ -72,6 +87,10 @@ CRASH = re.compile(
     r"|^wine: Unhandled|Unhandled exception: ", re.MULTILINE)
 UNSUPPORTED = re.compile(r"On12 (?P<op>\w+) is not supported\.")
 METAL_HUD = re.compile(r"metal-HUD: (?P<frames>\d+),")
+# NSLog's prefix: "2026-09-24 06:42:13.540 wine64[34741:1354250] metal-HUD: 93,"
+TIMED_METAL_HUD = re.compile(
+    r"^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+) \S+\[(?P<pid>\d+):\d+\]"
+    r" metal-HUD: (?P<frames>\d+),", re.MULTILINE)
 WRAPPED_FAILURE = re.compile(r"D3D11On12 (?:wrapped )?ownership (?:failed|rejected)[^\n]*")
 
 Check = collections.namedtuple("Check", "name passed detail")
@@ -172,6 +191,44 @@ def check_presented(traced, wine_log):
                  "(run with MTL_HUD_ENABLED=1 MTL_HUD_LOG_ENABLED=1)")
 
 
+def frame_rate(wine_log):
+    """Frame-rate summary from the timestamped HUD lines, or None."""
+    by_process = collections.defaultdict(list)
+    for match in TIMED_METAL_HUD.finditer(wine_log):
+        when = datetime.datetime.strptime(match["time"], "%Y-%m-%d %H:%M:%S.%f")
+        by_process[match["pid"]].append((when, int(match["frames"])))
+
+    best = None
+    for samples in by_process.values():
+        rates, frames, seconds = [], 0, 0.0
+        for (start, first), (end, last) in zip(samples, samples[1:]):
+            elapsed = (end - start).total_seconds()
+            # A count that went backwards is a new device or a restarted
+            # process; a zero-length window has no rate.
+            if elapsed <= 0 or last < first:
+                continue
+            rates.append((last - first) / elapsed)
+            frames += last - first
+            seconds += elapsed
+        if rates and (best is None or frames > best[1]):
+            best = (rates, frames, seconds)
+    if best is None:
+        return None
+
+    rates, frames, seconds = best
+    ordered = sorted(rates)
+    # Nearest rank: the smallest rate at or below which 1% of windows fall.
+    p1 = ordered[max(0, math.ceil(0.01 * len(ordered)) - 1)]
+    return {
+        "mean_fps": round(frames / seconds, 2),
+        "p1_low_fps": round(p1, 2),
+        "min_fps": round(ordered[0], 2),
+        "frames": frames,
+        "seconds": round(seconds, 3),
+        "windows": len(rates),
+    }
+
+
 def check_absent(name, pattern, logs):
     evidence = [line for text in logs for line in first_lines(pattern, text)]
     if evidence:
@@ -208,13 +265,17 @@ def main():
     parser.add_argument("--json", type=pathlib.Path)
     args = parser.parse_args()
 
-    checks, unsupported = evaluate(read_log(parser, args.player_log),
-                                   read_log(parser, args.wine_log))
+    wine_log = read_log(parser, args.wine_log)
+    checks, unsupported = evaluate(read_log(parser, args.player_log), wine_log)
+    rate = frame_rate(wine_log)
     qualified = all(check.passed for check in checks)
     for check in checks:
         print(f"{'pass' if check.passed else 'FAIL'} {check.name}: {check.detail}")
     for op, count in unsupported.most_common():
         print(f"unsupported {op}: {count}")
+    if rate:
+        print(f"frame rate: {rate['mean_fps']} fps mean, {rate['p1_low_fps']} fps "
+              f"1% low over {rate['seconds']} s ({rate['windows']} windows)")
     print(f"PEAK smoke run: {'qualified' if qualified else 'not qualified'}")
 
     if args.json:
@@ -222,6 +283,7 @@ def main():
             "qualified": qualified,
             "checks": [check._asdict() for check in checks],
             "unsupported": dict(unsupported.most_common()),
+            "frame_rate": rate,
         }, indent=2) + "\n")
     return 0 if qualified else 1
 
