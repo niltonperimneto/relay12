@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Reject MSVC/ATL dependencies removed by the D3D11On12 port series."""
+"""Reject MSVC/ATL dependencies removed by the D3D11On12 port series.
+
+Also holds the prepared tree to the port series' behavioural fixes that would
+otherwise fail silently -- a dropped patch there still compiles.
+"""
 
 import argparse
 import pathlib
@@ -31,8 +35,33 @@ def check_source(path, text):
     return errors
 
 
+# GetImmCtxArgs builds DTL's CreationArgs, which zero-initialise.  A zero
+# MaxAllocatedUploadHeapSpacePerCommandList is not "use the default": DTL takes
+# min(256 MB, field), so zero makes every upload trigger a submit.  Patch 0025
+# sets it; this keeps a rebased series from quietly losing that.
+IMM_CTX_ARGS = re.compile(
+    r"CreationArgs\s+GetImmCtxArgs\s*\(.*?\breturn\s+args\s*;", re.S)
+UPLOAD_LIMIT = re.compile(
+    r"^\s*args\.MaxAllocatedUploadHeapSpacePerCommandList\s*=\s*(?P<value>[^;]+);",
+    re.M)
+
+
+def check_immediate_context_args(path, text):
+    body = IMM_CTX_ARGS.search(text)
+    if not body:
+        return [f"{path}: GetImmCtxArgs not found"]
+    limit = UPLOAD_LIMIT.search(body.group(0))
+    if not limit or re.fullmatch(r"0+[uUlL]*", limit.group("value").strip()):
+        return [f"{path}: GetImmCtxArgs must set a non-zero "
+                "MaxAllocatedUploadHeapSpacePerCommandList (patch 0025)"]
+    return []
+
+
 def check_tree(source_dir):
     errors = []
+    device = source_dir / "src" / "device.cpp"
+    errors.extend(check_immediate_context_args(
+        device, device.read_text(errors="replace")))
     for directory in (source_dir / "include", source_dir / "src"):
         for pattern in ("*.hpp", "*.cpp"):
             for path in sorted(directory.rglob(pattern)):
