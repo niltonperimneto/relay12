@@ -211,6 +211,46 @@ to verify three acquire/clear/release cycles per RGBA/BGRA format. Run it with
 [WRAPPED-RESOURCE-VALIDATION.md](WRAPPED-RESOURCE-VALIDATION.md). It does not
 exercise DXGI surfaces, Direct2D, or presentation.
 
+## Performance measurement
+
+Performance claims need numbers, and the numbers come from three places. The
+plan they serve is [`PERFORMANCE-RESEARCH-ROADMAP.md`](PERFORMANCE-RESEARCH-ROADMAP.md).
+
+**DDI telemetry.** Set `RELAY12_TELEMETRY=1` in the application's environment.
+The core then times the driver's draw and flush slots and, when the device is
+destroyed, writes one line through the diagnostic sink:
+
+```
+d3d11on12core telemetry: draws=… draw_avg_ns=… slow_draws=… flushes=… flush_avg_ns=… submits=… opportunistic_submits=…
+```
+
+`slow_draws` counts draws over 1 ms, which is how a pipeline-state compile wait
+looks from the host. `submits` counts every command-list submission the driver
+reported through its post-submit callback; `opportunistic_submits` is the part
+the application did not ask for with a flush. With the variable unset the
+proxies are not installed at all. `tests/test_telemetry.py` compares each
+proxy's signature with its slot's typedef in `ddi/wine_d3d11ddi.h`, since a
+mismatch is otherwise found only by the cross compiler in CI.
+
+**Dispatch benchmark.** `tests/d3d11on12overhead.c` runs in
+`validate-d3d11on12` against the mock driver, once with telemetry off and once
+on. `scripts/summarize_overhead.py` publishes both runs' ns-per-call figures to
+the job summary and fails only on correctness: a report printed with telemetry
+off, or report counts that disagree with what was dispatched. The timings are
+never a threshold -- a shared runner under Wine is too noisy for one.
+
+The benchmark also runs a multithreaded engine's per-frame pattern on a
+deferred context: record, finish a command list, execute it, destroy it. It
+checks that every list after the first comes from recycled memory. The
+lifecycle itself -- refusals, recording errors, the recycle pool's bound,
+idempotent destruction, device teardown -- is `tests/d3d11on12deferred.c`.
+
+**Frame rate.** `check_peak_smoke_log.py` adds `frame_rate` to `result.json`:
+mean fps, 1% low and minimum, from the Metal HUD's frame counts and NSLog
+timestamps. HUD windows are about a second long, so the 1% low is over
+per-second rates, not frame times. Compare runs made the same way -- same scene,
+same duration, through Whisky -- before and after a change.
+
 ## Application smoke run (PEAK validation)
 
 To validate real-world application interoperability, `relay12` uses real-world

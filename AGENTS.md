@@ -180,6 +180,10 @@ contract.
 | 21-23 | `WineD3D11On12{SetRenderTarget,SetViewport,ClearRenderTarget}V1` | First-frame output state and clear |
 | 24-26 | `WineD3D11On12{CopyTexture2D,MapTexture2D,UnmapTexture2D}V1` | Copy and staging readback |
 | 27 | `WineD3D11On12CheckFrameSupportV1` | Experimental first-frame readiness check |
+| 28, 29 | `WineD3D11On12{CreateWrappedTexture2D,SetWrappedOwnership}V1` | Wrapped Texture2D interop |
+| 30, 31 | `WineD3D11On12{Create,Destroy}DeferredContextV1` | Deferred-context lifecycle |
+| 32, 33 | `WineD3D11On12{Create,Destroy}CommandListV1` | Finish and destroy a command list |
+| 34 | `WineD3D11On12ExecuteCommandListV1` | Execute a command list on the immediate context |
 
 ### 4.3 Diagnostic Logging
 Diagnostic logging is handled via [`relay12-d3d11/wine_d3d11_diag.h`](relay12-d3d11/wine_d3d11_diag.h):

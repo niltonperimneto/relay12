@@ -349,10 +349,68 @@ BOOL CALLBACK initializeHost(PINIT_ONCE, PVOID, PVOID *) noexcept
     return TRUE;
 }
 
+/* Opt-in DDI timing, for measuring what the translation layer costs a frame.
+ *
+ * RELAY12_TELEMETRY=1 is read once per process.  Off, nothing here runs: the
+ * proxies are never installed and the caller calls the driver's own table.
+ * On, the draw and flush slots are wrapped with a QueryPerformanceCounter
+ * pair each, and the totals are reported once when the device is destroyed.
+ *
+ * The counter frequency is published with the switch because it is constant
+ * for the life of the system, and querying it per call is a syscall under
+ * Wine on the path being measured. */
+INIT_ONCE telemetryInitOnce = INIT_ONCE_STATIC_INIT;
+/* shared-state: published once through telemetryInitOnce */
+LONGLONG telemetryTicksPerSecond;
+
+BOOL CALLBACK initializeTelemetry(PINIT_ONCE, PVOID, PVOID *) noexcept
+{
+    wchar_t enabled[2] = {};
+    if (GetEnvironmentVariableW(L"RELAY12_TELEMETRY", enabled, 2) != 1
+            || enabled[0] != L'1')
+        return TRUE;
+    LARGE_INTEGER frequency;
+    if (QueryPerformanceFrequency(&frequency) && frequency.QuadPart > 0)
+        telemetryTicksPerSecond = frequency.QuadPart;
+    return TRUE;
+}
+
+/* A draw this slow is almost always a wait for a pipeline state object the
+ * translation layer is still compiling on its thread pool: the host cannot
+ * see that wait directly, but it is what makes an empty draw take a frame's
+ * worth of a millisecond. */
+constexpr LONGLONG telemetrySlowDrawDivisor = 1000;
+
+/* Per device, so two devices do not blur each other's figures.  Every counter
+ * is moved only by Interlocked*: the driver's post-submit callback runs on the
+ * translation layer's worker thread, not the caller's. */
+struct DeviceTelemetry
+{
+    LONGLONG ticksPerSecond;
+    LONGLONG slowDrawTicks;
+    PFND3D10DDI_DRAW draw;
+    PFND3D10DDI_DRAWINDEXED drawIndexed;
+    PFND3D10DDI_DRAWINSTANCED drawInstanced;
+    PFND3D10DDI_DRAWINDEXEDINSTANCED drawIndexedInstanced;
+    PFND3DWDDM2_0DDI_FLUSH flush;
+    PFND3D11DDI_COMMANDLISTEXECUTE commandListExecute;
+    volatile LONG64 draws;
+    volatile LONG64 drawTicks;
+    volatile LONG64 slowDraws;
+    volatile LONG64 flushes;
+    volatile LONG64 flushTicks;
+    volatile LONG64 flushesSubmitted;
+    volatile LONG64 submits;
+    volatile LONG64 commandListsExecuted;
+    volatile LONG64 executeTicks;
+};
+
 struct AdapterState;
 struct InputLayoutState;
 struct ShaderState;
 struct RenderTargetState;
+struct DeferredContextState;
+struct CommandListState;
 struct ResourceState
 {
     ResourceState *registryNext;
@@ -387,6 +445,10 @@ InputLayoutState *inputLayoutRegistry;
 ShaderState *shaderRegistry;
 /* shared-state: published once through resourceRegistryOnce */
 RenderTargetState *renderTargetRegistry;
+/* shared-state: published once through resourceRegistryOnce */
+DeferredContextState *deferredContextRegistry;
+/* shared-state: published once through resourceRegistryOnce */
+CommandListState *commandListRegistry;
 
 BOOL CALLBACK initializeResourceRegistry(PINIT_ONCE, PVOID, PVOID *) noexcept
 {
@@ -498,6 +560,13 @@ struct AdapterState
     InputLayoutState *inputLayouts;
     ShaderState *shaders;
     RenderTargetState *renderTargets;
+    DeferredContextState *deferredContexts;
+    CommandListState *commandLists;
+    /* Command-list blocks already through RecycleDestroyCommandList, kept for
+     * RecycleCreateCommandList.  Guarded by resourceRegistryLock. */
+    CommandListState *commandListPool;
+    UINT commandListPoolCount;
+    DeviceTelemetry telemetry;
     alignas(8) unsigned char privateDevice[1];
 };
 
@@ -670,19 +739,72 @@ void CALLBACK hostSetError(D3D10DDI_HRTCORELAYER runtimeDevice,
         InterlockedExchange(&state->lastDdiError, result);
 }
 
+/* The driver calls this once after every command-list submission it makes,
+ * explicit or opportunistic, which makes it the host's only view of how often
+ * the translation layer actually submits. */
 void CALLBACK hostPerformAmortizedProcessing(D3D10DDI_HRTCORELAYER runtimeDevice) noexcept
 {
-    (void)runtimeDevice;
+    AdapterState *state = static_cast<AdapterState *>(runtimeDevice.handle);
+
+    if (state && state->telemetry.ticksPerSecond)
+        InterlockedIncrement64(&state->telemetry.submits);
+}
+
+void reportTelemetry(const AdapterState *state) noexcept
+{
+    const DeviceTelemetry &telemetry = state->telemetry;
+    if (!telemetry.ticksPerSecond)
+        return;
+
+    const LONG64 draws = telemetry.draws;
+    const LONG64 flushes = telemetry.flushes;
+    const LONG64 submits = telemetry.submits;
+    const LONG64 flushesSubmitted = telemetry.flushesSubmitted;
+    const double nanosecondsPerTick = 1e9
+            / static_cast<double>(telemetry.ticksPerSecond);
+    const double drawAverage = draws
+            ? static_cast<double>(telemetry.drawTicks) * nanosecondsPerTick
+                    / static_cast<double>(draws) : 0.0;
+    const double flushAverage = flushes
+            ? static_cast<double>(telemetry.flushTicks) * nanosecondsPerTick
+                    / static_cast<double>(flushes) : 0.0;
+    const LONG64 executed = telemetry.commandListsExecuted;
+    const double executeAverage = executed
+            ? static_cast<double>(telemetry.executeTicks) * nanosecondsPerTick
+                    / static_cast<double>(executed) : 0.0;
+    /* Submissions the application did not ask for: the translation layer's
+     * own heuristics in SubmitCommandListIfNeeded. */
+    const LONG64 opportunistic = submits > flushesSubmitted
+            ? submits - flushesSubmitted : 0;
+
+    char report[384];
+    std::snprintf(report, sizeof(report),
+            "d3d11on12core telemetry: draws=%lld draw_avg_ns=%.0f "
+            "slow_draws=%lld flushes=%lld flush_avg_ns=%.0f submits=%lld "
+            "opportunistic_submits=%lld command_lists=%lld "
+            "execute_avg_ns=%.0f\n",
+            static_cast<long long>(draws), drawAverage,
+            static_cast<long long>(telemetry.slowDraws),
+            static_cast<long long>(flushes), flushAverage,
+            static_cast<long long>(submits),
+            static_cast<long long>(opportunistic),
+            static_cast<long long>(executed), executeAverage);
+    wineD3D11DiagReport(report);
 }
 
 void destroyRenderTargetState(RenderTargetState *view) noexcept;
 void destroyAllRenderTargets(AdapterState *owner) noexcept;
+void destroyAllDeferredWork(AdapterState *owner) noexcept;
 
 void destroyAdapterState(AdapterState *state) noexcept
 {
     if (!state)
         return;
 
+    /* Before anything a command list could reference, and before the device:
+     * the driver retires a destroyed list's batch through the immediate
+     * context. */
+    destroyAllDeferredWork(state);
     destroyAllRenderTargets(state);
     while (state->inputLayouts)
     {
@@ -704,6 +826,10 @@ void destroyAdapterState(AdapterState *state) noexcept
     }
     if (state->deviceCreated && state->deviceFuncs.pfnDestroyDevice)
         state->deviceFuncs.pfnDestroyDevice(state->hDevice);
+    /* After DestroyDevice, which joins the worker thread that reports
+     * submissions, so the submit count is final. */
+    if (state->deviceCreated)
+        reportTelemetry(state);
     if (state->adapterOpened && state->adapterFuncs.pfnCloseAdapter)
         state->adapterFuncs.pfnCloseAdapter(state->hAdapter);
     if (state->queue)
@@ -711,6 +837,134 @@ void destroyAdapterState(AdapterState *state) noexcept
     if (state->device12)
         state->device12->Release();
     HeapFree(GetProcessHeap(), 0, state);
+}
+
+/* The proxies recover their device from the handle the driver was given,
+ * which is the private block at the tail of AdapterState. */
+AdapterState *adapterStateOf(D3D10DDI_HDEVICE device) noexcept
+{
+    return reinterpret_cast<AdapterState *>(
+            static_cast<unsigned char *>(device.pDrvPrivate)
+            - offsetof(AdapterState, privateDevice));
+}
+
+LONGLONG telemetryNow() noexcept
+{
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    return now.QuadPart;
+}
+
+void recordDraw(DeviceTelemetry &telemetry, LONGLONG start) noexcept
+{
+    const LONGLONG elapsed = telemetryNow() - start;
+    InterlockedIncrement64(&telemetry.draws);
+    InterlockedAdd64(&telemetry.drawTicks, elapsed);
+    if (elapsed >= telemetry.slowDrawTicks)
+        InterlockedIncrement64(&telemetry.slowDraws);
+}
+
+void telemetryDraw(D3D10DDI_HDEVICE device, UINT vertexCount,
+        UINT startVertexLocation)
+{
+    DeviceTelemetry &telemetry = adapterStateOf(device)->telemetry;
+    const LONGLONG start = telemetryNow();
+    telemetry.draw(device, vertexCount, startVertexLocation);
+    recordDraw(telemetry, start);
+}
+
+void telemetryDrawIndexed(D3D10DDI_HDEVICE device, UINT indexCount,
+        UINT startIndexLocation, INT baseVertexLocation)
+{
+    DeviceTelemetry &telemetry = adapterStateOf(device)->telemetry;
+    const LONGLONG start = telemetryNow();
+    telemetry.drawIndexed(device, indexCount, startIndexLocation,
+            baseVertexLocation);
+    recordDraw(telemetry, start);
+}
+
+void telemetryDrawInstanced(D3D10DDI_HDEVICE device,
+        UINT vertexCountPerInstance, UINT instanceCount,
+        UINT startVertexLocation, UINT startInstanceLocation)
+{
+    DeviceTelemetry &telemetry = adapterStateOf(device)->telemetry;
+    const LONGLONG start = telemetryNow();
+    telemetry.drawInstanced(device, vertexCountPerInstance, instanceCount,
+            startVertexLocation, startInstanceLocation);
+    recordDraw(telemetry, start);
+}
+
+void telemetryDrawIndexedInstanced(D3D10DDI_HDEVICE device,
+        UINT indexCountPerInstance, UINT instanceCount,
+        UINT startIndexLocation, INT baseVertexLocation,
+        UINT startInstanceLocation)
+{
+    DeviceTelemetry &telemetry = adapterStateOf(device)->telemetry;
+    const LONGLONG start = telemetryNow();
+    telemetry.drawIndexedInstanced(device, indexCountPerInstance,
+            instanceCount, startIndexLocation, baseVertexLocation,
+            startInstanceLocation);
+    recordDraw(telemetry, start);
+}
+
+BOOL telemetryFlush(D3D10DDI_HDEVICE device, UINT contextType,
+        UINT flushFlags)
+{
+    DeviceTelemetry &telemetry = adapterStateOf(device)->telemetry;
+    const LONGLONG start = telemetryNow();
+    const BOOL submitted = telemetry.flush(device, contextType, flushFlags);
+    InterlockedAdd64(&telemetry.flushTicks, telemetryNow() - start);
+    InterlockedIncrement64(&telemetry.flushes);
+    if (submitted)
+        InterlockedIncrement64(&telemetry.flushesSubmitted);
+    return submitted;
+}
+
+/* Only the calling thread's share: the list is appended to the immediate
+ * context's batch here and replayed later on the translation layer's worker
+ * thread, which this does not see. */
+void telemetryCommandListExecute(D3D10DDI_HDEVICE device,
+        D3D11DDI_HCOMMANDLIST commandList)
+{
+    DeviceTelemetry &telemetry = adapterStateOf(device)->telemetry;
+    const LONGLONG start = telemetryNow();
+    telemetry.commandListExecute(device, commandList);
+    InterlockedAdd64(&telemetry.executeTicks, telemetryNow() - start);
+    InterlockedIncrement64(&telemetry.commandListsExecuted);
+}
+
+/* Wrap whichever of the timed slots the driver filled.  A slot it left null
+ * stays null, so the entry points' own "unsupported" checks are unchanged. */
+void installTelemetry(AdapterState *state) noexcept
+{
+    InitOnceExecuteOnce(&telemetryInitOnce, initializeTelemetry, nullptr,
+            nullptr);
+    if (!telemetryTicksPerSecond)
+        return;
+
+    DeviceTelemetry &telemetry = state->telemetry;
+    D3DWDDM2_6DDI_DEVICEFUNCS &funcs = state->deviceFuncs;
+    telemetry.ticksPerSecond = telemetryTicksPerSecond;
+    telemetry.slowDrawTicks = telemetryTicksPerSecond
+            / telemetrySlowDrawDivisor;
+    telemetry.draw = funcs.pfnDraw;
+    telemetry.drawIndexed = funcs.pfnDrawIndexed;
+    telemetry.drawInstanced = funcs.pfnDrawInstanced;
+    telemetry.drawIndexedInstanced = funcs.pfnDrawIndexedInstanced;
+    telemetry.flush = funcs.pfnFlush;
+    telemetry.commandListExecute = funcs.pfnCommandListExecute;
+    if (funcs.pfnDraw)
+        funcs.pfnDraw = telemetryDraw;
+    if (funcs.pfnDrawIndexed)
+        funcs.pfnDrawIndexed = telemetryDrawIndexed;
+    if (funcs.pfnDrawInstanced)
+        funcs.pfnDrawInstanced = telemetryDrawInstanced;
+    if (funcs.pfnDrawIndexedInstanced)
+        funcs.pfnDrawIndexedInstanced = telemetryDrawIndexedInstanced;
+    if (funcs.pfnFlush)
+        funcs.pfnFlush = telemetryFlush;
+    if (funcs.pfnCommandListExecute)
+        funcs.pfnCommandListExecute = telemetryCommandListExecute;
 }
 
 /* Negotiate the device interface version, then create the DDI device.
@@ -804,6 +1058,7 @@ HRESULT createDriverDevice(AdapterState **statePtr,
     if (!state->deviceFuncs.pfnDestroyDevice)
         return DXGI_ERROR_UNSUPPORTED;
     state->deviceCreated = true;
+    installTelemetry(state);
 
     out->negotiatedInterfaceVersion = selectedInterface;
     out->deviceFuncs = &state->deviceFuncs;
@@ -1097,6 +1352,12 @@ extern "C" HRESULT WINAPI WineD3D11On12OpenAdapterV1(IUnknown *deviceObject,
     driverArgs.Callbacks = privateCallbacks;
     driverArgs.bDisableGPUTimeout = false;
     driverArgs.bSupportDisplayableTextures = false;
+    /* The driver reads this only to answer D3D11DDICAPS_THREADING; its
+     * deferred-context and command-list slots work either way, and the core's
+     * exports 30-34 use them.  It stays false until device children can be
+     * bound on a deferred context: advertising driver command lists before
+     * then would stop a runtime from falling back to emulating them, for
+     * contexts that cannot yet bind a resource. */
     driverArgs.bSupportDeferredContexts = false;
     driverArgs.D3D11On12InterfaceVersion =
             D3D11On12::c_CurrentD3D11On12InterfaceVersion;
@@ -2747,4 +3008,420 @@ extern "C" HRESULT WINAPI WineD3D11On12SetWrappedOwnershipV1(
     const HRESULT hr = frameError(owner);
     if (FAILED(hr)) owner->wrappedOwnershipError = hr;
     return hr;
+}
+
+/* Deferred contexts and command lists.
+ *
+ * The pinned driver records a deferred context into a D3D12TranslationLayer
+ * batch on the recording thread -- CPU work only, no D3D12 command list.
+ * CreateCommandList takes that batch, and CommandListExecute appends it to the
+ * immediate context's batch, which the translation layer's worker thread
+ * replays.  So a command list gets the worker thread, and the submission
+ * heuristics beneath it, without anything here.  What this layer decides is
+ * what it costs the calling threads:
+ *
+ *   * Recording goes through contextFuncs directly, like deviceFuncs: the core
+ *     adds nothing per recorded call.
+ *   * Finishing a list is per frame per context.  Fresh memory has to go
+ *     through CreateCommandList, which reports failure through the immediate
+ *     device's shared error slot and so must hold the frame lock.  Once warm,
+ *     lists are made from recycled blocks with RecycleCreateCommandList, which
+ *     returns its HRESULT: the driver call then runs outside the lock, so a
+ *     worker thread finishing a list does not stall the immediate context.
+ *   * Destroyed lists keep their memory, up to commandListPoolLimit per
+ *     device, through RecycleDestroyCommandList.
+ *   * Deferred contexts are not recycled.  The pinned driver's
+ *     AbandonCommandList does nothing, so a context kept for reuse would carry
+ *     whatever was recorded and never finished into its next command list.
+ *
+ * Deferred handles for resources, views and shaders -- a device child used on
+ * a deferred context needs one, sized by CalcDeferredContextHandleSize -- are
+ * not published yet, so a deferred context can record only calls that take no
+ * device child.  See docs/D3D11ON12.md. */
+namespace
+{
+constexpr UINT commandListPoolLimit = 8;
+
+struct DeferredContextState
+{
+    DeferredContextState *registryNext;
+    DeferredContextState *ownerNext;
+    AdapterState *owner;
+    WineD3D11On12DeferredContext *publicHandle;
+    D3DWDDM2_6DDI_DEVICEFUNCS contextFuncs;
+    D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS callbacks;
+    D3D10DDI_HDEVICE hContext;
+    /* The first error the driver reported while this context recorded;
+     * CreateCommandList returns it rather than finishing a broken list. */
+    volatile LONG lastDdiError;
+    bool created;
+    alignas(8) unsigned char privateContext[1];
+};
+
+struct CommandListState
+{
+    CommandListState *registryNext;
+    CommandListState *ownerNext;
+    AdapterState *owner;
+    WineD3D11On12CommandList *publicHandle;
+    D3D11DDI_HCOMMANDLIST handle;
+    SIZE_T privateSize;
+    alignas(8) unsigned char privateList[1];
+};
+
+/* A deferred context's own callbacks.  Its errors are its own: sharing the
+ * immediate device's slot would let a recording thread's failure surface as
+ * the immediate context's, or clear one the immediate context had not read. */
+void CALLBACK hostSetDeferredError(D3D10DDI_HRTCORELAYER runtimeContext,
+        HRESULT result) noexcept
+{
+    auto *context = static_cast<DeferredContextState *>(runtimeContext.handle);
+
+    if (context && FAILED(result))
+        InterlockedCompareExchange(&context->lastDdiError, result, S_OK);
+}
+
+/* Only the immediate context submits, and its callbacks count submissions;
+ * a deferred context's copy must not reinterpret its handle as a device. */
+void CALLBACK hostDeferredAmortizedProcessing(
+        D3D10DDI_HRTCORELAYER runtimeContext) noexcept
+{
+    (void)runtimeContext;
+}
+
+bool deferredSupported(const D3DWDDM2_6DDI_DEVICEFUNCS &f) noexcept
+{
+    return f.pfnCalcPrivateDeferredContextSize && f.pfnCreateDeferredContext
+            && f.pfnCalcPrivateCommandListSize && f.pfnCreateCommandList
+            && f.pfnDestroyCommandList && f.pfnCommandListExecute;
+}
+
+DeferredContextState *findDeferredContextLocked(
+        WineD3D11On12DeferredContext *context) noexcept
+{
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry, nullptr, nullptr);
+    if (!context || context->size != sizeof(*context)) return nullptr;
+    for (auto *c = deferredContextRegistry; c; c = c->registryNext)
+        if (c == context->runtimeState && c->publicHandle == context && c->created
+                && c->hContext.pDrvPrivate == context->hDrvContext)
+            return c;
+    return nullptr;
+}
+
+CommandListState *findCommandListLocked(AdapterState *owner,
+        WineD3D11On12CommandList *list) noexcept
+{
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry, nullptr, nullptr);
+    if (!list || list->size != sizeof(*list)) return nullptr;
+    for (auto *l = commandListRegistry; l; l = l->registryNext)
+        if (l == list->runtimeState && l->publicHandle == list && l->owner == owner
+                && l->handle.pDrvPrivate == list->hDrvCommandList)
+            return l;
+    return nullptr;
+}
+
+void publishCommandListLocked(CommandListState *list,
+        WineD3D11On12CommandList *out) noexcept
+{
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry, nullptr, nullptr);
+    list->publicHandle = out;
+    list->ownerNext = list->owner->commandLists;
+    list->owner->commandLists = list;
+    list->registryNext = commandListRegistry;
+    commandListRegistry = list;
+    out->hDrvCommandList = list->handle.pDrvPrivate;
+    out->runtimeState = list;
+}
+
+/* Caller holds the registry lock and has unlinked the list from both lists. */
+void retireCommandListLocked(CommandListState *list) noexcept
+{
+    AdapterState *owner = list->owner;
+    auto &f = owner->deviceFuncs;
+
+    if (list->publicHandle)
+    {
+        list->publicHandle->hDrvCommandList = nullptr;
+        list->publicHandle->runtimeState = nullptr;
+        list->publicHandle = nullptr;
+    }
+    if (f.pfnRecycleDestroyCommandList && f.pfnRecycleCreateCommandList
+            && owner->commandListPoolCount < commandListPoolLimit)
+    {
+        f.pfnRecycleDestroyCommandList(owner->hDevice, list->handle);
+        list->ownerNext = owner->commandListPool;
+        owner->commandListPool = list;
+        ++owner->commandListPoolCount;
+        return;
+    }
+    f.pfnDestroyCommandList(owner->hDevice, list->handle);
+    HeapFree(GetProcessHeap(), 0, list);
+}
+
+/* Caller holds the registry lock and has unlinked the context. */
+void destroyDeferredContextLocked(DeferredContextState *context) noexcept
+{
+    if (context->created)
+    {
+        if (context->contextFuncs.pfnAbandonCommandList)
+            context->contextFuncs.pfnAbandonCommandList(context->hContext);
+        context->contextFuncs.pfnDestroyDevice(context->hContext);
+    }
+    if (context->publicHandle)
+    {
+        context->publicHandle->contextFuncs = nullptr;
+        context->publicHandle->hDrvContext = nullptr;
+        context->publicHandle->runtimeState = nullptr;
+    }
+    HeapFree(GetProcessHeap(), 0, context);
+}
+
+template <typename T>
+void unlinkRegistry(T **registry, T *entry) noexcept
+{
+    auto **link = registry;
+    while (*link && *link != entry) link = &(*link)->registryNext;
+    if (*link) *link = entry->registryNext;
+}
+
+template <typename T>
+void unlinkOwner(T **owned, T *entry) noexcept
+{
+    auto **link = owned;
+    while (*link && *link != entry) link = &(*link)->ownerNext;
+    if (*link) *link = entry->ownerNext;
+}
+
+void destroyAllDeferredWork(AdapterState *owner) noexcept
+{
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry, nullptr, nullptr);
+    FrameLock lock;
+    while (owner->commandLists)
+    {
+        auto *l = owner->commandLists;
+        owner->commandLists = l->ownerNext;
+        unlinkRegistry(&commandListRegistry, l);
+        if (l->publicHandle)
+        {
+            l->publicHandle->hDrvCommandList = nullptr;
+            l->publicHandle->runtimeState = nullptr;
+        }
+        owner->deviceFuncs.pfnDestroyCommandList(owner->hDevice, l->handle);
+        HeapFree(GetProcessHeap(), 0, l);
+    }
+    /* Already destroyed by RecycleDestroyCommandList; only the memory is left. */
+    while (owner->commandListPool)
+    {
+        auto *l = owner->commandListPool;
+        owner->commandListPool = l->ownerNext;
+        HeapFree(GetProcessHeap(), 0, l);
+    }
+    owner->commandListPoolCount = 0;
+    while (owner->deferredContexts)
+    {
+        auto *c = owner->deferredContexts;
+        owner->deferredContexts = c->ownerNext;
+        unlinkRegistry(&deferredContextRegistry, c);
+        destroyDeferredContextLocked(c);
+    }
+}
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12CreateDeferredContextV1(
+        WineD3D11On12AdapterDevice *device, UINT flags,
+        WineD3D11On12DeferredContext *out) noexcept
+{
+    if (!out || out->size != sizeof(*out)) return E_INVALIDARG;
+    out->contextFuncs = nullptr;
+    out->hDrvContext = nullptr;
+    out->runtimeState = nullptr;
+    /* D3D11 defines no deferred-context flags; D3D11DDIARG's are reserved. */
+    if (flags) return E_INVALIDARG;
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry, nullptr, nullptr);
+    FrameLock lock;
+    auto *owner = frameOwner(device);
+    if (!owner) return E_INVALIDARG;
+    auto &f = owner->deviceFuncs;
+    if (!deferredSupported(f)) return DXGI_ERROR_UNSUPPORTED;
+
+    D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE sizeArgs = {};
+    const SIZE_T size = f.pfnCalcPrivateDeferredContextSize(owner->hDevice, &sizeArgs);
+    if (!size || size > SIZE_MAX - offsetof(DeferredContextState, privateContext))
+        return E_OUTOFMEMORY;
+    auto *c = static_cast<DeferredContextState *>(HeapAlloc(GetProcessHeap(),
+            HEAP_ZERO_MEMORY, offsetof(DeferredContextState, privateContext) + size));
+    if (!c) return E_OUTOFMEMORY;
+    c->owner = owner;
+    c->publicHandle = out;
+    c->hContext.pDrvPrivate = c->privateContext;
+    c->callbacks = owner->coreCallbacks;
+    c->callbacks.pfnSetErrorCb = hostSetDeferredError;
+    c->callbacks.pfnPerformAmortizedProcessingCb = hostDeferredAmortizedProcessing;
+
+    /* The context's table is its own: the driver fills a context subset into
+     * it, and handing it the immediate table would overwrite that. */
+    D3D11DDIARG_CREATEDEFERREDCONTEXT args = {};
+    args.pWDDM2_6ContextFuncs = &c->contextFuncs;
+    args.hDrvContext = c->hContext;
+    args.hRTCoreLayer.handle = c;
+    args.pWDDM2_6UMCallbacks = &c->callbacks;
+    args.Flags = 0;
+    /* Creation failures are reported on the immediate device, which is the
+     * handle the driver is given. */
+    InterlockedExchange(&owner->lastDdiError, S_OK);
+    traceCreation("enter driver deferred context creation");
+    f.pfnCreateDeferredContext(owner->hDevice, &args);
+    traceCreation("leave driver deferred context creation");
+    HRESULT hr = frameError(owner);
+    if (SUCCEEDED(hr) && !c->contextFuncs.pfnDestroyDevice)
+        hr = DXGI_ERROR_UNSUPPORTED;
+    if (FAILED(hr))
+    {
+        HeapFree(GetProcessHeap(), 0, c);
+        return hr;
+    }
+    c->created = true;
+    c->ownerNext = owner->deferredContexts;
+    owner->deferredContexts = c;
+    c->registryNext = deferredContextRegistry;
+    deferredContextRegistry = c;
+    out->contextFuncs = &c->contextFuncs;
+    out->hDrvContext = c->hContext.pDrvPrivate;
+    out->runtimeState = c;
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12DestroyDeferredContextV1(
+        WineD3D11On12DeferredContext *context) noexcept
+{
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry, nullptr, nullptr);
+    if (!context || context->size != sizeof(*context)) return E_INVALIDARG;
+    FrameLock lock;
+    if (auto *c = findDeferredContextLocked(context))
+    {
+        unlinkRegistry(&deferredContextRegistry, c);
+        unlinkOwner(&c->owner->deferredContexts, c);
+        destroyDeferredContextLocked(c);
+    }
+    context->contextFuncs = nullptr;
+    context->hDrvContext = nullptr;
+    context->runtimeState = nullptr;
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12CreateCommandListV1(
+        WineD3D11On12DeferredContext *context, WineD3D11On12CommandList *out) noexcept
+{
+    if (!out || out->size != sizeof(*out)) return E_INVALIDARG;
+    out->hDrvCommandList = nullptr;
+    out->runtimeState = nullptr;
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry, nullptr, nullptr);
+
+    AdapterState *owner;
+    CommandListState *list = nullptr;
+    D3D11DDIARG_CREATECOMMANDLIST args = {};
+    {
+        FrameLock lock;
+        auto *c = findDeferredContextLocked(context);
+        if (!c) return E_INVALIDARG;
+        owner = c->owner;
+        auto &f = owner->deviceFuncs;
+
+        const HRESULT recorded = InterlockedExchange(&c->lastDdiError, S_OK);
+        if (FAILED(recorded))
+        {
+            /* D3D11 hands back no list for a context whose recording failed;
+             * drop what was recorded so the next list starts clean. */
+            if (c->contextFuncs.pfnAbandonCommandList)
+                c->contextFuncs.pfnAbandonCommandList(c->hContext);
+            return recorded;
+        }
+
+        args.hDeferredContext = c->hContext;
+        const SIZE_T size = f.pfnCalcPrivateCommandListSize(owner->hDevice, &args);
+        if (!size || size > SIZE_MAX - offsetof(CommandListState, privateList))
+            return E_OUTOFMEMORY;
+
+        for (auto **link = &owner->commandListPool; *link; link = &(*link)->ownerNext)
+            if ((*link)->privateSize >= size)
+            {
+                list = *link;
+                *link = list->ownerNext;
+                --owner->commandListPoolCount;
+                list->ownerNext = nullptr;
+                break;
+            }
+
+        if (!list)
+        {
+            list = static_cast<CommandListState *>(HeapAlloc(GetProcessHeap(),
+                    HEAP_ZERO_MEMORY, offsetof(CommandListState, privateList) + size));
+            if (!list) return E_OUTOFMEMORY;
+            list->owner = owner;
+            list->privateSize = size;
+            list->handle.pDrvPrivate = list->privateList;
+            D3D11DDI_HRTCOMMANDLIST runtime = {list};
+            InterlockedExchange(&owner->lastDdiError, S_OK);
+            f.pfnCreateCommandList(owner->hDevice, &args, list->handle, runtime);
+            const HRESULT hr = frameError(owner);
+            if (FAILED(hr))
+            {
+                HeapFree(GetProcessHeap(), 0, list);
+                return hr;
+            }
+            publishCommandListLocked(list, out);
+            return S_OK;
+        }
+    }
+
+    /* A recycled block: the driver's HRESULT is the whole report, so the
+     * immediate context is not held while the batch is finished. */
+    D3D11DDI_HRTCOMMANDLIST runtime = {list};
+    const HRESULT hr = owner->deviceFuncs.pfnRecycleCreateCommandList(owner->hDevice,
+            &args, list->handle, runtime);
+    FrameLock lock;
+    if (FAILED(hr))
+    {
+        list->ownerNext = owner->commandListPool;
+        owner->commandListPool = list;
+        ++owner->commandListPoolCount;
+        return hr;
+    }
+    publishCommandListLocked(list, out);
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12DestroyCommandListV1(
+        WineD3D11On12CommandList *list) noexcept
+{
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry, nullptr, nullptr);
+    if (!list || list->size != sizeof(*list)) return E_INVALIDARG;
+    FrameLock lock;
+    auto *l = static_cast<CommandListState *>(list->runtimeState);
+    if (l && (l = findCommandListLocked(l->owner, list)))
+    {
+        unlinkRegistry(&commandListRegistry, l);
+        unlinkOwner(&l->owner->commandLists, l);
+        retireCommandListLocked(l);
+    }
+    list->hDrvCommandList = nullptr;
+    list->runtimeState = nullptr;
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12ExecuteCommandListV1(
+        WineD3D11On12AdapterDevice *device, WineD3D11On12CommandList *list) noexcept
+{
+    FrameLock lock;
+    auto *owner = frameOwner(device);
+    if (!owner) return E_INVALIDARG;
+    if (!owner->deviceFuncs.pfnCommandListExecute) return DXGI_ERROR_UNSUPPORTED;
+    auto *l = findCommandListLocked(owner, list);
+    if (!l) return E_INVALIDARG;
+    InterlockedExchange(&owner->lastDdiError, S_OK);
+    owner->deviceFuncs.pfnCommandListExecute(owner->hDevice, l->handle);
+    /* Every command list begins and ends with ClearState, so the immediate
+     * context has no render target bound afterwards. */
+    owner->boundRenderTarget = nullptr;
+    return frameError(owner);
 }
