@@ -349,6 +349,59 @@ BOOL CALLBACK initializeHost(PINIT_ONCE, PVOID, PVOID *) noexcept
     return TRUE;
 }
 
+/* Opt-in DDI timing, for measuring what the translation layer costs a frame.
+ *
+ * RELAY12_TELEMETRY=1 is read once per process.  Off, nothing here runs: the
+ * proxies are never installed and the caller calls the driver's own table.
+ * On, the draw and flush slots are wrapped with a QueryPerformanceCounter
+ * pair each, and the totals are reported once when the device is destroyed.
+ *
+ * The counter frequency is published with the switch because it is constant
+ * for the life of the system, and querying it per call is a syscall under
+ * Wine on the path being measured. */
+INIT_ONCE telemetryInitOnce = INIT_ONCE_STATIC_INIT;
+/* shared-state: published once through telemetryInitOnce */
+LONGLONG telemetryTicksPerSecond;
+
+BOOL CALLBACK initializeTelemetry(PINIT_ONCE, PVOID, PVOID *) noexcept
+{
+    wchar_t enabled[2] = {};
+    if (GetEnvironmentVariableW(L"RELAY12_TELEMETRY", enabled, 2) != 1
+            || enabled[0] != L'1')
+        return TRUE;
+    LARGE_INTEGER frequency;
+    if (QueryPerformanceFrequency(&frequency) && frequency.QuadPart > 0)
+        telemetryTicksPerSecond = frequency.QuadPart;
+    return TRUE;
+}
+
+/* A draw this slow is almost always a wait for a pipeline state object the
+ * translation layer is still compiling on its thread pool: the host cannot
+ * see that wait directly, but it is what makes an empty draw take a frame's
+ * worth of a millisecond. */
+constexpr LONGLONG telemetrySlowDrawDivisor = 1000;
+
+/* Per device, so two devices do not blur each other's figures.  Every counter
+ * is moved only by Interlocked*: the driver's post-submit callback runs on the
+ * translation layer's worker thread, not the caller's. */
+struct DeviceTelemetry
+{
+    LONGLONG ticksPerSecond;
+    LONGLONG slowDrawTicks;
+    PFND3D10DDI_DRAW draw;
+    PFND3D10DDI_DRAWINDEXED drawIndexed;
+    PFND3D10DDI_DRAWINSTANCED drawInstanced;
+    PFND3D10DDI_DRAWINDEXEDINSTANCED drawIndexedInstanced;
+    PFND3DWDDM2_0DDI_FLUSH flush;
+    volatile LONG64 draws;
+    volatile LONG64 drawTicks;
+    volatile LONG64 slowDraws;
+    volatile LONG64 flushes;
+    volatile LONG64 flushTicks;
+    volatile LONG64 flushesSubmitted;
+    volatile LONG64 submits;
+};
+
 struct AdapterState;
 struct InputLayoutState;
 struct ShaderState;
@@ -498,6 +551,7 @@ struct AdapterState
     InputLayoutState *inputLayouts;
     ShaderState *shaders;
     RenderTargetState *renderTargets;
+    DeviceTelemetry telemetry;
     alignas(8) unsigned char privateDevice[1];
 };
 
@@ -670,9 +724,51 @@ void CALLBACK hostSetError(D3D10DDI_HRTCORELAYER runtimeDevice,
         InterlockedExchange(&state->lastDdiError, result);
 }
 
+/* The driver calls this once after every command-list submission it makes,
+ * explicit or opportunistic, which makes it the host's only view of how often
+ * the translation layer actually submits. */
 void CALLBACK hostPerformAmortizedProcessing(D3D10DDI_HRTCORELAYER runtimeDevice) noexcept
 {
-    (void)runtimeDevice;
+    AdapterState *state = static_cast<AdapterState *>(runtimeDevice.handle);
+
+    if (state && state->telemetry.ticksPerSecond)
+        InterlockedIncrement64(&state->telemetry.submits);
+}
+
+void reportTelemetry(const AdapterState *state) noexcept
+{
+    const DeviceTelemetry &telemetry = state->telemetry;
+    if (!telemetry.ticksPerSecond)
+        return;
+
+    const LONG64 draws = telemetry.draws;
+    const LONG64 flushes = telemetry.flushes;
+    const LONG64 submits = telemetry.submits;
+    const LONG64 flushesSubmitted = telemetry.flushesSubmitted;
+    const double nanosecondsPerTick = 1e9
+            / static_cast<double>(telemetry.ticksPerSecond);
+    const double drawAverage = draws
+            ? static_cast<double>(telemetry.drawTicks) * nanosecondsPerTick
+                    / static_cast<double>(draws) : 0.0;
+    const double flushAverage = flushes
+            ? static_cast<double>(telemetry.flushTicks) * nanosecondsPerTick
+                    / static_cast<double>(flushes) : 0.0;
+    /* Submissions the application did not ask for: the translation layer's
+     * own heuristics in SubmitCommandListIfNeeded. */
+    const LONG64 opportunistic = submits > flushesSubmitted
+            ? submits - flushesSubmitted : 0;
+
+    char report[384];
+    std::snprintf(report, sizeof(report),
+            "d3d11on12core telemetry: draws=%lld draw_avg_ns=%.0f "
+            "slow_draws=%lld flushes=%lld flush_avg_ns=%.0f submits=%lld "
+            "opportunistic_submits=%lld\n",
+            static_cast<long long>(draws), drawAverage,
+            static_cast<long long>(telemetry.slowDraws),
+            static_cast<long long>(flushes), flushAverage,
+            static_cast<long long>(submits),
+            static_cast<long long>(opportunistic));
+    wineD3D11DiagReport(report);
 }
 
 void destroyRenderTargetState(RenderTargetState *view) noexcept;
@@ -704,6 +800,10 @@ void destroyAdapterState(AdapterState *state) noexcept
     }
     if (state->deviceCreated && state->deviceFuncs.pfnDestroyDevice)
         state->deviceFuncs.pfnDestroyDevice(state->hDevice);
+    /* After DestroyDevice, which joins the worker thread that reports
+     * submissions, so the submit count is final. */
+    if (state->deviceCreated)
+        reportTelemetry(state);
     if (state->adapterOpened && state->adapterFuncs.pfnCloseAdapter)
         state->adapterFuncs.pfnCloseAdapter(state->hAdapter);
     if (state->queue)
@@ -711,6 +811,118 @@ void destroyAdapterState(AdapterState *state) noexcept
     if (state->device12)
         state->device12->Release();
     HeapFree(GetProcessHeap(), 0, state);
+}
+
+/* The proxies recover their device from the handle the driver was given,
+ * which is the private block at the tail of AdapterState. */
+AdapterState *adapterStateOf(D3D10DDI_HDEVICE device) noexcept
+{
+    return reinterpret_cast<AdapterState *>(
+            static_cast<unsigned char *>(device.pDrvPrivate)
+            - offsetof(AdapterState, privateDevice));
+}
+
+LONGLONG telemetryNow() noexcept
+{
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    return now.QuadPart;
+}
+
+void recordDraw(DeviceTelemetry &telemetry, LONGLONG start) noexcept
+{
+    const LONGLONG elapsed = telemetryNow() - start;
+    InterlockedIncrement64(&telemetry.draws);
+    InterlockedAdd64(&telemetry.drawTicks, elapsed);
+    if (elapsed >= telemetry.slowDrawTicks)
+        InterlockedIncrement64(&telemetry.slowDraws);
+}
+
+void telemetryDraw(D3D10DDI_HDEVICE device, UINT vertexCount,
+        UINT startVertexLocation)
+{
+    DeviceTelemetry &telemetry = adapterStateOf(device)->telemetry;
+    const LONGLONG start = telemetryNow();
+    telemetry.draw(device, vertexCount, startVertexLocation);
+    recordDraw(telemetry, start);
+}
+
+void telemetryDrawIndexed(D3D10DDI_HDEVICE device, UINT indexCount,
+        UINT startIndexLocation, INT baseVertexLocation)
+{
+    DeviceTelemetry &telemetry = adapterStateOf(device)->telemetry;
+    const LONGLONG start = telemetryNow();
+    telemetry.drawIndexed(device, indexCount, startIndexLocation,
+            baseVertexLocation);
+    recordDraw(telemetry, start);
+}
+
+void telemetryDrawInstanced(D3D10DDI_HDEVICE device,
+        UINT vertexCountPerInstance, UINT instanceCount,
+        UINT startVertexLocation, UINT startInstanceLocation)
+{
+    DeviceTelemetry &telemetry = adapterStateOf(device)->telemetry;
+    const LONGLONG start = telemetryNow();
+    telemetry.drawInstanced(device, vertexCountPerInstance, instanceCount,
+            startVertexLocation, startInstanceLocation);
+    recordDraw(telemetry, start);
+}
+
+void telemetryDrawIndexedInstanced(D3D10DDI_HDEVICE device,
+        UINT indexCountPerInstance, UINT instanceCount,
+        UINT startIndexLocation, INT baseVertexLocation,
+        UINT startInstanceLocation)
+{
+    DeviceTelemetry &telemetry = adapterStateOf(device)->telemetry;
+    const LONGLONG start = telemetryNow();
+    telemetry.drawIndexedInstanced(device, indexCountPerInstance,
+            instanceCount, startIndexLocation, baseVertexLocation,
+            startInstanceLocation);
+    recordDraw(telemetry, start);
+}
+
+BOOL telemetryFlush(D3D10DDI_HDEVICE device, UINT contextType,
+        UINT flushFlags)
+{
+    DeviceTelemetry &telemetry = adapterStateOf(device)->telemetry;
+    const LONGLONG start = telemetryNow();
+    const BOOL submitted = telemetry.flush(device, contextType, flushFlags);
+    InterlockedAdd64(&telemetry.flushTicks, telemetryNow() - start);
+    InterlockedIncrement64(&telemetry.flushes);
+    if (submitted)
+        InterlockedIncrement64(&telemetry.flushesSubmitted);
+    return submitted;
+}
+
+/* Wrap whichever of the timed slots the driver filled.  A slot it left null
+ * stays null, so the entry points' own "unsupported" checks are unchanged. */
+void installTelemetry(AdapterState *state) noexcept
+{
+    InitOnceExecuteOnce(&telemetryInitOnce, initializeTelemetry, nullptr,
+            nullptr);
+    if (!telemetryTicksPerSecond)
+        return;
+
+    DeviceTelemetry &telemetry = state->telemetry;
+    D3DWDDM2_6DDI_DEVICEFUNCS &funcs = state->deviceFuncs;
+    telemetry.ticksPerSecond = telemetryTicksPerSecond;
+    telemetry.slowDrawTicks = telemetryTicksPerSecond
+            / telemetrySlowDrawDivisor;
+    telemetry.draw = funcs.pfnDraw;
+    telemetry.drawIndexed = funcs.pfnDrawIndexed;
+    telemetry.drawInstanced = funcs.pfnDrawInstanced;
+    telemetry.drawIndexedInstanced = funcs.pfnDrawIndexedInstanced;
+    telemetry.flush = funcs.pfnFlush;
+    if (funcs.pfnDraw)
+        funcs.pfnDraw = telemetryDraw;
+    if (funcs.pfnDrawIndexed)
+        funcs.pfnDrawIndexed = telemetryDrawIndexed;
+    if (funcs.pfnDrawInstanced)
+        funcs.pfnDrawInstanced = telemetryDrawInstanced;
+    if (funcs.pfnDrawIndexedInstanced)
+        funcs.pfnDrawIndexedInstanced = telemetryDrawIndexedInstanced;
+    if (funcs.pfnFlush)
+        funcs.pfnFlush = telemetryFlush;
 }
 
 /* Negotiate the device interface version, then create the DDI device.
@@ -804,6 +1016,7 @@ HRESULT createDriverDevice(AdapterState **statePtr,
     if (!state->deviceFuncs.pfnDestroyDevice)
         return DXGI_ERROR_UNSUPPORTED;
     state->deviceCreated = true;
+    installTelemetry(state);
 
     out->negotiatedInterfaceVersion = selectedInterface;
     out->deviceFuncs = &state->deviceFuncs;
