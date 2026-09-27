@@ -1316,3 +1316,10 @@ __declspec(dllexport) void WINAPI WineD3D11On12MockDriverFailNextCommandList(voi
 {
     InterlockedExchange(&fail_next_command_list, 1);
 }
+
+/* Let component tests inject a driver-reported error from a substituted DDI
+ * slot, exercising the real core callback rather than guessing its layout. */
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverReportError(HRESULT hr)
+{
+    mock_report_error(hr);
+}

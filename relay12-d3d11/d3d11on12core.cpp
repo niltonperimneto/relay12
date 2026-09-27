@@ -406,6 +406,7 @@ struct DeviceTelemetry
 };
 
 struct AdapterState;
+struct PipelineStateNode;
 struct InputLayoutState;
 struct ShaderState;
 struct RenderTargetState;
@@ -449,6 +450,9 @@ RenderTargetState *renderTargetRegistry;
 DeferredContextState *deferredContextRegistry;
 /* shared-state: published once through resourceRegistryOnce */
 CommandListState *commandListRegistry;
+/* shared-state: published once through resourceRegistryOnce */
+PipelineStateNode *pipelineStateRegistry;
+
 
 BOOL CALLBACK initializeResourceRegistry(PINIT_ONCE, PVOID, PVOID *) noexcept
 {
@@ -456,6 +460,7 @@ BOOL CALLBACK initializeResourceRegistry(PINIT_ONCE, PVOID, PVOID *) noexcept
     resourceRegistry = nullptr;
     inputLayoutRegistry = nullptr;
     shaderRegistry = nullptr;
+    pipelineStateRegistry = nullptr;
     return TRUE;
 }
 
@@ -566,6 +571,8 @@ struct AdapterState
      * RecycleCreateCommandList.  Guarded by resourceRegistryLock. */
     CommandListState *commandListPool;
     UINT commandListPoolCount;
+    PipelineStateNode *pipelineStates;
+    PipelineStateNode *boundPipelineStates[3];
     DeviceTelemetry telemetry;
     alignas(8) unsigned char privateDevice[1];
 };
@@ -795,6 +802,8 @@ void reportTelemetry(const AdapterState *state) noexcept
 void destroyRenderTargetState(RenderTargetState *view) noexcept;
 void destroyAllRenderTargets(AdapterState *owner) noexcept;
 void destroyAllDeferredWork(AdapterState *owner) noexcept;
+void destroyAllPipelineStates(AdapterState *owner) noexcept;
+void clearPipelineBindings(AdapterState *owner) noexcept;
 
 void destroyAdapterState(AdapterState *state) noexcept
 {
@@ -805,6 +814,7 @@ void destroyAdapterState(AdapterState *state) noexcept
      * the driver retires a destroyed list's batch through the immediate
      * context. */
     destroyAllDeferredWork(state);
+    destroyAllPipelineStates(state);
     destroyAllRenderTargets(state);
     while (state->inputLayouts)
     {
@@ -3423,5 +3433,319 @@ extern "C" HRESULT WINAPI WineD3D11On12ExecuteCommandListV1(
     /* Every command list begins and ends with ClearState, so the immediate
      * context has no render target bound afterwards. */
     owner->boundRenderTarget = nullptr;
-    return frameError(owner);
+    HRESULT hr = frameError(owner);
+    if (SUCCEEDED(hr)) clearPipelineBindings(owner);
+    return hr;
+}
+
+namespace
+{
+/* Immutable PSO key components. No host PSO cache, worker, or submission is
+ * introduced: D3D11On12/DTL already owns all three. Registry work happens only
+ * on create/bind/destroy, never on a draw. */
+struct PipelineStateNode
+{
+    PipelineStateNode *next;
+    PipelineStateNode *ownerNext;
+    AdapterState *owner;
+    WineD3D11On12PipelineState *publicHandle;
+    UINT kind;
+    bool bound;
+    alignas(8) unsigned char privateState[1];
+};
+
+PipelineStateNode *findPipelineState(WineD3D11On12PipelineState *handle) noexcept
+{
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry, nullptr, nullptr);
+    if (!handle || handle->size != sizeof(*handle)) return nullptr;
+    for (auto *p = pipelineStateRegistry; p; p = p->next)
+        if (p->publicHandle == handle && p == handle->runtimeState
+                && p->privateState == handle->hDrvState && p->kind == handle->kind)
+            return p;
+    return nullptr;
+}
+
+void freePipelineState(PipelineStateNode *p) noexcept
+{
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry, nullptr, nullptr);
+    auto *owner = p->owner;
+    if (p->kind == WINE_D3D11ON12_STATE_BLEND)
+        owner->deviceFuncs.pfnDestroyBlendState(owner->hDevice, {p->privateState});
+    else if (p->kind == WINE_D3D11ON12_STATE_DEPTH_STENCIL)
+        owner->deviceFuncs.pfnDestroyDepthStencilState(owner->hDevice, {p->privateState});
+    else
+        owner->deviceFuncs.pfnDestroyRasterizerState(owner->hDevice, {p->privateState});
+    auto **link = &pipelineStateRegistry;
+    while (*link != p) link = &(*link)->next;
+    *link = p->next;
+    link = &owner->pipelineStates;
+    while (*link != p) link = &(*link)->ownerNext;
+    *link = p->ownerNext;
+    if (p->publicHandle)
+    {
+        p->publicHandle->kind = 0;
+        p->publicHandle->hDrvState = nullptr;
+        p->publicHandle->runtimeState = nullptr;
+    }
+    HeapFree(GetProcessHeap(), 0, p);
+}
+
+void destroyAllPipelineStates(AdapterState *owner) noexcept
+{
+    FrameLock lock;
+    /* The driver device is about to be destroyed; no later draw can read its
+     * tracked state. Command lists were retired before this function. */
+    while (owner->pipelineStates) freePipelineState(owner->pipelineStates);
+    ZeroMemory(owner->boundPipelineStates, sizeof(owner->boundPipelineStates));
+}
+
+HRESULT preparePipelineOutput(WineD3D11On12PipelineState *out) noexcept
+{
+    if (!out || out->size != sizeof(*out)) return E_INVALIDARG;
+    /* Reject accidental live-handle reuse without leaking the original. */
+    if (findPipelineState(out)) return E_INVALIDARG;
+    out->kind = 0;
+    out->runtimeState = nullptr;
+    out->hDrvState = nullptr;
+    return S_OK;
+}
+
+template<typename Desc, typename DriverHandle, typename RuntimeHandle>
+HRESULT createPipelineState(AdapterState *owner, UINT kind, const Desc &desc,
+        SIZE_T (*calc)(D3D10DDI_HDEVICE, const Desc *),
+        VOID (*create)(D3D10DDI_HDEVICE, const Desc *, DriverHandle, RuntimeHandle),
+        VOID (*destroy)(D3D10DDI_HDEVICE, DriverHandle),
+        WineD3D11On12PipelineState *out) noexcept
+{
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry, nullptr, nullptr);
+    if (!calc || !create || !destroy) return DXGI_ERROR_UNSUPPORTED;
+    InterlockedExchange(&owner->lastDdiError, S_OK);
+    SIZE_T size = calc(owner->hDevice, &desc);
+    HRESULT hr = frameError(owner);
+    if (FAILED(hr)) return hr;
+    if (!size || size > SIZE_MAX - offsetof(PipelineStateNode, privateState))
+        return E_OUTOFMEMORY;
+    auto *p = static_cast<PipelineStateNode *>(HeapAlloc(GetProcessHeap(),
+            HEAP_ZERO_MEMORY, offsetof(PipelineStateNode, privateState) + size));
+    if (!p) return E_OUTOFMEMORY;
+    p->owner = owner;
+    p->kind = kind;
+    create(owner->hDevice, &desc, DriverHandle{p->privateState}, RuntimeHandle{p});
+    hr = frameError(owner);
+    if (FAILED(hr))
+    {
+        /* A failed placement constructor has no live object to destroy. */
+        HeapFree(GetProcessHeap(), 0, p);
+        return hr;
+    }
+    p->publicHandle = out;
+    p->next = pipelineStateRegistry;
+    pipelineStateRegistry = p;
+    p->ownerNext = owner->pipelineStates;
+    owner->pipelineStates = p;
+    out->kind = kind;
+    out->runtimeState = p;
+    out->hDrvState = p->privateState;
+    return S_OK;
+}
+
+bool validBlend(INT blend) noexcept
+{
+    return (blend >= 1 && blend <= 11) || (blend >= 14 && blend <= 19);
+}
+
+bool validStencil(const D3D11_DEPTH_STENCILOP_DESC &desc) noexcept
+{
+    return desc.StencilFailOp >= 1 && desc.StencilFailOp <= 8
+            && desc.StencilDepthFailOp >= 1 && desc.StencilDepthFailOp <= 8
+            && desc.StencilPassOp >= 1 && desc.StencilPassOp <= 8
+            && desc.StencilFunc >= 1 && desc.StencilFunc <= 8;
+}
+
+void setPipelineBinding(AdapterState *owner, UINT kind, PipelineStateNode *p) noexcept
+{
+    auto *old = owner->boundPipelineStates[kind - 1];
+    if (old == p) return;
+    owner->boundPipelineStates[kind - 1] = p;
+    if (p) p->bound = true;
+    if (old)
+    {
+        old->bound = false;
+        if (!old->publicHandle) freePipelineState(old);
+    }
+}
+
+void clearPipelineBindings(AdapterState *owner) noexcept
+{
+    for (UINT kind = 1; kind <= 3; ++kind) setPipelineBinding(owner, kind, nullptr);
+}
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12CreateBlendStateV1(
+        WineD3D11On12AdapterDevice *device, const D3D11_BLEND_DESC *desc,
+        WineD3D11On12PipelineState *out) noexcept
+{
+    FrameLock lock;
+    HRESULT hr = preparePipelineOutput(out);
+    if (FAILED(hr)) return hr;
+    auto *owner = frameOwner(device);
+    if (!owner || !desc) return E_INVALIDARG;
+    D3D11_1_DDI_BLEND_DESC ddi = {};
+    ddi.AlphaToCoverageEnable = !!desc->AlphaToCoverageEnable;
+    ddi.IndependentBlendEnable = !!desc->IndependentBlendEnable;
+    for (UINT i = 0; i < 8; ++i)
+    {
+        const auto &src = desc->RenderTarget[ddi.IndependentBlendEnable ? i : 0];
+        auto &dst = ddi.RenderTarget[i];
+        if (src.RenderTargetWriteMask & ~D3D11_COLOR_WRITE_ENABLE_ALL) return E_INVALIDARG;
+        dst.BlendEnable = !!src.BlendEnable;
+        dst.RenderTargetWriteMask = src.RenderTargetWriteMask;
+        /* Disabled blend fields are ignored at the API; canonicalize them
+         * before they become a PSO cache key. */
+        dst.SrcBlend = dst.SrcBlendAlpha = D3D11_BLEND_ONE;
+        dst.DestBlend = dst.DestBlendAlpha = D3D11_BLEND_ZERO;
+        dst.BlendOp = dst.BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        if (src.BlendEnable)
+        {
+            if (!validBlend(src.SrcBlend) || !validBlend(src.DestBlend)
+                    || !validBlend(src.SrcBlendAlpha) || !validBlend(src.DestBlendAlpha)
+                    || src.BlendOp < 1 || src.BlendOp > 5
+                    || src.BlendOpAlpha < 1 || src.BlendOpAlpha > 5) return E_INVALIDARG;
+            dst.SrcBlend = src.SrcBlend; dst.DestBlend = src.DestBlend;
+            dst.SrcBlendAlpha = src.SrcBlendAlpha; dst.DestBlendAlpha = src.DestBlendAlpha;
+            dst.BlendOp = src.BlendOp; dst.BlendOpAlpha = src.BlendOpAlpha;
+        }
+    }
+    auto &f = owner->deviceFuncs;
+    return createPipelineState(owner, WINE_D3D11ON12_STATE_BLEND, ddi,
+            f.pfnCalcPrivateBlendStateSize, f.pfnCreateBlendState, f.pfnDestroyBlendState, out);
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12CreateDepthStencilStateV1(
+        WineD3D11On12AdapterDevice *device, const D3D11_DEPTH_STENCIL_DESC *desc,
+        WineD3D11On12PipelineState *out) noexcept
+{
+    FrameLock lock;
+    HRESULT hr = preparePipelineOutput(out);
+    if (FAILED(hr)) return hr;
+    auto *owner = frameOwner(device);
+    if (!owner || !desc) return E_INVALIDARG;
+    D3D10_DDI_DEPTH_STENCIL_DESC ddi = {};
+    ddi.DepthEnable = !!desc->DepthEnable;
+    ddi.DepthFunc = D3D11_COMPARISON_LESS;
+    if (ddi.DepthEnable)
+    {
+        if (desc->DepthWriteMask > D3D11_DEPTH_WRITE_MASK_ALL
+                || desc->DepthFunc < 1 || desc->DepthFunc > 8) return E_INVALIDARG;
+        ddi.DepthWriteMask = desc->DepthWriteMask;
+        ddi.DepthFunc = desc->DepthFunc;
+    }
+    ddi.StencilEnable = ddi.FrontEnable = ddi.BackEnable = !!desc->StencilEnable;
+    ddi.StencilReadMask = desc->StencilReadMask;
+    ddi.StencilWriteMask = desc->StencilWriteMask;
+    ddi.FrontFace = ddi.BackFace = {D3D11_STENCIL_OP_KEEP, D3D11_STENCIL_OP_KEEP,
+            D3D11_STENCIL_OP_KEEP, D3D11_COMPARISON_ALWAYS};
+    if (ddi.StencilEnable)
+    {
+        if (!validStencil(desc->FrontFace) || !validStencil(desc->BackFace)) return E_INVALIDARG;
+        ddi.FrontFace = {desc->FrontFace.StencilFailOp, desc->FrontFace.StencilDepthFailOp,
+                desc->FrontFace.StencilPassOp, desc->FrontFace.StencilFunc};
+        ddi.BackFace = {desc->BackFace.StencilFailOp, desc->BackFace.StencilDepthFailOp,
+                desc->BackFace.StencilPassOp, desc->BackFace.StencilFunc};
+    }
+    auto &f = owner->deviceFuncs;
+    return createPipelineState(owner, WINE_D3D11ON12_STATE_DEPTH_STENCIL, ddi,
+            f.pfnCalcPrivateDepthStencilStateSize, f.pfnCreateDepthStencilState,
+            f.pfnDestroyDepthStencilState, out);
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12CreateRasterizerStateV1(
+        WineD3D11On12AdapterDevice *device, const D3D11_RASTERIZER_DESC *desc,
+        WineD3D11On12PipelineState *out) noexcept
+{
+    FrameLock lock;
+    HRESULT hr = preparePipelineOutput(out);
+    if (FAILED(hr)) return hr;
+    auto *owner = frameOwner(device);
+    if (!owner || !desc || desc->FillMode < 2 || desc->FillMode > 3
+            || desc->CullMode < 1 || desc->CullMode > 3
+            || !__builtin_isfinite(desc->DepthBiasClamp)
+            || !__builtin_isfinite(desc->SlopeScaledDepthBias)) return E_INVALIDARG;
+    D3DWDDM2_0DDI_RASTERIZER_DESC ddi = {};
+    ddi.FillMode = desc->FillMode; ddi.CullMode = desc->CullMode;
+    ddi.FrontCounterClockwise = !!desc->FrontCounterClockwise;
+    ddi.DepthBias = desc->DepthBias; ddi.DepthBiasClamp = desc->DepthBiasClamp;
+    ddi.SlopeScaledDepthBias = desc->SlopeScaledDepthBias;
+    ddi.DepthClipEnable = !!desc->DepthClipEnable; ddi.ScissorEnable = !!desc->ScissorEnable;
+    ddi.MultisampleEnable = !!desc->MultisampleEnable;
+    ddi.AntialiasedLineEnable = !!desc->AntialiasedLineEnable;
+    auto &f = owner->deviceFuncs;
+    return createPipelineState(owner, WINE_D3D11ON12_STATE_RASTERIZER, ddi,
+            f.pfnCalcPrivateRasterizerStateSize, f.pfnCreateRasterizerState,
+            f.pfnDestroyRasterizerState, out);
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12DestroyPipelineStateV1(
+        WineD3D11On12PipelineState *state) noexcept
+{
+    if (!state || state->size != sizeof(*state)) return E_INVALIDARG;
+    FrameLock lock;
+    if (auto *p = findPipelineState(state))
+    {
+        p->publicHandle = nullptr;
+        if (!p->bound) freePipelineState(p);
+    }
+    state->kind = 0; state->hDrvState = nullptr; state->runtimeState = nullptr;
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12SetBlendStateV1(
+        WineD3D11On12AdapterDevice *device, WineD3D11On12PipelineState *state,
+        const FLOAT *factor, UINT mask) noexcept
+{
+    FrameLock lock;
+    auto *owner = frameOwner(device);
+    if (!owner) return E_INVALIDARG;
+    auto *p = findPipelineState(state);
+    if (state && (!p || p->owner != owner || p->kind != WINE_D3D11ON12_STATE_BLEND)) return E_INVALIDARG;
+    if (!owner->deviceFuncs.pfnSetBlendState) return DXGI_ERROR_UNSUPPORTED;
+    const FLOAT defaults[4] = {1, 1, 1, 1};
+    InterlockedExchange(&owner->lastDdiError, S_OK);
+    owner->deviceFuncs.pfnSetBlendState(owner->hDevice, {p ? p->privateState : nullptr},
+            factor ? factor : defaults, mask);
+    HRESULT hr = frameError(owner);
+    if (SUCCEEDED(hr)) setPipelineBinding(owner, WINE_D3D11ON12_STATE_BLEND, p);
+    return hr;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12SetDepthStencilStateV1(
+        WineD3D11On12AdapterDevice *device, WineD3D11On12PipelineState *state, UINT reference) noexcept
+{
+    FrameLock lock;
+    auto *owner = frameOwner(device);
+    if (!owner) return E_INVALIDARG;
+    auto *p = findPipelineState(state);
+    if (state && (!p || p->owner != owner || p->kind != WINE_D3D11ON12_STATE_DEPTH_STENCIL)) return E_INVALIDARG;
+    if (!owner->deviceFuncs.pfnSetDepthStencilState) return DXGI_ERROR_UNSUPPORTED;
+    InterlockedExchange(&owner->lastDdiError, S_OK);
+    owner->deviceFuncs.pfnSetDepthStencilState(owner->hDevice, {p ? p->privateState : nullptr}, reference);
+    HRESULT hr = frameError(owner);
+    if (SUCCEEDED(hr)) setPipelineBinding(owner, WINE_D3D11ON12_STATE_DEPTH_STENCIL, p);
+    return hr;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12SetRasterizerStateV1(
+        WineD3D11On12AdapterDevice *device, WineD3D11On12PipelineState *state) noexcept
+{
+    FrameLock lock;
+    auto *owner = frameOwner(device);
+    if (!owner) return E_INVALIDARG;
+    auto *p = findPipelineState(state);
+    if (state && (!p || p->owner != owner || p->kind != WINE_D3D11ON12_STATE_RASTERIZER)) return E_INVALIDARG;
+    if (!owner->deviceFuncs.pfnSetRasterizerState) return DXGI_ERROR_UNSUPPORTED;
+    InterlockedExchange(&owner->lastDdiError, S_OK);
+    owner->deviceFuncs.pfnSetRasterizerState(owner->hDevice, {p ? p->privateState : nullptr});
+    HRESULT hr = frameError(owner);
+    if (SUCCEEDED(hr)) setPipelineBinding(owner, WINE_D3D11ON12_STATE_RASTERIZER, p);
+    return hr;
 }

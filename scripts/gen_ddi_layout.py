@@ -55,6 +55,7 @@ class Field:
     type_name: str
     size: int = POINTER[0]
     align: int = POINTER[1]
+    count: int = 1
 
 
 @dataclass
@@ -134,7 +135,7 @@ class Struct:
             if isinstance(member, Field):
                 advance(member.align)
                 fields[member.name] = offset
-                offset += member.size
+                offset += member.size * member.count
                 alignment = max(alignment, member.align)
             elif isinstance(member, Union):
                 arms = member.members_for(published)
@@ -1277,7 +1278,37 @@ if len({type_name for _, type_name in DEVICEFUNC_SLOTS}) != 138:
         "the published device table must retain its 138 distinct PFN names"
     )
 
+# PSO component descriptors. Public DDI reference + DirectX conservative-raster spec.
+PSO_RT_BLEND = Struct("D3D11_1_DDI_RENDER_TARGET_BLEND_DESC", [
+    Field(n, t, 4, 4) for n, t in [
+        ("BlendEnable", "BOOL"), ("LogicOpEnable", "BOOL"),
+        ("SrcBlend", "INT"), ("DestBlend", "INT"), ("BlendOp", "INT"),
+        ("SrcBlendAlpha", "INT"), ("DestBlendAlpha", "INT"),
+        ("BlendOpAlpha", "INT"), ("LogicOp", "INT")]] +
+    [Field("RenderTargetWriteMask", "UINT8", 1, 1)])
+PSO_BLEND = Struct("D3D11_1_DDI_BLEND_DESC", [
+    Field("AlphaToCoverageEnable", "BOOL", 4, 4),
+    Field("IndependentBlendEnable", "BOOL", 4, 4),
+    Field("RenderTarget", "D3D11_1_DDI_RENDER_TARGET_BLEND_DESC", 40, 4, count=8)])
+PSO_STENCIL_OP = Struct("D3D10_DDI_DEPTH_STENCILOP_DESC", [
+    Field(n, "INT", 4, 4) for n in
+    ("StencilFailOp", "StencilDepthFailOp", "StencilPassOp", "StencilFunc")])
+PSO_DEPTH = Struct("D3D10_DDI_DEPTH_STENCIL_DESC", [
+    Field(n, t, 4, 4) for n, t in [("DepthEnable", "BOOL"),
+    ("DepthWriteMask", "INT"), ("DepthFunc", "INT"), ("StencilEnable", "BOOL"),
+    ("FrontEnable", "BOOL"), ("BackEnable", "BOOL")]] + [
+    Field("StencilReadMask", "UINT8", 1, 1), Field("StencilWriteMask", "UINT8", 1, 1),
+    Embedded("FrontFace", PSO_STENCIL_OP), Embedded("BackFace", PSO_STENCIL_OP)])
+PSO_RASTER = Struct("D3DWDDM2_0DDI_RASTERIZER_DESC", [
+    Field(n, t, 4, 4) for n, t in [("FillMode", "INT"), ("CullMode", "INT"),
+    ("FrontCounterClockwise", "BOOL"), ("DepthBias", "INT"),
+    ("DepthBiasClamp", "FLOAT"), ("SlopeScaledDepthBias", "FLOAT"),
+    ("DepthClipEnable", "BOOL"), ("ScissorEnable", "BOOL"),
+    ("MultisampleEnable", "BOOL"), ("AntialiasedLineEnable", "BOOL"),
+    ("ForcedSampleCount", "UINT"), ("ConservativeRasterizationMode", "INT")]])
+
 GROUPS = HANDLES + [
+    PSO_RT_BLEND, PSO_BLEND, PSO_STENCIL_OP, PSO_DEPTH, PSO_RASTER,
     SHADERCACHE_HASH,
     CALCPRIVATEDEVICESIZE,
     ADAPTERFUNCS,
@@ -1356,14 +1387,18 @@ def emit(struct):
     def emit_pads_before(limit):
         for offset in sorted(pads):
             if offset < limit and pads[offset] not in emitted:
-                lines.append(declare("UINT32", pads[offset], "    ", 30))
+                lines.append(declare("UINT32" if pad_sizes[offset] == 4 else "UINT8",
+                                     pads[offset] if pad_sizes[offset] == 4 else
+                                     f"{pads[offset]}[{pad_sizes[offset]}]", "    ", 30))
                 emitted.add(pads[offset])
 
+    pad_sizes = dict(struct.padding())
     emitted = set()
     for member in struct.members:
         emit_pads_before(member_offset(member, fields))
         if isinstance(member, Field):
-            lines.append(declare(member.type_name, member.name, "    ", 30))
+            lines.append(declare(member.type_name, member.name if member.count == 1
+                                 else f"{member.name}[{member.count}]", "    ", 30))
         elif isinstance(member, Union):
             lines.append("    union")
             lines.append("    {")
