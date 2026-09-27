@@ -184,6 +184,9 @@ contract.
 | 30, 31 | `WineD3D11On12{Create,Destroy}DeferredContextV1` | Deferred-context lifecycle |
 | 32, 33 | `WineD3D11On12{Create,Destroy}CommandListV1` | Finish and destroy a command list |
 | 34 | `WineD3D11On12ExecuteCommandListV1` | Execute a command list on the immediate context |
+| 35-37 | `WineD3D11On12{CreateBlend,CreateDepthStencil,CreateRasterizer}StateV1` | Blend, depth-stencil and rasterizer state lifecycle |
+| 38 | `WineD3D11On12DestroyPipelineStateV1` | Unified pipeline state destruction |
+| 39-41 | `WineD3D11On12Set{Blend,DepthStencil,Rasterizer}StateV1` | Pipeline state binding |
 
 ### 4.3 Diagnostic Logging
 Diagnostic logging is handled via [`relay12-d3d11/wine_d3d11_diag.h`](relay12-d3d11/wine_d3d11_diag.h):
