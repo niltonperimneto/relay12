@@ -278,6 +278,11 @@ private data set through `ID3D11Device` reads back through it. The CI half of
 0025 is in `tests/d3d11on12frontend.c` against the mock D3D12 device, and
 `check_wine_d3d11_backend.py` rejects a tree that loses it.
 
+The probe also prints `perf:` lines, which are recorded and never judged: the
+shader-cache and pipeline-library support that decide the persistent PSO cache,
+and `ARCHITECTURE1` plus `CUSTOM` heap creation that decide UMA staging (items 1
+and 3 of [`PERFORMANCE-RESEARCH-ROADMAP.md`](PERFORMANCE-RESEARCH-ROADMAP.md)).
+
 ### Synchronization-mode runs
 
 `run-peak-smoke.py --sync none|esync|msync` selects exactly one mode;
