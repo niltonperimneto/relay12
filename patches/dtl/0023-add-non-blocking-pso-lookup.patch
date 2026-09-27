@@ -1,0 +1,187 @@
+Subject: dtl: let draws skip a graphics PSO that is still being created
+
+When a draw needs a pipeline the thread pool is still creating,
+PipelineState::GetForUse blocks in m_ThreadpoolWork.Wait until the create
+finishes. On Windows the driver's compiler is fast and its disk cache
+warm, so upstream accepts the wait. Under D3DMetal a first-time pipeline
+is a DXIL-to-Metal translation plus a Metal compile. That wait stalls the
+batch worker, and once c_MaxOutstandingBatches fill up it stalls the game
+thread too, which is the shader-compile stutter D3D11 titles show on this
+target.
+
+This adds an opt-in in the style of DXVK_ASYNC. With
+CreationArgs::UseNonBlockingPSOs set, PreDraw asks TryGetForUse, which
+returns nullptr while the create is still running. PreDraw already turns
+a null PSO into a skipped draw, by throwing before either dirty mask is
+cleared, so the next draw retries, and the first draw after the create
+finishes renders. The cost is the one DXVK_ASYNC has: a one-shot draw
+issued while its pipeline compiles is lost.
+
+Only graphics draws skip. PreDispatch, the blit helper and the video
+processor still call the blocking GetForUse. A skipped dispatch
+(culling, simulation) corrupts later frames rather than one.
+
+PipelineState publishes m_bReady with release after CreateImpl returns
+or throws, so a failed create counts as ready and still reaches the
+existing null-PSO path. The ImmediateContext counts skipped draws, and
+the number and duration of blocking waits, for the D3D11On12 device to
+report.
+
+Off by default. A zero-initialized CreationArgs behaves as upstream.
+---
+diff --git a/include/ImmediateContext.hpp b/include/ImmediateContext.hpp
+index e1adad1..747e1f7 100644
+--- a/include/ImmediateContext.hpp
++++ b/include/ImmediateContext.hpp
+@@ -923,6 +923,7 @@ public:
+         UINT DisableGPUTimeout : 1;
+         UINT IsXbox : 1;
+         UINT AdjustYUY2BlitCoords : 1;
++        UINT UseNonBlockingPSOs : 1;
+         GUID CreatorID;
+         DWORD MaxAllocatedUploadHeapSpacePerCommandList;
+         DWORD MaxSRVHeapSize;
+@@ -1596,6 +1597,45 @@ public: // variables
+         return m_CreationArgs.UseRoundTripPSOs;
+     }
+ 
++    // Draws skip, rather than wait for, a graphics PSO still being created
++    // on the thread pool. Compute and internal PSOs always wait.
++    bool UseNonBlockingPSOs()
++    {
++        return m_CreationArgs.UseNonBlockingPSOs;
++    }
++
++    struct PipelineCounters
++    {
++        UINT64 DrawsSkippedForPSO;
++        UINT64 PSOWaits;
++        UINT64 PSOWaitNanoseconds;
++    };
++
++    PipelineCounters GetPipelineCounters() const noexcept
++    {
++        PipelineCounters Counters = {};
++        Counters.DrawsSkippedForPSO = m_NumDrawsSkippedForPSO.load(std::memory_order_relaxed);
++        Counters.PSOWaits = m_NumPSOWaits.load(std::memory_order_relaxed);
++        LARGE_INTEGER Frequency;
++        if (QueryPerformanceFrequency(&Frequency) && Frequency.QuadPart > 0)
++        {
++            Counters.PSOWaitNanoseconds = static_cast<UINT64>(
++                static_cast<double>(m_PSOWaitTicks.load(std::memory_order_relaxed)) * 1e9
++                / static_cast<double>(Frequency.QuadPart));
++        }
++        return Counters;
++    }
++
++    void RecordPSOWait(INT64 Ticks) noexcept
++    {
++        m_NumPSOWaits.fetch_add(1, std::memory_order_relaxed);
++        m_PSOWaitTicks.fetch_add(static_cast<UINT64>(Ticks), std::memory_order_relaxed);
++    }
++
++    std::atomic<UINT64> m_NumDrawsSkippedForPSO{ 0 };
++    std::atomic<UINT64> m_NumPSOWaits{ 0 };
++    std::atomic<UINT64> m_PSOWaitTicks{ 0 };
++
+     TranslationLayerCallbacks const& GetUpperlayerCallbacks() { return m_callbacks; }
+ 
+     ResidencyManager &GetResidencyManager() { return m_residencyManager; }
+diff --git a/include/ImmediateContext.inl b/include/ImmediateContext.inl
+index e7be800..609a780 100644
+--- a/include/ImmediateContext.inl
++++ b/include/ImmediateContext.inl
+@@ -697,9 +697,19 @@ inline void ImmediateContext::PreDraw() noexcept(false)
+ 
+         if (m_StatesToReassert & e_PipelineStateDirty)
+         {
+-            auto pPSO = m_CurrentState.m_pPSO->GetForUse(COMMAND_LIST_TYPE::GRAPHICS);
++            // Non-blocking: a PSO still compiling skips this draw through the
++            // throw below. Nothing has cleared the dirty bits yet, so the next
++            // draw retries and renders once the PSO is ready.
++            const bool bNonBlocking = UseNonBlockingPSOs();
++            auto pPSO = bNonBlocking
++                ? m_CurrentState.m_pPSO->TryGetForUse(COMMAND_LIST_TYPE::GRAPHICS)
++                : m_CurrentState.m_pPSO->GetForUse(COMMAND_LIST_TYPE::GRAPHICS);
+             if (!pPSO)
+             {
++                if (bNonBlocking)
++                {
++                    m_NumDrawsSkippedForPSO.fetch_add(1, std::memory_order_relaxed);
++                }
+                 throw RelayHResultError(S_OK);
+             }
+             GetGraphicsCommandList()->SetPipelineState(pPSO);
+diff --git a/include/PipelineState.hpp b/include/PipelineState.hpp
+index 0fc6a5b..d8c4c67 100644
+--- a/include/PipelineState.hpp
++++ b/include/PipelineState.hpp
+@@ -122,11 +122,24 @@ namespace D3D12TranslationLayer
+         {
+             if (m_ThreadpoolWork)
+             {
+-                m_ThreadpoolWork.Wait(false);
++                WaitForCreate();
+             }
+             return DeviceChildImpl::GetForUse(CommandListType);
+         }
+ 
++        // Returns nullptr, without waiting, while the thread-pool create is
++        // still running. Once it has finished this is GetForUse: the Wait
++        // there only reaps the completed work item. A create that failed is
++        // also ready, and returns nullptr from GetForUse as before.
++        ID3D12PipelineState* TryGetForUse(COMMAND_LIST_TYPE CommandListType)
++        {
++            if (!m_bReady.load(std::memory_order_acquire))
++            {
++                return nullptr;
++            }
++            return GetForUse(CommandListType);
++        }
++
+     protected:
+         const EPipelineType m_PipelineStateType;
+         RootSignature* const m_pRootSignature;
+@@ -154,6 +167,12 @@ namespace D3D12TranslationLayer
+         UINT SOStrides[D3D12_SO_STREAM_COUNT];
+ 
+         CThreadPoolWork m_ThreadpoolWork;
++        // Set once CreateImpl has returned or thrown, on whichever thread ran it.
++        std::atomic<bool> m_bReady{ false };
++
++        // Out of line: it reports the wait to the ImmediateContext, which is
++        // incomplete where this header is included.
++        void WaitForCreate();
+ 
+         template<EPipelineType Type>
+         void Create();
+diff --git a/src/PipelineState.cpp b/src/PipelineState.cpp
+index df977f7..accfd84 100644
+--- a/src/PipelineState.cpp
++++ b/src/PipelineState.cpp
+@@ -95,14 +95,25 @@ namespace D3D12TranslationLayer
+                     CreateImpl<Type>();
+                 }
+                 catch (RelayHResultError&) {}
++                m_bReady.store(true, std::memory_order_release);
+             });
+         }
+         else
+         {
+             CreateImpl<Type>();
++            m_bReady.store(true, std::memory_order_release);
+         }
+     }
+ 
++    void PipelineState::WaitForCreate()
++    {
++        LARGE_INTEGER Start, End;
++        QueryPerformanceCounter(&Start);
++        m_ThreadpoolWork.Wait(false);
++        QueryPerformanceCounter(&End);
++        m_pParent->RecordPSOWait(End.QuadPart - Start.QuadPart);
++    }
++
+     template<EPipelineType Type>
+     inline void PipelineState::CreateImpl()
+     {

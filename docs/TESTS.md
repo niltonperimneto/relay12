@@ -228,7 +228,16 @@ d3d11on12core telemetry: draws=… draw_avg_ns=… slow_draws=… flushes=… fl
 looks from the host. `submits` counts every command-list submission the driver
 reported through its post-submit callback; `opportunistic_submits` is the part
 the application did not ask for with a flush. With the variable unset the
-proxies are not installed at all. `tests/test_telemetry.py` compares each
+proxies are not installed at all. The same variable makes the D3D11On12
+device, when destroyed, write DTL's pipeline counters to stderr and the
+debugger:
+
+```
+d3d11on12 pipeline telemetry: non_blocking=… draws_skipped_for_pso=… pso_waits=… pso_wait_ns=…
+```
+
+A PSO wait or skip happens on DTL's worker thread, so the host's draw timing
+cannot see it; these counters can. `tests/test_telemetry.py` compares each
 proxy's signature with its slot's typedef in `ddi/wine_d3d11ddi.h`, since a
 mismatch is otherwise found only by the cross compiler in CI.
 
@@ -244,6 +253,18 @@ deferred context: record, finish a command list, execute it, destroy it. It
 checks that every list after the first comes from recycled memory. The
 lifecycle itself -- refusals, recording errors, the recycle pool's bound,
 idempotent destruction, device teardown -- is `tests/d3d11on12deferred.c`.
+
+**Non-blocking PSOs.** `tests/e2e_d3d11_async_pso.cpp` checks
+`D3D11ON12_COMPAT_NonBlockingPSOs` deterministically. It swaps the
+`CreateGraphicsPipelineState` and `CreateComputePipelineState` slots of a real
+`ID3D12Device` vtable for wrappers that wait on an event, so the test decides
+when each pipeline is ready. With the switch on, a draw with a held pipeline
+must leave the target at the clear colour without blocking the calling thread
+(a watchdog turns a hang into a failure), and must render once the pipeline is
+released. A dispatch with a held compute pipeline must still run. With the
+switch off, the draw must render. It needs a real D3D12 under the full stack,
+so CI only compiles it; it runs through Whisky on D3DMetal. The patch gate
+(`check_d3d11on12_port.py --dtl-source`) checks that only `PreDraw` can skip.
 
 **Frame rate.** `check_peak_smoke_log.py` adds `frame_rate` to `result.json`:
 mean fps, 1% low and minimum, from the Metal HUD's frame counts and NSLog

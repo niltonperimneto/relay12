@@ -215,11 +215,103 @@ class D3D11On12PortGate(unittest.TestCase):
             % "        args.MaxAllocatedUploadHeapSpacePerCommandList = 0u;\n")
         self.assertTrue(any("patch 0025" in error for error in errors))
 
+    UPLOAD_LIMIT = "        args.MaxAllocatedUploadHeapSpacePerCommandList = MAXDWORD;\n"
+    NON_BLOCKING = ("        args.UseNonBlockingPSOs = GetCompatValue("
+                    "\"NonBlockingPSOs\", &nonBlockingPSOs) && nonBlockingPSOs;\n")
+
     def test_upload_submit_limit_passes(self):
         self.assertEqual(check_d3d11on12_port.check_immediate_context_args(
-            "device.cpp", self.IMM_CTX_ARGS
-            % "        args.MaxAllocatedUploadHeapSpacePerCommandList = MAXDWORD;\n"),
-            [])
+            "device.cpp",
+            self.IMM_CTX_ARGS % (self.UPLOAD_LIMIT + self.NON_BLOCKING)), [])
+
+    def test_non_blocking_pso_switch_is_required(self):
+        errors = check_d3d11on12_port.check_immediate_context_args(
+            "device.cpp", self.IMM_CTX_ARGS % self.UPLOAD_LIMIT)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("patch 0027", errors[0])
+
+    COMPAT_VALUE = """\
+bool GetCompatValue(const char* str, UINT64* pValue)
+{
+    if (pfnCompatValue)
+    {
+        return pfnCompatValue(str, pValue);
+    }
+%s    return false;
+}
+"""
+
+    def test_compat_value_environment_fallback_is_required(self):
+        errors = check_d3d11on12_port.check_compat_value(
+            "main.cpp", self.COMPAT_VALUE % "")
+        self.assertTrue(any("patch 0026" in error for error in errors))
+
+    def test_compat_value_environment_fallback_passes(self):
+        fallback = ('    snprintf(name, sizeof(name), "D3D11ON12_COMPAT_%s", str);\n'
+                    "    GetEnvironmentVariableA(name, value, sizeof(value));\n")
+        self.assertEqual(check_d3d11on12_port.check_compat_value(
+            "main.cpp", self.COMPAT_VALUE % fallback), [])
+
+    PRE_DRAW_DISPATCH = """\
+inline void ImmediateContext::PreDraw() noexcept(false)
+{
+        auto pPSO = bNonBlocking
+            ? m_CurrentState.m_pPSO->%s(COMMAND_LIST_TYPE::GRAPHICS)
+            : m_CurrentState.m_pPSO->GetForUse(COMMAND_LIST_TYPE::GRAPHICS);
+}
+
+inline void ImmediateContext::PreDispatch() noexcept(false)
+{
+            auto pPSO = m_CurrentState.m_pPSO->%s(COMMAND_LIST_TYPE::GRAPHICS);
+}
+"""
+
+    def test_draws_may_skip_a_compiling_pso(self):
+        self.assertEqual(check_d3d11on12_port.check_dtl_pso_lookup(
+            "ImmediateContext.inl",
+            self.PRE_DRAW_DISPATCH % ("TryGetForUse", "GetForUse")), [])
+
+    def test_draws_that_always_wait_are_rejected(self):
+        errors = check_d3d11on12_port.check_dtl_pso_lookup(
+            "ImmediateContext.inl",
+            self.PRE_DRAW_DISPATCH % ("GetForUse", "GetForUse"))
+        self.assertTrue(any("dtl patch 0023" in error for error in errors))
+
+    def test_compute_that_skips_a_compiling_pso_is_rejected(self):
+        errors = check_d3d11on12_port.check_dtl_pso_lookup(
+            "ImmediateContext.inl",
+            self.PRE_DRAW_DISPATCH % ("TryGetForUse", "TryGetForUse"))
+        self.assertTrue(any("PreDispatch must never skip" in error
+                            for error in errors))
+
+    def test_internal_pipelines_must_not_skip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "include").mkdir()
+            (root / "src").mkdir()
+            (root / "include" / "ImmediateContext.inl").write_text(
+                self.PRE_DRAW_DISPATCH % ("TryGetForUse", "GetForUse"))
+            (root / "src" / "BlitHelper.cpp").write_text(
+                "pCommandList->SetPipelineState("
+                "pPSO->TryGetForUse(COMMAND_LIST_TYPE::GRAPHICS));\n")
+            errors = check_d3d11on12_port.check_dtl_tree(root)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("BlitHelper.cpp", errors[0])
+
+    def test_the_non_blocking_pso_patches_are_in_the_series(self):
+        for patch in ("patches/dtl/0023-add-non-blocking-pso-lookup.patch",
+                      "patches/d3d11on12/0026-read-compat-values-from-environment.patch",
+                      "patches/d3d11on12/0027-enable-non-blocking-psos.patch"):
+            self.assertTrue((REPOSITORY / patch).is_file(), patch)
+
+    def test_the_pinned_dtl_tree_without_the_series_is_rejected(self):
+        inline = (REPOSITORY / "third_party" / "D3D12TranslationLayer"
+                  / "include" / "ImmediateContext.inl")
+        if not inline.exists():
+            self.skipTest("D3D12TranslationLayer submodule not checked out")
+        errors = check_d3d11on12_port.check_dtl_pso_lookup(
+            inline, inline.read_text(errors="replace"))
+        self.assertTrue(any("dtl patch 0023" in error for error in errors))
 
     def test_the_pinned_tree_without_the_series_is_rejected(self):
         device = REPOSITORY / "third_party" / "D3D11On12" / "src" / "device.cpp"
