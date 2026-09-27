@@ -90,6 +90,11 @@ EXPECTED_EXPORTS = {
         27: "WineD3D11On12CheckFrameSupportV1",
         28: "WineD3D11On12CreateWrappedTexture2DV1",
         29: "WineD3D11On12SetWrappedOwnershipV1",
+        30: "WineD3D11On12CreateDeferredContextV1",
+        31: "WineD3D11On12DestroyDeferredContextV1",
+        32: "WineD3D11On12CreateCommandListV1",
+        33: "WineD3D11On12DestroyCommandListV1",
+        34: "WineD3D11On12ExecuteCommandListV1",
     },
 }
 

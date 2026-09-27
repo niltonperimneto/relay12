@@ -340,3 +340,43 @@ WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12CreateWrappedTexture2DV1(
 WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12SetWrappedOwnershipV1(
         WineD3D11On12AdapterDevice *, WineD3D11On12Texture2D *const *, UINT,
         BOOL) WINE_D3D11ON12_NOEXCEPT;
+
+/* Deferred contexts and command lists. Append-only exports; ABI v3 unchanged.
+ *
+ * contextFuncs and hDrvContext are the deferred context's own DDI table and
+ * D3D10DDI_HDEVICE word; recording calls go through them directly, as
+ * immediate ones go through deviceFuncs.  A command list outlives the context
+ * that recorded it and may be executed any number of times on the immediate
+ * context that owns it; it must not outlive that device.  Executing one
+ * leaves the immediate context's state cleared.  Destroy calls are idempotent. */
+typedef struct WineD3D11On12DeferredContext
+{
+    UINT size;
+    UINT reserved;
+    struct D3DWDDM2_6DDI_DEVICEFUNCS *contextFuncs;
+    void *hDrvContext;
+    void *runtimeState;
+} WineD3D11On12DeferredContext;
+typedef struct WineD3D11On12CommandList
+{
+    UINT size;
+    UINT reserved;
+    void *hDrvCommandList;
+    void *runtimeState;
+} WineD3D11On12CommandList;
+WINE_D3D11ON12_ASSERT(sizeof(void *) != 8
+        || sizeof(WineD3D11On12DeferredContext) == 32);
+WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12DeferredContext, contextFuncs) == 8);
+WINE_D3D11ON12_ASSERT(sizeof(void *) != 8
+        || sizeof(WineD3D11On12CommandList) == 24);
+WINE_D3D11ON12_ASSERT(offsetof(WineD3D11On12CommandList, hDrvCommandList) == 8);
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12CreateDeferredContextV1(
+        WineD3D11On12AdapterDevice *, UINT, WineD3D11On12DeferredContext *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12DestroyDeferredContextV1(
+        WineD3D11On12DeferredContext *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12CreateCommandListV1(
+        WineD3D11On12DeferredContext *, WineD3D11On12CommandList *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12DestroyCommandListV1(
+        WineD3D11On12CommandList *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12ExecuteCommandListV1(
+        WineD3D11On12AdapterDevice *, WineD3D11On12CommandList *) WINE_D3D11ON12_NOEXCEPT;
