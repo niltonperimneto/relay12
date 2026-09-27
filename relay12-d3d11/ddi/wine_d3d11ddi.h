@@ -288,9 +288,6 @@ WINE_DDI_ASSERT_FIELD_SIZE(D3D10DDI_HRTRESOURCE, handle, 8);
  */
 typedef struct D3D10_2DDIARG_GETCAPS D3D10_2DDIARG_GETCAPS;
 typedef struct _D3DDDI_ADAPTERCALLBACKS D3DDDI_ADAPTERCALLBACKS;
-typedef struct D3D11_1_DDI_BLEND_DESC D3D11_1_DDI_BLEND_DESC;
-typedef struct D3D10_DDI_DEPTH_STENCIL_DESC D3D10_DDI_DEPTH_STENCIL_DESC;
-typedef struct D3D11_1_DDI_RASTERIZER_DESC D3D11_1_DDI_RASTERIZER_DESC;
 typedef struct D3D10_DDI_SAMPLER_DESC D3D10_DDI_SAMPLER_DESC;
 
 /* D3D10DDIARG_CREATEDEVICE is completed by the device-creation group below,
@@ -2327,6 +2324,146 @@ typedef VOID (*PFND3D10DDI_DESTROYRESOURCE)(
         D3D10DDI_HRESOURCE hResource);
 
 /*
+ * Group: PSO component descriptors
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d11_1_ddi_blend_desc
+ * Retrieved: 2026-09-27
+ * Companion pages under the same reference path: ns-d3d10umddi-
+ * d3d11_1_ddi_render_target_blend_desc, d3d10_ddi_depth_stencil_desc,
+ * d3d10_ddi_depth_stencilop_desc, d3d11_1_ddi_rasterizer_desc.
+ * Cross-validated member order and meaning against each matching markdown at
+ * https://github.com/MicrosoftDocs/windows-driver-docs-ddi/tree/staging/wdk-ddi-src/content/d3d10umddi
+ * Enum fields use signed 32-bit transport types, as elsewhere in this header.
+ * WDDM2 adds the final conservative-raster member to the 11.1 raster descriptor:
+ * https://microsoft.github.io/DirectX-Specs/d3d/ConservativeRasterization.html
+ * https://github.com/microsoft/DirectX-Specs/blob/master/d3d/ConservativeRasterization.md
+ * That specification calls the member ConservativeRaster; the pinned MIT
+ * D3D11On12/src/state.cpp calls it ConservativeRasterizationMode. We use the
+ * driver's spelling, with the same trailing 32-bit layout. The old 44-byte
+ * descriptor is NOT sufficient for the WDDM2 slot (48 bytes).
+ */
+typedef struct D3D11_1_DDI_RENDER_TARGET_BLEND_DESC
+{
+    BOOL                           BlendEnable;
+    BOOL                           LogicOpEnable;
+    INT                            SrcBlend;
+    INT                            DestBlend;
+    INT                            BlendOp;
+    INT                            SrcBlendAlpha;
+    INT                            DestBlendAlpha;
+    INT                            BlendOpAlpha;
+    INT                            LogicOp;
+    UINT8                          RenderTargetWriteMask;
+    UINT8                          WinePad0[3];
+} D3D11_1_DDI_RENDER_TARGET_BLEND_DESC;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D11_1_DDI_RENDER_TARGET_BLEND_DESC);
+WINE_DDI_ASSERT_SIZE(D3D11_1_DDI_RENDER_TARGET_BLEND_DESC, 40);
+WINE_DDI_ASSERT_ALIGN(D3D11_1_DDI_RENDER_TARGET_BLEND_DESC, 4);
+WINE_DDI_ASSERT_FIELD(D3D11_1_DDI_RENDER_TARGET_BLEND_DESC, BlendEnable, 0);
+WINE_DDI_ASSERT_FIELD(D3D11_1_DDI_RENDER_TARGET_BLEND_DESC, LogicOpEnable, 4);
+WINE_DDI_ASSERT_FIELD(D3D11_1_DDI_RENDER_TARGET_BLEND_DESC, SrcBlend, 8);
+WINE_DDI_ASSERT_FIELD(D3D11_1_DDI_RENDER_TARGET_BLEND_DESC, DestBlend, 12);
+WINE_DDI_ASSERT_FIELD(D3D11_1_DDI_RENDER_TARGET_BLEND_DESC, BlendOp, 16);
+WINE_DDI_ASSERT_FIELD(D3D11_1_DDI_RENDER_TARGET_BLEND_DESC, SrcBlendAlpha, 20);
+WINE_DDI_ASSERT_FIELD(D3D11_1_DDI_RENDER_TARGET_BLEND_DESC, DestBlendAlpha, 24);
+WINE_DDI_ASSERT_FIELD(D3D11_1_DDI_RENDER_TARGET_BLEND_DESC, BlendOpAlpha, 28);
+WINE_DDI_ASSERT_FIELD(D3D11_1_DDI_RENDER_TARGET_BLEND_DESC, LogicOp, 32);
+WINE_DDI_ASSERT_FIELD(D3D11_1_DDI_RENDER_TARGET_BLEND_DESC, RenderTargetWriteMask, 36);
+WINE_DDI_ASSERT_FIELD(D3D11_1_DDI_RENDER_TARGET_BLEND_DESC, WinePad0, 37);
+
+typedef struct D3D11_1_DDI_BLEND_DESC
+{
+    BOOL                           AlphaToCoverageEnable;
+    BOOL                           IndependentBlendEnable;
+    D3D11_1_DDI_RENDER_TARGET_BLEND_DESC RenderTarget[8];
+} D3D11_1_DDI_BLEND_DESC;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D11_1_DDI_BLEND_DESC);
+WINE_DDI_ASSERT_SIZE(D3D11_1_DDI_BLEND_DESC, 328);
+WINE_DDI_ASSERT_ALIGN(D3D11_1_DDI_BLEND_DESC, 4);
+WINE_DDI_ASSERT_FIELD(D3D11_1_DDI_BLEND_DESC, AlphaToCoverageEnable, 0);
+WINE_DDI_ASSERT_FIELD(D3D11_1_DDI_BLEND_DESC, IndependentBlendEnable, 4);
+WINE_DDI_ASSERT_FIELD(D3D11_1_DDI_BLEND_DESC, RenderTarget, 8);
+
+typedef struct D3D10_DDI_DEPTH_STENCILOP_DESC
+{
+    INT                            StencilFailOp;
+    INT                            StencilDepthFailOp;
+    INT                            StencilPassOp;
+    INT                            StencilFunc;
+} D3D10_DDI_DEPTH_STENCILOP_DESC;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10_DDI_DEPTH_STENCILOP_DESC);
+WINE_DDI_ASSERT_SIZE(D3D10_DDI_DEPTH_STENCILOP_DESC, 16);
+WINE_DDI_ASSERT_ALIGN(D3D10_DDI_DEPTH_STENCILOP_DESC, 4);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_DEPTH_STENCILOP_DESC, StencilFailOp, 0);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_DEPTH_STENCILOP_DESC, StencilDepthFailOp, 4);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_DEPTH_STENCILOP_DESC, StencilPassOp, 8);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_DEPTH_STENCILOP_DESC, StencilFunc, 12);
+
+typedef struct D3D10_DDI_DEPTH_STENCIL_DESC
+{
+    BOOL                           DepthEnable;
+    INT                            DepthWriteMask;
+    INT                            DepthFunc;
+    BOOL                           StencilEnable;
+    BOOL                           FrontEnable;
+    BOOL                           BackEnable;
+    UINT8                          StencilReadMask;
+    UINT8                          StencilWriteMask;
+    UINT8                          WinePad0[2];
+    D3D10_DDI_DEPTH_STENCILOP_DESC FrontFace;
+    D3D10_DDI_DEPTH_STENCILOP_DESC BackFace;
+} D3D10_DDI_DEPTH_STENCIL_DESC;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10_DDI_DEPTH_STENCIL_DESC);
+WINE_DDI_ASSERT_SIZE(D3D10_DDI_DEPTH_STENCIL_DESC, 60);
+WINE_DDI_ASSERT_ALIGN(D3D10_DDI_DEPTH_STENCIL_DESC, 4);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_DEPTH_STENCIL_DESC, DepthEnable, 0);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_DEPTH_STENCIL_DESC, DepthWriteMask, 4);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_DEPTH_STENCIL_DESC, DepthFunc, 8);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_DEPTH_STENCIL_DESC, StencilEnable, 12);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_DEPTH_STENCIL_DESC, FrontEnable, 16);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_DEPTH_STENCIL_DESC, BackEnable, 20);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_DEPTH_STENCIL_DESC, StencilReadMask, 24);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_DEPTH_STENCIL_DESC, StencilWriteMask, 25);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_DEPTH_STENCIL_DESC, WinePad0, 26);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_DEPTH_STENCIL_DESC, FrontFace, 28);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_DEPTH_STENCIL_DESC, BackFace, 44);
+
+typedef struct D3DWDDM2_0DDI_RASTERIZER_DESC
+{
+    INT                            FillMode;
+    INT                            CullMode;
+    BOOL                           FrontCounterClockwise;
+    INT                            DepthBias;
+    FLOAT                          DepthBiasClamp;
+    FLOAT                          SlopeScaledDepthBias;
+    BOOL                           DepthClipEnable;
+    BOOL                           ScissorEnable;
+    BOOL                           MultisampleEnable;
+    BOOL                           AntialiasedLineEnable;
+    UINT                           ForcedSampleCount;
+    INT                            ConservativeRasterizationMode;
+} D3DWDDM2_0DDI_RASTERIZER_DESC;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3DWDDM2_0DDI_RASTERIZER_DESC);
+WINE_DDI_ASSERT_SIZE(D3DWDDM2_0DDI_RASTERIZER_DESC, 48);
+WINE_DDI_ASSERT_ALIGN(D3DWDDM2_0DDI_RASTERIZER_DESC, 4);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDI_RASTERIZER_DESC, FillMode, 0);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDI_RASTERIZER_DESC, CullMode, 4);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDI_RASTERIZER_DESC, FrontCounterClockwise, 8);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDI_RASTERIZER_DESC, DepthBias, 12);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDI_RASTERIZER_DESC, DepthBiasClamp, 16);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDI_RASTERIZER_DESC, SlopeScaledDepthBias, 20);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDI_RASTERIZER_DESC, DepthClipEnable, 24);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDI_RASTERIZER_DESC, ScissorEnable, 28);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDI_RASTERIZER_DESC, MultisampleEnable, 32);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDI_RASTERIZER_DESC, AntialiasedLineEnable, 36);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDI_RASTERIZER_DESC, ForcedSampleCount, 40);
+WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDI_RASTERIZER_DESC, ConservativeRasterizationMode, 44);
+
+/*
  * Group: base pipeline state callbacks
  * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddi_devicefuncs
  * Retrieved: 2026-09-08
@@ -2337,10 +2474,8 @@ typedef VOID (*PFND3D10DDI_DESTROYRESOURCE)(
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11_1ddi_createrasterizerstate
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_createsampler
  *
- * The descriptor structures remain opaque until their nested enum and array
- * groups are authored.  A pointer to an incomplete type is ABI-complete and
- * keeps callers from reading fields that this clean-room header has not yet
- * derived.  The object handles are declared above and asserted as wrapped
+ * Blend, depth-stencil and WDDM2 rasterizer descriptors are authored above.
+ * The sampler descriptor remains opaque. The state handles are wrapped
  * pointers, matching the resource and command-list handle convention.
  */
 typedef SIZE_T (*PFND3D11_1DDI_CALCPRIVATEBLENDSTATESIZE)(
@@ -2373,11 +2508,11 @@ typedef VOID (*PFND3D10DDI_DESTROYDEPTHSTENCILSTATE)(
 
 typedef SIZE_T (*PFND3DWDDM2_0DDI_CALCPRIVATERASTERIZERSTATESIZE)(
         D3D10DDI_HDEVICE hDevice,
-        const D3D11_1_DDI_RASTERIZER_DESC *pRasterizerDesc);
+        const D3DWDDM2_0DDI_RASTERIZER_DESC *pRasterizerDesc);
 
 typedef VOID (*PFND3DWDDM2_0DDI_CREATERASTERIZERSTATE)(
         D3D10DDI_HDEVICE hDevice,
-        const D3D11_1_DDI_RASTERIZER_DESC *pRasterizerDesc,
+        const D3DWDDM2_0DDI_RASTERIZER_DESC *pRasterizerDesc,
         D3D10DDI_HRASTERIZERSTATE hRasterizerState,
         D3D10DDI_HRTRASTERIZERSTATE hRTRasterizerState);
 

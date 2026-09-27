@@ -490,6 +490,10 @@ jobs:
             -Irelay12-d3d11 -o d3d11on12deferred.exe tests/d3d11on12deferred.c \
             d3d11on12core.o wine_d3d11_diag.o -ld3d12 -ldxgi -ldxguid -luuid
           WINEDLLOVERRIDES=d3d11on12=n wine d3d11on12deferred.exe
+          x86_64-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
+            -Irelay12-d3d11 -o d3d11on12pso.exe tests/d3d11on12pso.c \
+            d3d11on12core.o wine_d3d11_diag.o -ld3d12 -ldxgi -ldxguid -luuid
+          WINEDLLOVERRIDES=d3d11on12=n wine d3d11on12pso.exe
           # Host dispatch overhead, with RELAY12_TELEMETRY off and on.  The
           # timings go to the job summary and never fail the job -- a shared
           # runner under Wine is too noisy for a threshold.  The telemetry

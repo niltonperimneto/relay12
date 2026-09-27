@@ -380,3 +380,36 @@ WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12DestroyCommandListV1(
         WineD3D11On12CommandList *) WINE_D3D11ON12_NOEXCEPT;
 WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12ExecuteCommandListV1(
         WineD3D11On12AdapterDevice *, WineD3D11On12CommandList *) WINE_D3D11ON12_NOEXCEPT;
+
+/* PSO components, append-only ABI v3. The driver owns PSO compilation/cache.
+ * The caller owns stable handle storage through destroy or adapter teardown.
+ * Immediate-context binding retains the driver state until replacement. */
+typedef struct WineD3D11On12PipelineState
+{
+    UINT size;
+    UINT kind;
+    void *hDrvState;
+    void *runtimeState;
+} WineD3D11On12PipelineState;
+#define WINE_D3D11ON12_STATE_BLEND 1u
+#define WINE_D3D11ON12_STATE_DEPTH_STENCIL 2u
+#define WINE_D3D11ON12_STATE_RASTERIZER 3u
+WINE_D3D11ON12_ASSERT(sizeof(WineD3D11On12PipelineState) == 24);
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12CreateBlendStateV1(
+        WineD3D11On12AdapterDevice *, const D3D11_BLEND_DESC *,
+        WineD3D11On12PipelineState *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12CreateDepthStencilStateV1(
+        WineD3D11On12AdapterDevice *, const D3D11_DEPTH_STENCIL_DESC *,
+        WineD3D11On12PipelineState *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12CreateRasterizerStateV1(
+        WineD3D11On12AdapterDevice *, const D3D11_RASTERIZER_DESC *,
+        WineD3D11On12PipelineState *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12DestroyPipelineStateV1(
+        WineD3D11On12PipelineState *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12SetBlendStateV1(
+        WineD3D11On12AdapterDevice *, WineD3D11On12PipelineState *,
+        const FLOAT *, UINT) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12SetDepthStencilStateV1(
+        WineD3D11On12AdapterDevice *, WineD3D11On12PipelineState *, UINT) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12SetRasterizerStateV1(
+        WineD3D11On12AdapterDevice *, WineD3D11On12PipelineState *) WINE_D3D11ON12_NOEXCEPT;

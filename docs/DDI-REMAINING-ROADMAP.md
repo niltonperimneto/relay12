@@ -137,7 +137,9 @@ Below is the structured roadmap of what is yet to be done.
   depth-stencil state, rasterizer state, and sampler state each have their
   private-size, create, and destroy callbacks promoted. `pfnCreateSampler`
   is included explicitly, and the layout harness exercises all twelve slots
-  with distinct state handles.
+  with distinct state handles. Blend, depth-stencil and WDDM2 rasterizer
+  descriptors and core-owned creation/binding/destruction are now implemented
+  (exports 35–41); sampler descriptors and frontend state routing remain.
 * **Done:** the element-layout, binding, and draw group — the callbacks that
   turn the objects above into a frame. `pfnCalcPrivateElementLayoutSize`,
   `pfnCreateElementLayout`, `pfnDestroyElementLayout`, `pfnIaSetInputLayout`,
