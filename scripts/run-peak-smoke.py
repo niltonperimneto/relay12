@@ -14,10 +14,14 @@ without the marker is refused. The Relay12 DLLs are expected beside PEAK.exe
 and the runtime's d3d12 slot to hold the d3d12 shim; this script stages
 nothing.
 
+The selected synchronization mode applies to the entire test prefix. Any running
+test-prefix server is stopped and reaped before Steam starts.
+
 Metal's performance HUD is enabled for the run: its once-a-second frame counts
 are the evidence of presented frames when Unity presents through D3D12.
 """
 import argparse
+import json
 import os
 from pathlib import Path, PureWindowsPath
 import subprocess
@@ -35,18 +39,31 @@ def windows_path(path):
     return str(PureWindowsPath("Z:\\", *Path(path).resolve().parts[1:]))
 
 
-def run_environment(runtime, prefix):
+def run_environment(runtime, prefix, sync="none"):
+    if sync not in ("none", "esync", "msync"):
+        raise ValueError(f"unsupported synchronization mode: {sync}")
     # The unsupported-operation inventory is read from warn+d3d11. An inherited
     # WINEDEBUG such as "-all" would silence it, so the channel is appended to
     # whatever the caller set; Wine applies the later entry.
     debug = os.environ.get("WINEDEBUG", "-all")
     return dict(os.environ, WINEPREFIX=str(prefix),
+                WINESERVER=str(runtime / "bin/wineserver"),
+                WINELOADER=str(runtime / "bin/wine64"),
+                WINEMSYNC="1" if sync == "msync" else "0",
+                WINEESYNC="1" if sync == "esync" else "0", WINEFSYNC="0",
                 WINEDEBUG=f"{debug},warn+d3d11" if debug else "warn+d3d11",
                 RELAY12_EXPERIMENTAL_FRAME="1", RELAY12_TRACE_CREATION="1",
                 MTL_HUD_ENABLED="1", MTL_HUD_LOG_ENABLED="1",
                 CX_APPLEGPTK_LIBD3DSHARED_PATH=str(runtime / "lib/external/libd3dshared.dylib"),
                 WINEDLLOVERRIDES="d3d11,d3d11on12,d3d11on12core,dxilconv=n;"
                 "d3d11on12host,d3d12,dxgi=b;mscoree,mshtml=")
+
+
+def stop_server(wine, env, log):
+    """Stop and reap only the validated test prefix before changing its mode."""
+    for flag in ("-k", "-w"):
+        subprocess.run([str(wine.parent / "wineserver"), flag], env=env,
+                       stdout=log, stderr=subprocess.STDOUT, timeout=30, check=True)
 
 
 def main(argv=None):
@@ -58,6 +75,8 @@ def main(argv=None):
     parser.add_argument("--steam-wait", type=int, default=60,
                         help="seconds to let Steam sign in before the launch")
     parser.add_argument("--wait", type=int, default=240, help="seconds to let PEAK run")
+    parser.add_argument("--sync", choices=("none", "esync", "msync"), default="none",
+                        help="Wine synchronization mode (default: none); restarts the test prefix server")
     args = parser.parse_args(argv)
 
     wine = args.wine.absolute()
@@ -74,7 +93,8 @@ def main(argv=None):
         if not (game / name).is_file():
             parser.error(f"missing {game / name}")
     runtime = wine.parent.parent
-    if not wine.is_file() or not (runtime / "lib/external/libd3dshared.dylib").is_file():
+    if (not wine.is_file() or not (wine.parent / "wineserver").is_file()
+            or not (runtime / "lib/external/libd3dshared.dylib").is_file()):
         parser.error("--wine must name a configured Wine/GPTK runtime with D3DMetal")
 
     out = args.out.resolve()
@@ -83,9 +103,16 @@ def main(argv=None):
     player_log.unlink(missing_ok=True)
     # A real Steam launch: without this file the game must get its app id from Steam.
     (game / "steam_appid.txt").unlink(missing_ok=True)
-    env = run_environment(runtime, prefix)
+    env = run_environment(runtime, prefix, args.sync)
+    env["WINELOADER"] = str(wine)
+    (out / "launch.json").write_text(json.dumps({
+        "wine": str(wine), "prefix": str(prefix), "sync": args.sync,
+        "environment": {key: env[key] for key in
+                        ("WINESERVER", "WINELOADER", "WINEMSYNC", "WINEESYNC", "WINEFSYNC")},
+    }, indent=2) + "\n")
 
     with open(wine_log, "w") as log:
+        stop_server(wine, env, log)
         steam = subprocess.Popen([str(wine), STEAM, "-silent", "-cef-disable-gpu",
                                   "-cef-disable-gpu-compositing"],
                                  env=env, stdout=log, stderr=subprocess.STDOUT)
@@ -97,7 +124,7 @@ def main(argv=None):
                            env=env, stdout=log, stderr=subprocess.STDOUT, timeout=120, check=False)
             time.sleep(args.wait)
         finally:
-            subprocess.run([str(wine.parent / "wineserver"), "-k"], env=env, timeout=30, check=False)
+            stop_server(wine, env, log)
             steam.wait(timeout=30)
 
     if not player_log.is_file():
