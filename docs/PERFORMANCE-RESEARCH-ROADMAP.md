@@ -30,7 +30,10 @@ measurement" section of [`TESTS.md`](TESTS.md) for how to run each tool.
   wait), and the number of command-list submissions -- counted from the
   driver's post-submit callback -- split into explicit and opportunistic.
   Unset, the proxies are never installed. The switch is read once per process
-  through `InitOnce`.
+  through `InitOnce`. The same switch makes the D3D11On12 device report, when
+  it is destroyed, DTL's own pipeline counters: draws skipped because their
+  PSO was still compiling, and the number and total duration of blocking PSO
+  waits. Those happen on DTL's worker thread, out of the host's sight.
 - **Dispatch overhead benchmark** (`tests/d3d11on12overhead.c`). Runs in
   `validate-d3d11on12` against the mock driver with telemetry off and on, and
   publishes both to the job summary. Informational only: a shared runner under
@@ -49,11 +52,35 @@ measurement" section of [`TESTS.md`](TESTS.md) for how to run each tool.
 
 **Already true.** DTL compiles pipeline state objects on a thread pool:
 D3D11On12's `GetImmCtxArgs` sets `UseThreadpoolForPSOCreates = true`
-(`third_party/D3D11On12/src/device.cpp`). But the first draw that uses a new
-PSO still blocks on it -- `PipelineState::GetForUse` waits on the thread-pool
-work item (`third_party/D3D12TranslationLayer/include/PipelineState.hpp`,
-`GetForUse`). There is no `ID3D12PipelineLibrary` cache, so every run
+(`third_party/D3D11On12/src/device.cpp`). By default the first draw that uses
+a new PSO still blocks on it -- `PipelineState::GetForUse` waits on the
+thread-pool work item (`third_party/D3D12TranslationLayer/include/PipelineState.hpp`,
+`GetForUse`). The wait runs on the batch worker thread, so the game thread
+stalls only once `c_MaxOutstandingBatches` fill up, or on a Map or flush that
+syncs with the worker. There is no `ID3D12PipelineLibrary` cache, so every run
 recompiles every PSO.
+
+**Done, opt-in: non-blocking PSOs.** `D3D11ON12_COMPAT_NonBlockingPSOs=1`
+makes a draw whose graphics PSO is still compiling get skipped instead of
+waiting (`patches/dtl/0023`, `patches/d3d11on12/0027`), in the style of
+`DXVK_ASYNC`. DTL already turned a null PSO into a skipped draw, before any
+dirty state is cleared, so the next draw retries and renders once the PSO is
+ready. The known artifact: a one-shot draw issued while its pipeline compiles
+is lost for good, and a repeated one is missing for the frames the compile
+takes. Compute never skips -- a lost dispatch (culling, simulation) corrupts
+every later frame -- and neither do DTL's internal blit and video-process
+pipelines; `check_d3d11on12_port.py --dtl-source` enforces both. Off by
+default.
+
+Upstream's switches are read through `dxgi.dll!CompatValue`, which Wine's and
+D3DMetal's dxgi do not export, so none of them, `RoundTripPSOs` included, was
+reachable on this target. `patches/d3d11on12/0026` falls back to the
+environment variable `D3D11ON12_COMPAT_<name>`.
+
+Whether it helps is measured, not assumed: telemetry's
+`draws_skipped_for_pso`, `pso_waits` and `pso_wait_ns`, with the switch off
+and on. `tests/e2e_d3d11_async_pso.cpp` proves the behaviour deterministically
+by holding pipeline creation on the caller's device.
 
 **Proposed.** A persistent cache: a DTL patch that loads and stores an
 `ID3D12PipelineLibrary` keyed by the PSO description, under a path Whisky
@@ -65,9 +92,9 @@ Whisky): does D3DMetal report `D3D12_FEATURE_SHADER_CACHE` support, and does
 D3DMetal's own Metal shader cache may already cover it. Telemetry's
 `slow_draws` is the before/after figure.
 
-**Out of scope.** Returning a placeholder PSO and skipping draws until the real
-one compiles (`DXVK_ASYNC`-style). It changes rendering output and needs an
-opt-in design of its own.
+**Out of scope.** Worker-thread and deferred-context changes for PSO
+creation. PEAK renders natively on D3D12, so non-blocking PSOs touch only its
+D3D11On12 interop; the benefit is for D3D11 content drawn through D3D11On12.
 
 ## 2. Multi-Threaded Command Submission
 

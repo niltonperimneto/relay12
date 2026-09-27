@@ -1,0 +1,64 @@
+Subject: d3d11on12: read compat values from the environment
+
+GetCompatValue asks dxgi.dll!CompatValue, the Windows compatibility
+database hook. Wine's dxgi and D3DMetal's dxgi do not export it, so every
+switch that reads a compat value is unreachable on this target, including
+upstream's own RoundTripPSOs and 11On12Debug.
+
+When dxgi has no CompatValue, fall back to one environment variable per
+name, D3D11ON12_COMPAT_<name>, parsed with strtoull so decimal, 0x hex
+and leading-0 octal all work. A variable that is absent, empty, too long
+or not wholly a number reads as unset. A dxgi that does export CompatValue
+is still authoritative. These values are read at device creation, not
+per call.
+---
+diff --git a/src/main.cpp b/src/main.cpp
+index 34f150a..5250651 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -2,6 +2,9 @@
+ // Licensed under the MIT License.
+ #include "pch.hpp"
+ 
++#include <cstdio>
++#include <cstdlib>
++
+ #define INITGUID
+ #include <coguid.h>
+ 
+@@ -31,7 +34,34 @@ bool GetCompatValue(const char* str, UINT64* pValue)
+     {
+         return pfnCompatValue(str, pValue);
+     }
+-    return false;
++
++    // Wine's and D3DMetal's dxgi.dll do not export CompatValue, so without
++    // this every switch above is unreachable. Fall back to the environment:
++    // D3D11ON12_COMPAT_<name>, parsed by strtoull (decimal, 0x hex, 0 octal).
++    // A variable that is absent, empty or not wholly a number is not set.
++    char name[128];
++    int length = std::snprintf(name, sizeof(name), "D3D11ON12_COMPAT_%s", str);
++    if (length < 0 || static_cast<size_t>(length) >= sizeof(name))
++    {
++        return false;
++    }
++    char value[32];
++    DWORD valueLength = GetEnvironmentVariableA(name, value, sizeof(value));
++    if (valueLength == 0 || valueLength >= sizeof(value))
++    {
++        return false;
++    }
++    char* end = nullptr;
++    UINT64 parsed = std::strtoull(value, &end, 0);
++    if (end == value || *end != '\0')
++    {
++        return false;
++    }
++    if (pValue)
++    {
++        *pValue = parsed;
++    }
++    return true;
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------

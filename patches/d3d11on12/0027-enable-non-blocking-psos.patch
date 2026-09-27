@@ -1,0 +1,80 @@
+Subject: d3d11on12: enable non-blocking PSOs behind a compat switch
+
+DTL patch 0023 lets graphics draws skip a pipeline the thread pool is
+still creating instead of waiting for it. Enable it from the
+NonBlockingPSOs compat value, next to the RoundTripPSOs switch, so
+D3D11ON12_COMPAT_NonBlockingPSOs=1 turns it on (patch 0026). It is off by
+default: the cost is that a one-shot draw issued while its pipeline
+compiles is not rendered.
+
+The skip, and any wait that remains, happen on DTL's worker thread, so the
+host's per-draw timing cannot see them. With RELAY12_TELEMETRY=1, the same
+switch the host's telemetry uses, the device reports DTL's pipeline
+counters to stderr and the debugger when it is destroyed.
+---
+diff --git a/src/device.cpp b/src/device.cpp
+index 5936f94..cfb73d9 100644
+--- a/src/device.cpp
++++ b/src/device.cpp
+@@ -2,6 +2,8 @@
+ // Licensed under the MIT License.
+ #include "pch.hpp"
+ 
++#include <cstdio>
++
+ namespace D3D11On12
+ {
+     void APIENTRY Device::CheckFormatSupport(D3D10DDI_HDEVICE hDevice, DXGI_FORMAT format, _Out_ UINT* pData)
+@@ -261,6 +263,7 @@ namespace D3D11On12
+     inline D3D12TranslationLayer::ImmediateContext::CreationArgs GetImmCtxArgs(Adapter* pAdapter, UINT CreateDeviceFlags)
+     {
+         UINT64 roundTripPSOs = 0;
++        UINT64 nonBlockingPSOs = 0;
+ 
+         D3D12TranslationLayer::ImmediateContext::CreationArgs args = {};
+         args.RequiresBufferOutOfBoundsHandling = !pAdapter->m_bComputeOnly;
+@@ -268,6 +271,7 @@ namespace D3D11On12
+         args.RenamingIsMultithreaded = BatchedContextUseWorkerThread(CreateDeviceFlags);
+         args.UseThreadpoolForPSOCreates = true;
+         args.UseRoundTripPSOs = GetCompatValue("RoundTripPSOs", &roundTripPSOs) && roundTripPSOs;
++        args.UseNonBlockingPSOs = GetCompatValue("NonBlockingPSOs", &nonBlockingPSOs) && nonBlockingPSOs;
+         args.UseResidencyManagement = true;
+         args.DisableGPUTimeout = pAdapter->m_bAPIDisablesGPUTimeout;
+         args.IsXbox = IsXboxCreateFlags(CreateDeviceFlags);
+@@ -633,6 +637,28 @@ namespace D3D11On12
+         *pArgs->ppfnRetrieveSubObject = RetrieveSubObject;
+     }
+ 
++    //----------------------------------------------------------------------------------------------------------------------------------
++    // With RELAY12_TELEMETRY=1, report what pipeline creation cost this device. The host's own telemetry times the draw DDIs,
++    // but a draw that waits for or skips a PSO does so on the translation layer's worker thread, out of the host's sight.
++    static void ReportPipelineTelemetry(D3D12TranslationLayer::ImmediateContext& ImmCtx) noexcept
++    {
++        char enabled[2] = {};
++        if (GetEnvironmentVariableA("RELAY12_TELEMETRY", enabled, sizeof(enabled)) != 1 || enabled[0] != '1')
++        {
++            return;
++        }
++        const auto Counters = ImmCtx.GetPipelineCounters();
++        char report[192];
++        std::snprintf(report, sizeof(report),
++            "d3d11on12 pipeline telemetry: non_blocking=%u draws_skipped_for_pso=%llu pso_waits=%llu pso_wait_ns=%llu\n",
++            ImmCtx.UseNonBlockingPSOs() ? 1u : 0u,
++            static_cast<unsigned long long>(Counters.DrawsSkippedForPSO),
++            static_cast<unsigned long long>(Counters.PSOWaits),
++            static_cast<unsigned long long>(Counters.PSOWaitNanoseconds));
++        OutputDebugStringA(report);
++        std::fputs(report, stderr);
++    }
++
+     //----------------------------------------------------------------------------------------------------------------------------------
+     Device::~Device()
+     {
+@@ -641,6 +667,7 @@ namespace D3D11On12
+             buffer.reset();
+         }
+         GetBatchedContext().ProcessBatch();
++        ReportPipelineTelemetry(GetImmediateContextNoFlush());
+     }
+ 
+     //----------------------------------------------------------------------------------------------------------------------------------
