@@ -258,7 +258,7 @@ static VOID stub_destroy_depth_stencil_state(D3D10DDI_HDEVICE hDevice,
 }
 
 static SIZE_T stub_calc_private_rasterizer_state_size(
-        D3D10DDI_HDEVICE hDevice, const D3D11_1_DDI_RASTERIZER_DESC *desc)
+        D3D10DDI_HDEVICE hDevice, const D3DWDDM2_0DDI_RASTERIZER_DESC *desc)
 {
     (void)hDevice;
     (void)desc;
@@ -267,7 +267,7 @@ static SIZE_T stub_calc_private_rasterizer_state_size(
 }
 
 static VOID stub_create_rasterizer_state(D3D10DDI_HDEVICE hDevice,
-        const D3D11_1_DDI_RASTERIZER_DESC *desc,
+        const D3DWDDM2_0DDI_RASTERIZER_DESC *desc,
         D3D10DDI_HRASTERIZERSTATE state, D3D10DDI_HRTRASTERIZERSTATE rt_state)
 {
     (void)hDevice;
