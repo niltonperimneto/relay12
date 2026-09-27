@@ -486,6 +486,29 @@ jobs:
             -Irelay12-d3d11 -o d3d11on12wrapped.exe tests/d3d11on12wrapped.c \
             d3d11on12core.o wine_d3d11_diag.o -ld3d12 -ldxgi -ldxguid -luuid
           WINEDLLOVERRIDES=d3d11on12=n wine d3d11on12wrapped.exe
+          # Host dispatch overhead, with RELAY12_TELEMETRY off and on.  The
+          # timings go to the job summary and never fail the job -- a shared
+          # runner under Wine is too noisy for a threshold.  The telemetry
+          # report is not noise: summarize_overhead.py fails if one is printed
+          # with the switch off, or if its counts disagree with what the
+          # benchmark dispatched.
+          x86_64-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
+            -Irelay12-d3d11 -o d3d11on12overhead.exe \
+            tests/d3d11on12overhead.c d3d11on12core.o wine_d3d11_diag.o \
+            -ld3d12 -ldxgi -ldxguid -luuid
+          for mode in off on; do
+            telemetry=; [ "$mode" = on ] && telemetry=1
+            if ! WINEDLLOVERRIDES=d3d11on12=n RELAY12_TELEMETRY=$telemetry \
+                wine d3d11on12overhead.exe \
+                > "overhead-$mode.out" 2> "overhead-$mode.err"; then
+              cat "overhead-$mode.out" "overhead-$mode.err"
+              exit 1
+            fi
+            cat "overhead-$mode.out"
+          done
+          python3 scripts/summarize_overhead.py \
+            overhead-off.out overhead-off.err overhead-on.out overhead-on.err \
+            --draws 600000 --flushes 50000 >> "$GITHUB_STEP_SUMMARY"
 
       - name: Run compiled frontend lifetime and unsupported-operation tests
         run: |
@@ -502,6 +525,11 @@ jobs:
           x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
             -fno-exceptions -fno-rtti -o d3d11_e2e_wrapped.exe \
             tests/e2e_d3d11_wrapped.cpp -ld3d12 -luuid
+          # Compiled only: it needs a real D3D12 under the full D3D11On12
+          # stack, which this lane does not have.
+          x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
+            -fno-exceptions -fno-rtti -o d3d11_e2e_overhead.exe \
+            tests/e2e_d3d11_overhead.cpp -ld3d12 -ld3d11 -luuid
 
       - name: Run the D3D11-on-12 concurrency stress
         run: |
