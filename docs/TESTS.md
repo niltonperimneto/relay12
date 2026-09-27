@@ -294,3 +294,15 @@ records the selected mode, loader, server, and prefix alongside the smoke logs.
 Run each mode sequentially with a separate output directory. A command-line
 startup probe passing is not evidence of PEAK rendering or GPU fence correctness;
 each mode still needs the positive rendering evidence checked by the smoke judge.
+
+### PSO component lifecycle
+
+`tests/d3d11on12pso.c` opens the core against the mock driver and substitutes
+strict, independently tagged state slots. It checks descriptor translation
+(including DDI-only depth fields and the WDDM2 rasterizer tail), default bindings,
+independent-blend replication, zero padding, missing callbacks, invalid inputs,
+allocation-size overflow, driver-reported creation/binding failure, owner/kind
+checks, copied and stale handles, retention while bound, command-list state reset,
+and idempotent release before/after teardown. A flush counter must remain zero.
+It runs in `validate-d3d11on12`; like other mock tests it proves dispatch and
+lifetime, not rendered output or a performance gain.

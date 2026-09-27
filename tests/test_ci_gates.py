@@ -1057,6 +1057,8 @@ class LayoutModel(unittest.TestCase):
             if struct.padding()
         }
         self.assertEqual(padding, {
+            "D3D11_1_DDI_RENDER_TARGET_BLEND_DESC": [(37, 3)],
+            "D3D10_DDI_DEPTH_STENCIL_DESC": [(26, 2)],
             "D3D10DDIARG_CREATEELEMENTLAYOUT": [(12, 4)],
             "D3D10DDIARG_CREATEDEVICE": [(76, 4)],
             "D3D11DDIARG_CREATEDEFERREDCONTEXT": [(36, 4)],
@@ -1067,6 +1069,13 @@ class LayoutModel(unittest.TestCase):
             "D3DDDICB_SYNCTOKEN": [(12, 4)],
             "D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW": [(28, 4)],
         })
+
+    def test_pipeline_descriptor_emission_preserves_arrays_and_byte_padding(self):
+        for model in (gen_ddi_layout.PSO_RT_BLEND, gen_ddi_layout.PSO_BLEND,
+                      gen_ddi_layout.PSO_STENCIL_OP, gen_ddi_layout.PSO_DEPTH,
+                      gen_ddi_layout.PSO_RASTER):
+            with self.subTest(structure=model.name):
+                self.assertIn("\n".join(gen_ddi_layout.emit(model)), self.header)
 
     def test_unasserted_padding_is_caught(self):
         """This model reads the header's assertions, not its declarations, so

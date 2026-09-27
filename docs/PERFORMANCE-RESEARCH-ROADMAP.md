@@ -126,3 +126,13 @@ and stripping DTL's barriers risks silent corruption rather than a crash. Count
 barriers per frame first; consider an environment-gated experiment only if the
 count is large enough to matter, and otherwise record this item as rejected with
 the numbers.
+
+## PSO component DDI implementation
+
+The core now creates/binds/destroys blend, depth-stencil and rasterizer state
+components (exports 35–41). This is functional coverage, not a new compilation
+strategy: it feeds the existing D3D11On12 PSO cache and DTL compiler. There is no
+new flush or draw-time lookup. The lifecycle test asserts zero explicit flushes;
+real workload telemetry and GPU output checks are still required before making
+performance claims. Persistent pipeline libraries remain the separate experiment
+in item 1.
