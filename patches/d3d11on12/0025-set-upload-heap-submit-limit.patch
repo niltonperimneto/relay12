@@ -1,0 +1,33 @@
+Subject: d3d11on12: give the upload-heap submit trigger a real limit
+
+D3D12TranslationLayer submits a command list early once the upload space
+allocated since the last submit exceeds a limit, so that recycled upload
+memory is not held hostage by a long command list. CommandListManager sets
+that limit to min(cMaxAllocatedUploadHeapSpacePerCommandList, which is
+256 MB, and CreationArgs::MaxAllocatedUploadHeapSpacePerCommandList).
+
+GetImmCtxArgs never sets the field, and CreationArgs zero-initialises
+itself, so the limit here is zero. Unlike MaxSRVHeapSize, which DTL treats
+as "use the default" when zero, nothing maps zero back: every upload --
+a dynamic constant buffer update before a draw is enough -- makes the next
+PostRender submit whenever the GPU is idle. On this target that is a
+command-list close, ExecuteCommandLists into D3DMetal and a fresh list per
+draw, which is the CPU cost the batching exists to avoid.
+
+MAXDWORD defers to DTL's own 256 MB rather than restating it: its
+constant is private to CommandListManager, and the min() already picks it.
+---
+diff --git a/src/device.cpp b/src/device.cpp
+index 1190d04..d999744 100644
+--- a/src/device.cpp
++++ b/src/device.cpp
+@@ -271,6 +271,9 @@ namespace D3D11On12
+         args.UseResidencyManagement = true;
+         args.DisableGPUTimeout = pAdapter->m_bAPIDisablesGPUTimeout;
+         args.IsXbox = IsXboxCreateFlags(CreateDeviceFlags);
++        // CommandListManager caps this at min(its own 256 MB, this field); a
++        // zero here would make every upload trigger a submit.
++        args.MaxAllocatedUploadHeapSpacePerCommandList = MAXDWORD;
+ #ifdef __D3D11On12CreatorID_INTERFACE_DEFINED__
+         args.CreatorID = uuidof<D3D11On12CreatorID>();
+ #endif
