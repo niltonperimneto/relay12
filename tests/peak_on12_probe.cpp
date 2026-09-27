@@ -17,6 +17,18 @@
 // D3D12 device runs on, both through GetAdapter and GetParent, and private
 // data set through ID3D11Device reads back through IDXGIDevice.  Those checks
 // print [ok]/[fail] and a final RESULT line, and set the exit status.
+//
+// Before any of that it reports, as "perf:" lines, the D3DMetal capabilities
+// that decide two items of docs/PERFORMANCE-RESEARCH-ROADMAP.md.  They are
+// facts to record, not checks, and never change the verdict:
+//
+//   * persistent PSO cache -- D3D12_FEATURE_SHADER_CACHE, and whether
+//     ID3D12Device1::CreatePipelineLibrary gives a library that serializes;
+//   * UMA staging -- D3D12_FEATURE_ARCHITECTURE1, and whether a CUSTOM heap
+//     with WRITE_BACK pages in L0 can hold a buffer the CPU can map, and a
+//     texture.
+//
+// Run it through Whisky, never the standalone D3DMetal rig.
 
 #include <windows.h>
 #include <initguid.h>
@@ -64,6 +76,108 @@ static int failures;
         else { std::printf("[fail] %s (line %d)\n", name, __LINE__); ++failures; } \
     } while (0)
 
+static unsigned long hresult(HRESULT hr)
+{
+    return static_cast<unsigned long>(hr);
+}
+
+static void reportPsoCache(ID3D12Device *device)
+{
+    D3D12_FEATURE_DATA_SHADER_CACHE cache = {};
+    HRESULT hr = device->CheckFeatureSupport(D3D12_FEATURE_SHADER_CACHE, &cache, sizeof(cache));
+    std::printf("perf: SHADER_CACHE hr=0x%08lx SupportFlags=0x%x\n", hresult(hr),
+            static_cast<unsigned>(cache.SupportFlags));
+
+    ID3D12Device1 *device1 = nullptr;
+    hr = device->QueryInterface(IID_ID3D12Device1, reinterpret_cast<void **>(&device1));
+    if (FAILED(hr) || !device1)
+    {
+        std::printf("perf: CreatePipelineLibrary skipped, no ID3D12Device1 (hr=0x%08lx)\n", hresult(hr));
+        return;
+    }
+    ID3D12PipelineLibrary *library = nullptr;
+    hr = device1->CreatePipelineLibrary(nullptr, 0, IID_ID3D12PipelineLibrary,
+            reinterpret_cast<void **>(&library));
+    std::printf("perf: CreatePipelineLibrary hr=0x%08lx library=%p\n", hresult(hr), (void *)library);
+    if (library)
+    {
+        const SIZE_T size = library->GetSerializedSize();
+        void *blob = size ? HeapAlloc(GetProcessHeap(), 0, size) : nullptr;
+        hr = blob ? library->Serialize(blob, size) : E_OUTOFMEMORY;
+        std::printf("perf: PipelineLibrary serialized size=%llu hr=0x%08lx\n",
+                static_cast<unsigned long long>(size), hresult(hr));
+        if (blob)
+            HeapFree(GetProcessHeap(), 0, blob);
+        library->Release();
+    }
+    device1->Release();
+}
+
+static void reportUma(ID3D12Device *device)
+{
+    D3D12_FEATURE_DATA_ARCHITECTURE1 architecture = {};
+    HRESULT hr = device->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE1, &architecture,
+            sizeof(architecture));
+    std::printf("perf: ARCHITECTURE1 hr=0x%08lx UMA=%d CacheCoherentUMA=%d TileBasedRenderer=%d\n",
+            hresult(hr), architecture.UMA, architecture.CacheCoherentUMA,
+            architecture.TileBasedRenderer);
+
+    // What DTL would ask for a CPU-read/write staging resource on a
+    // cache-coherent UMA device, in place of a READBACK heap and a copy.
+    D3D12_HEAP_PROPERTIES heap = {};
+    heap.Type = D3D12_HEAP_TYPE_CUSTOM;
+    heap.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
+    heap.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
+
+    D3D12_RESOURCE_DESC buffer = {};
+    buffer.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    buffer.Width = 65536;
+    buffer.Height = 1;
+    buffer.DepthOrArraySize = 1;
+    buffer.MipLevels = 1;
+    buffer.SampleDesc.Count = 1;
+    buffer.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    ID3D12Resource *resource = nullptr;
+    hr = device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &buffer,
+            D3D12_RESOURCE_STATE_COMMON, nullptr, IID_ID3D12Resource,
+            reinterpret_cast<void **>(&resource));
+    std::printf("perf: CUSTOM WRITE_BACK/L0 buffer hr=0x%08lx\n", hresult(hr));
+    if (resource)
+    {
+        // A CPU round trip only: it shows the mapping is usable, not that the
+        // GPU sees the bytes, which needs a copy the probe does not record.
+        void *raw = nullptr;
+        hr = resource->Map(0, nullptr, &raw);
+        volatile unsigned char *mapped = static_cast<volatile unsigned char *>(raw);
+        bool cpuRoundTrip = false;
+        if (SUCCEEDED(hr) && mapped)
+        {
+            mapped[4095] = 0x5a;
+            cpuRoundTrip = mapped[4095] == 0x5a;
+            resource->Unmap(0, nullptr);
+        }
+        std::printf("perf: CUSTOM WRITE_BACK/L0 buffer Map hr=0x%08lx cpu_round_trip=%s\n", hresult(hr),
+                cpuRoundTrip ? "yes" : "no");
+        resource->Release();
+    }
+
+    D3D12_RESOURCE_DESC texture = {};
+    texture.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    texture.Width = 256;
+    texture.Height = 256;
+    texture.DepthOrArraySize = 1;
+    texture.MipLevels = 1;
+    texture.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    texture.SampleDesc.Count = 1;
+    resource = nullptr;
+    hr = device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &texture,
+            D3D12_RESOURCE_STATE_COMMON, nullptr, IID_ID3D12Resource,
+            reinterpret_cast<void **>(&resource));
+    std::printf("perf: CUSTOM WRITE_BACK/L0 texture hr=0x%08lx\n", hresult(hr));
+    if (resource)
+        resource->Release();
+}
+
 static bool adapterHasLuid(IDXGIAdapter *adapter, const LUID &luid)
 {
     DXGI_ADAPTER_DESC desc = {};
@@ -98,6 +212,9 @@ int main()
     std::printf("D3D12CreateDevice hr=0x%08lx\n", static_cast<unsigned long>(hr));
     if (FAILED(hr) || !device12)
         return 1;
+
+    reportPsoCache(device12);
+    reportUma(device12);
 
     // The adapter an IDXGIDevice on this device must report is the one whose
     // LUID the D3D12 device carries.

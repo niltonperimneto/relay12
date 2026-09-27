@@ -195,6 +195,40 @@ class D3D11On12PortGate(unittest.TestCase):
         source = "// CComPtr<IUnknown> was removed\nint value; // _com_error"
         self.assertEqual(check_d3d11on12_port.check_source("notes.cpp", source), [])
 
+    IMM_CTX_ARGS = """\
+    inline D3D12TranslationLayer::ImmediateContext::CreationArgs GetImmCtxArgs(Adapter* pAdapter, UINT CreateDeviceFlags)
+    {
+        D3D12TranslationLayer::ImmediateContext::CreationArgs args = {};
+        args.UseResidencyManagement = true;
+%s        return args;
+    }
+"""
+
+    def test_upload_submit_limit_is_required(self):
+        errors = check_d3d11on12_port.check_immediate_context_args(
+            "device.cpp", self.IMM_CTX_ARGS % "")
+        self.assertTrue(any("patch 0025" in error for error in errors))
+
+    def test_zero_upload_submit_limit_is_rejected(self):
+        errors = check_d3d11on12_port.check_immediate_context_args(
+            "device.cpp", self.IMM_CTX_ARGS
+            % "        args.MaxAllocatedUploadHeapSpacePerCommandList = 0u;\n")
+        self.assertTrue(any("patch 0025" in error for error in errors))
+
+    def test_upload_submit_limit_passes(self):
+        self.assertEqual(check_d3d11on12_port.check_immediate_context_args(
+            "device.cpp", self.IMM_CTX_ARGS
+            % "        args.MaxAllocatedUploadHeapSpacePerCommandList = MAXDWORD;\n"),
+            [])
+
+    def test_the_pinned_tree_without_the_series_is_rejected(self):
+        device = REPOSITORY / "third_party" / "D3D11On12" / "src" / "device.cpp"
+        if not device.exists():
+            self.skipTest("D3D11On12 submodule not checked out")
+        errors = check_d3d11on12_port.check_immediate_context_args(
+            device, device.read_text(errors="replace"))
+        self.assertTrue(any("patch 0025" in error for error in errors))
+
 
 
 DRIVER_ADAPTER_ARGS = """\

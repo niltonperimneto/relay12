@@ -530,6 +530,10 @@ jobs:
           x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
             -fno-exceptions -fno-rtti -o d3d11_e2e_overhead.exe \
             tests/e2e_d3d11_overhead.cpp -ld3d12 -ld3d11 -luuid
+          # Compiled only: a hardware probe, run through Whisky on D3DMetal.
+          x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
+            -fno-exceptions -fno-rtti -o peak_on12_probe.exe \
+            tests/peak_on12_probe.cpp -luuid
 
       - name: Run the D3D11-on-12 concurrency stress
         run: |
