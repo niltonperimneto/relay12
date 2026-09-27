@@ -105,6 +105,9 @@ static volatile LONG fail_next_map;
  * pointer the real runtime owns. */
 static const D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS *runtime_callbacks;
 static D3D10DDI_HRTCORELAYER runtime_device;
+/* The immediate table, so a deferred context handed the same table -- which
+ * would overwrite the immediate context's entries -- is caught. */
+static D3DWDDM2_6DDI_DEVICEFUNCS *runtime_device_funcs;
 static LONG amortized_processing_calls;
 static unsigned char adapter_private;
 
@@ -831,6 +834,200 @@ static void mock_staging_resource_unmap(D3D10DDI_HDEVICE device,
     InterlockedIncrement(&unmap_calls);
 }
 
+/* Deferred contexts and command lists, shaped like the pinned driver's.
+ *
+ * A context records into its private block; finishing a command list moves
+ * what was recorded into the list and leaves the context empty, the way
+ * D3D11On12's CommandList::RecycleCreate takes the context's batch; executing
+ * adds the list's draws to what the immediate context has run.  Every call is
+ * counted, and a context draw with vertex_count MOCK_DEFERRED_FAIL reports an
+ * error through the context's own callback table, which is where the pinned
+ * driver sends recording errors. */
+#define MOCK_DEFERRED_FAIL 0xdeadu
+
+struct mock_context
+{
+    LONG recorded_draws;
+    const D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS *callbacks;
+    D3D10DDI_HRTCORELAYER runtime;
+};
+
+struct mock_command_list
+{
+    LONG draws;
+    LONG live;
+};
+
+static LONG deferred_context_create_calls;
+static LONG deferred_context_destroy_calls;
+static LONG deferred_abandon_calls;
+static LONG command_list_create_calls;
+static LONG command_list_recycle_create_calls;
+static LONG command_list_destroy_calls;
+static LONG command_list_recycle_destroy_calls;
+static LONG command_list_execute_calls;
+static LONG executed_draws;
+static int bad_deferred_description;
+static volatile LONG fail_next_deferred_context;
+static volatile LONG fail_next_command_list;
+
+static void mock_deferred_draw(D3D10DDI_HDEVICE context, UINT vertex_count,
+        UINT start_vertex_location)
+{
+    struct mock_context *c = context.pDrvPrivate;
+
+    (void)start_vertex_location;
+    if (vertex_count == MOCK_DEFERRED_FAIL)
+    {
+        c->callbacks->pfnSetErrorCb(c->runtime, E_INVALIDARG);
+        return;
+    }
+    InterlockedIncrement(&c->recorded_draws);
+}
+
+static void mock_destroy_deferred_context(D3D10DDI_HDEVICE context)
+{
+    (void)context;
+    InterlockedIncrement(&deferred_context_destroy_calls);
+}
+
+static void mock_abandon_command_list(D3D10DDI_HDEVICE context)
+{
+    struct mock_context *c = context.pDrvPrivate;
+
+    InterlockedExchange(&c->recorded_draws, 0);
+    InterlockedIncrement(&deferred_abandon_calls);
+}
+
+static SIZE_T mock_calc_private_deferred_context_size(D3D10DDI_HDEVICE device,
+        const D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE *args)
+{
+    (void)device;
+    if (!args || args->Flags)
+        bad_deferred_description = 1;
+    return sizeof(struct mock_context);
+}
+
+static void mock_create_deferred_context(D3D10DDI_HDEVICE device,
+        const D3D11DDIARG_CREATEDEFERREDCONTEXT *args)
+{
+    struct mock_context *c;
+
+    (void)device;
+    if (!args || !args->pWDDM2_6ContextFuncs || !args->hDrvContext.pDrvPrivate
+            || !args->pWDDM2_6UMCallbacks
+            || !args->pWDDM2_6UMCallbacks->pfnSetErrorCb
+            || !args->pWDDM2_6UMCallbacks->pfnPerformAmortizedProcessingCb
+            || args->pWDDM2_6ContextFuncs == runtime_device_funcs)
+    {
+        bad_deferred_description = 1;
+        mock_report_error(E_INVALIDARG);
+        return;
+    }
+    if (InterlockedExchange(&fail_next_deferred_context, 0)
+            && mock_report_error(E_OUTOFMEMORY))
+        return;
+    c = args->hDrvContext.pDrvPrivate;
+    c->recorded_draws = 0;
+    c->callbacks = args->pWDDM2_6UMCallbacks;
+    c->runtime = args->hRTCoreLayer;
+    args->pWDDM2_6ContextFuncs->pfnDraw = mock_deferred_draw;
+    args->pWDDM2_6ContextFuncs->pfnDestroyDevice = mock_destroy_deferred_context;
+    args->pWDDM2_6ContextFuncs->pfnAbandonCommandList = mock_abandon_command_list;
+    InterlockedIncrement(&deferred_context_create_calls);
+}
+
+static SIZE_T mock_calc_private_command_list_size(D3D10DDI_HDEVICE device,
+        const D3D11DDIARG_CREATECOMMANDLIST *args)
+{
+    (void)device;
+    if (!args || !args->hDeferredContext.pDrvPrivate)
+        bad_deferred_description = 1;
+    return sizeof(struct mock_command_list);
+}
+
+static HRESULT mock_fill_command_list(const D3D11DDIARG_CREATECOMMANDLIST *args,
+        D3D11DDI_HCOMMANDLIST list, D3D11DDI_HRTCOMMANDLIST runtime)
+{
+    struct mock_command_list *l = list.pDrvPrivate;
+    struct mock_context *c;
+
+    if (!args || !args->hDeferredContext.pDrvPrivate || !l || !runtime.handle)
+    {
+        bad_deferred_description = 1;
+        return E_INVALIDARG;
+    }
+    if (InterlockedExchange(&fail_next_command_list, 0))
+        return E_OUTOFMEMORY;
+    c = args->hDeferredContext.pDrvPrivate;
+    l->draws = InterlockedExchange(&c->recorded_draws, 0);
+    l->live = 1;
+    return S_OK;
+}
+
+static void mock_create_command_list(D3D10DDI_HDEVICE device,
+        const D3D11DDIARG_CREATECOMMANDLIST *args, D3D11DDI_HCOMMANDLIST list,
+        D3D11DDI_HRTCOMMANDLIST runtime)
+{
+    HRESULT hr = mock_fill_command_list(args, list, runtime);
+
+    (void)device;
+    InterlockedIncrement(&command_list_create_calls);
+    if (FAILED(hr))
+        mock_report_error(hr);
+}
+
+static HRESULT mock_recycle_create_command_list(D3D10DDI_HDEVICE device,
+        const D3D11DDIARG_CREATECOMMANDLIST *args, D3D11DDI_HCOMMANDLIST list,
+        D3D11DDI_HRTCOMMANDLIST runtime)
+{
+    struct mock_command_list *l = list.pDrvPrivate;
+
+    (void)device;
+    /* Recycled memory has been through RecycleDestroyCommandList, which
+     * leaves it not live; anything else is a host reusing a list in use. */
+    if (l && l->live)
+        bad_deferred_description = 1;
+    InterlockedIncrement(&command_list_recycle_create_calls);
+    return mock_fill_command_list(args, list, runtime);
+}
+
+static void mock_destroy_command_list(D3D10DDI_HDEVICE device,
+        D3D11DDI_HCOMMANDLIST list)
+{
+    struct mock_command_list *l = list.pDrvPrivate;
+
+    (void)device;
+    if (!l || !l->live)
+        bad_deferred_description = 1;
+    else
+        l->live = 0;
+    InterlockedIncrement(&command_list_destroy_calls);
+}
+
+static void mock_recycle_destroy_command_list(D3D10DDI_HDEVICE device,
+        D3D11DDI_HCOMMANDLIST list)
+{
+    InterlockedIncrement(&command_list_recycle_destroy_calls);
+    mock_destroy_command_list(device, list);
+    InterlockedDecrement(&command_list_destroy_calls);
+}
+
+static void mock_command_list_execute(D3D10DDI_HDEVICE device,
+        D3D11DDI_HCOMMANDLIST list)
+{
+    struct mock_command_list *l = list.pDrvPrivate;
+
+    (void)device;
+    if (!l || !l->live)
+    {
+        bad_deferred_description = 1;
+        return;
+    }
+    InterlockedAdd(&executed_draws, l->draws);
+    InterlockedIncrement(&command_list_execute_calls);
+}
+
 static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
         D3D10DDIARG_CREATEDEVICE *args)
 {
@@ -852,6 +1049,7 @@ static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
     {
         runtime_callbacks = args->pWDDM2_6UMCallbacks;
         runtime_device = args->hRTCoreLayer;
+        runtime_device_funcs = args->pWDDM2_6DeviceFuncs;
     }
     args->pWDDM2_6DeviceFuncs->pfnDestroyDevice = mock_destroy_device;
     args->pWDDM2_6DeviceFuncs->pfnFlush = mock_flush;
@@ -901,6 +1099,19 @@ static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
             mock_staging_resource_map;
     args->pWDDM2_6DeviceFuncs->pfnStagingResourceUnmap =
             mock_staging_resource_unmap;
+    args->pWDDM2_6DeviceFuncs->pfnCalcPrivateDeferredContextSize =
+            mock_calc_private_deferred_context_size;
+    args->pWDDM2_6DeviceFuncs->pfnCreateDeferredContext =
+            mock_create_deferred_context;
+    args->pWDDM2_6DeviceFuncs->pfnCalcPrivateCommandListSize =
+            mock_calc_private_command_list_size;
+    args->pWDDM2_6DeviceFuncs->pfnCreateCommandList = mock_create_command_list;
+    args->pWDDM2_6DeviceFuncs->pfnRecycleCreateCommandList =
+            mock_recycle_create_command_list;
+    args->pWDDM2_6DeviceFuncs->pfnDestroyCommandList = mock_destroy_command_list;
+    args->pWDDM2_6DeviceFuncs->pfnRecycleDestroyCommandList =
+            mock_recycle_destroy_command_list;
+    args->pWDDM2_6DeviceFuncs->pfnCommandListExecute = mock_command_list_execute;
     InterlockedIncrement(&create_calls);
     return S_OK;
 }
@@ -1071,4 +1282,37 @@ __declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetCounts(
         *destroyed = destroy_calls;
     if (closed)
         *closed = close_calls;
+}
+
+/* Deferred contexts and command lists: lifecycle counts, then what ran. */
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetDeferredCounts(
+        LONG *contexts_created, LONG *contexts_destroyed, LONG *abandoned,
+        LONG *lists_created, LONG *lists_recycled, LONG *lists_destroyed,
+        LONG *lists_recycle_destroyed, int *bad_description)
+{
+    if (contexts_created) *contexts_created = deferred_context_create_calls;
+    if (contexts_destroyed) *contexts_destroyed = deferred_context_destroy_calls;
+    if (abandoned) *abandoned = deferred_abandon_calls;
+    if (lists_created) *lists_created = command_list_create_calls;
+    if (lists_recycled) *lists_recycled = command_list_recycle_create_calls;
+    if (lists_destroyed) *lists_destroyed = command_list_destroy_calls;
+    if (lists_recycle_destroyed) *lists_recycle_destroyed = command_list_recycle_destroy_calls;
+    if (bad_description) *bad_description = bad_deferred_description;
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetExecuteCounts(
+        LONG *executes, LONG *draws)
+{
+    if (executes) *executes = command_list_execute_calls;
+    if (draws) *draws = executed_draws;
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverFailNextDeferredContext(void)
+{
+    InterlockedExchange(&fail_next_deferred_context, 1);
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverFailNextCommandList(void)
+{
+    InterlockedExchange(&fail_next_command_list, 1);
 }
