@@ -95,7 +95,7 @@ class ProxySignatures(unittest.TestCase):
         self.assertEqual(
             {slot for slot, _ in proxies},
             {"pfnDraw", "pfnDrawIndexed", "pfnDrawInstanced",
-             "pfnDrawIndexedInstanced", "pfnFlush"})
+             "pfnDrawIndexedInstanced", "pfnFlush", "pfnCommandListExecute"})
         for slot, proxy in proxies:
             with self.subTest(slot=slot):
                 self.assertEqual(function_signature(self.source, proxy),
@@ -156,7 +156,8 @@ ON_STDOUT = OFF_STDOUT.replace("telemetry=off", "telemetry=on").replace(
     "4.1", "31.5")
 ON_STDERR = ("d3d11on12core telemetry: draws=600000 draw_avg_ns=25 "
              "slow_draws=0 flushes=50000 flush_avg_ns=40 submits=50000 "
-             "opportunistic_submits=0\n")
+             "opportunistic_submits=0 command_lists=1000 "
+             "execute_avg_ns=90\n")
 
 
 class Summary(unittest.TestCase):
@@ -172,7 +173,8 @@ class Summary(unittest.TestCase):
             with unittest.mock.patch("sys.stdout"), \
                     unittest.mock.patch("sys.stderr"):
                 return summarize.main(paths + ["--draws", "600000",
-                                               "--flushes", "50000"])
+                                               "--flushes", "50000",
+                                               "--command-lists", "1000"])
 
     def test_agreeing_runs_pass(self):
         self.assertEqual(self.run_main(), 0)
@@ -190,6 +192,10 @@ class Summary(unittest.TestCase):
     def test_an_opportunistic_submit_against_the_mock_fails(self):
         self.assertEqual(self.run_main(on_stderr=ON_STDERR.replace(
             "opportunistic_submits=0", "opportunistic_submits=3")), 1)
+
+    def test_a_dropped_command_list_execute_fails(self):
+        self.assertEqual(self.run_main(on_stderr=ON_STDERR.replace(
+            "command_lists=1000", "command_lists=999")), 1)
 
     def test_table_lists_both_runs(self):
         text = summarize.table(summarize.metrics(OFF_STDOUT),

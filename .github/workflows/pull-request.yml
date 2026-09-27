@@ -486,6 +486,10 @@ jobs:
             -Irelay12-d3d11 -o d3d11on12wrapped.exe tests/d3d11on12wrapped.c \
             d3d11on12core.o wine_d3d11_diag.o -ld3d12 -ldxgi -ldxguid -luuid
           WINEDLLOVERRIDES=d3d11on12=n wine d3d11on12wrapped.exe
+          x86_64-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
+            -Irelay12-d3d11 -o d3d11on12deferred.exe tests/d3d11on12deferred.c \
+            d3d11on12core.o wine_d3d11_diag.o -ld3d12 -ldxgi -ldxguid -luuid
+          WINEDLLOVERRIDES=d3d11on12=n wine d3d11on12deferred.exe
           # Host dispatch overhead, with RELAY12_TELEMETRY off and on.  The
           # timings go to the job summary and never fail the job -- a shared
           # runner under Wine is too noisy for a threshold.  The telemetry
@@ -508,7 +512,8 @@ jobs:
           done
           python3 scripts/summarize_overhead.py \
             overhead-off.out overhead-off.err overhead-on.out overhead-on.err \
-            --draws 600000 --flushes 50000 >> "$GITHUB_STEP_SUMMARY"
+            --draws 600000 --flushes 50000 --command-lists 20000 \
+            >> "$GITHUB_STEP_SUMMARY"
 
       - name: Run compiled frontend lifetime and unsupported-operation tests
         run: |
