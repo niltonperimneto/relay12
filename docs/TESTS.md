@@ -239,6 +239,12 @@ the job summary and fails only on correctness: a report printed with telemetry
 off, or report counts that disagree with what was dispatched. The timings are
 never a threshold -- a shared runner under Wine is too noisy for one.
 
+The benchmark also runs a multithreaded engine's per-frame pattern on a
+deferred context: record, finish a command list, execute it, destroy it. It
+checks that every list after the first comes from recycled memory. The
+lifecycle itself -- refusals, recording errors, the recycle pool's bound,
+idempotent destruction, device teardown -- is `tests/d3d11on12deferred.c`.
+
 **Frame rate.** `check_peak_smoke_log.py` adds `frame_rate` to `result.json`:
 mean fps, 1% low and minimum, from the Metal HUD's frame counts and NSLog
 timestamps. HUD windows are about a second long, so the 1% low is over
