@@ -95,6 +95,13 @@ EXPECTED_EXPORTS = {
         32: "WineD3D11On12CreateCommandListV1",
         33: "WineD3D11On12DestroyCommandListV1",
         34: "WineD3D11On12ExecuteCommandListV1",
+        35: "WineD3D11On12CreateBlendStateV1",
+        36: "WineD3D11On12CreateDepthStencilStateV1",
+        37: "WineD3D11On12CreateRasterizerStateV1",
+        38: "WineD3D11On12DestroyPipelineStateV1",
+        39: "WineD3D11On12SetBlendStateV1",
+        40: "WineD3D11On12SetDepthStencilStateV1",
+        41: "WineD3D11On12SetRasterizerStateV1",
     },
 }
 

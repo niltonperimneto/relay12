@@ -33,3 +33,10 @@ WineD3D11On12DestroyDeferredContextV1 @31
 WineD3D11On12CreateCommandListV1 @32
 WineD3D11On12DestroyCommandListV1 @33
 WineD3D11On12ExecuteCommandListV1 @34
+WineD3D11On12CreateBlendStateV1 @35
+WineD3D11On12CreateDepthStencilStateV1 @36
+WineD3D11On12CreateRasterizerStateV1 @37
+WineD3D11On12DestroyPipelineStateV1 @38
+WineD3D11On12SetBlendStateV1 @39
+WineD3D11On12SetDepthStencilStateV1 @40
+WineD3D11On12SetRasterizerStateV1 @41
