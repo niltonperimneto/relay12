@@ -90,6 +90,54 @@ def result(player, wine):
     return {check.name: check for check in checks}, unsupported
 
 
+def hud(pid, *samples):
+    """HUD lines for one process from (seconds after 12:00:00, frame count)."""
+    return "".join(
+        f"2026-09-27 12:{int(s) // 60:02d}:{s % 60:06.3f} wine64[{pid}:1] "
+        f"metal-HUD: {frames},664.89,1593.53,16.67,4.08,0.53\n"
+        for s, frames in samples)
+
+
+class FrameRate(unittest.TestCase):
+    def test_real_hud_lines_give_frames_over_elapsed_time(self):
+        rate = smoke.frame_rate(REAL_METAL_HUD)
+        # 204 frames between 13.540 and 15.508.
+        self.assertEqual(rate["frames"], 204)
+        self.assertEqual(rate["seconds"], 1.968)
+        self.assertEqual(rate["mean_fps"], round(204 / 1.968, 2))
+        self.assertEqual(rate["windows"], 2)
+        # Windows of 102 frames in 0.970 s and 102 in 0.998 s.
+        self.assertEqual(rate["p1_low_fps"], round(102 / 0.998, 2))
+
+    def test_one_percent_low_is_the_slowest_of_few_windows(self):
+        samples = [(i, 60 * i) for i in range(10)] + [(10, 540 + 20)]
+        rate = smoke.frame_rate(hud(1, *samples))
+        self.assertEqual(rate["p1_low_fps"], 20.0)
+        self.assertEqual(rate["min_fps"], 20.0)
+
+    def test_one_percent_low_ignores_a_single_outlier_among_hundreds(self):
+        samples = [(i, 60 * i) for i in range(201)]
+        samples.append((201, samples[-1][1] + 5))
+        rate = smoke.frame_rate(hud(1, *samples))
+        # 201 windows: nearest rank ceil(2.01) = 3rd slowest, which is 60.
+        self.assertEqual(rate["min_fps"], 5.0)
+        self.assertEqual(rate["p1_low_fps"], 60.0)
+
+    def test_the_process_presenting_most_frames_is_measured(self):
+        log = hud(1, (0, 0), (1, 5), (2, 10)) + hud(2, (0, 0), (1, 90), (2, 180))
+        self.assertEqual(smoke.frame_rate(log)["mean_fps"], 90.0)
+
+    def test_a_count_that_goes_backwards_is_skipped(self):
+        rate = smoke.frame_rate(hud(1, (0, 500), (1, 560), (2, 3), (3, 63)))
+        self.assertEqual(rate["windows"], 2)
+        self.assertEqual(rate["mean_fps"], 60.0)
+
+    def test_untimed_or_single_lines_give_no_rate(self):
+        self.assertIsNone(smoke.frame_rate("metal-HUD: 93,1\nmetal-HUD: 195,1\n"))
+        self.assertIsNone(smoke.frame_rate(hud(1, (0, 93))))
+        self.assertIsNone(smoke.frame_rate(""))
+
+
 class QualifyingRun(unittest.TestCase):
     def test_complete_evidence_qualifies(self):
         checks, _ = result(PLAYER_D3D12, WINE_QUALIFYING)
@@ -264,6 +312,12 @@ class CommandLine(unittest.TestCase):
         self.assertEqual(completed.returncode, 1)
         self.assertFalse(report["qualified"])
         self.assertIn("not qualified", completed.stdout)
+
+    def test_json_carries_the_frame_rate(self):
+        _, report = self.run_script(PLAYER_D3D12, WINE_D3D12_PRESENTING)
+        self.assertEqual(report["frame_rate"]["frames"], 204)
+        _, report = self.run_script(PLAYER_D3D12, WINE_QUALIFYING)
+        self.assertIsNone(report["frame_rate"])
 
     def test_unreadable_log_is_a_usage_error(self):
         completed = subprocess.run(
