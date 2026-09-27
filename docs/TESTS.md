@@ -237,3 +237,20 @@ and asserts what patch 0025 promises on real D3DMetal: `IDXGIDevice` exists, its
 private data set through `ID3D11Device` reads back through it. The CI half of
 0025 is in `tests/d3d11on12frontend.c` against the mock D3D12 device, and
 `check_wine_d3d11_backend.py` rejects a tree that loses it.
+
+### Synchronization-mode runs
+
+`run-peak-smoke.py --sync none|esync|msync` selects exactly one mode;
+`none` is the default. The runner sets all three Wine sync variables explicitly,
+including `WINEFSYNC=0`, and pins `WINESERVER` and `WINELOADER` to the selected
+runtime. It stops and waits for the marked test prefix's server before launch
+and after the run. This ends any existing applications in that test prefix.
+Never use the marker on a player's bottle.
+
+Wine's MSYNC initialization rejects clients whose mode differs from the running
+server. A mode change therefore requires restarting the whole prefix, including
+Steam; changing only the game's environment is insufficient. `launch.json`
+records the selected mode, loader, server, and prefix alongside the smoke logs.
+Run each mode sequentially with a separate output directory. A command-line
+startup probe passing is not evidence of PEAK rendering or GPU fence correctness;
+each mode still needs the positive rendering evidence checked by the smoke judge.

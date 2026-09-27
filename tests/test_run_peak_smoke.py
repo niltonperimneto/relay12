@@ -76,5 +76,33 @@ class Arguments(unittest.TestCase):
                 self.assertEqual(self.environment(WINEDEBUG=inherited)["WINEDEBUG"], expected)
 
 
+class Synchronization(unittest.TestCase):
+    def test_selected_mode_overrides_conflicting_parent_and_runtime(self):
+        for mode in ("none", "msync", "esync"):
+            with self.subTest(mode=mode), mock.patch.dict(runner.os.environ, {
+                    "WINEMSYNC": "1", "WINEESYNC": "1", "WINEFSYNC": "1",
+                    "WINESERVER": "/wrong/server", "WINELOADER": "/wrong/loader"}):
+                env = runner.run_environment(pathlib.Path("/runtime"), pathlib.Path("/prefix"), mode)
+                self.assertEqual(env["WINEMSYNC"], str(int(mode == "msync")))
+                self.assertEqual(env["WINEESYNC"], str(int(mode == "esync")))
+                self.assertEqual(env["WINEFSYNC"], "0")
+                self.assertEqual(env["WINESERVER"], "/runtime/bin/wineserver")
+                self.assertEqual(env["WINELOADER"], "/runtime/bin/wine64")
+
+    def test_server_shutdown_waits_and_does_not_ignore_failure(self):
+        env = {"WINEPREFIX": "/test-prefix"}
+        with mock.patch.object(runner.subprocess, "run") as run:
+            runner.stop_server(pathlib.Path("/runtime/bin/wine64"), env, None)
+        self.assertEqual([call.args[0] for call in run.call_args_list],
+                         [["/runtime/bin/wineserver", "-k"], ["/runtime/bin/wineserver", "-w"]])
+        for call in run.call_args_list:
+            self.assertEqual(call.kwargs["env"], env)
+            self.assertTrue(call.kwargs["check"])
+        with mock.patch.object(runner.subprocess, "run", side_effect=runner.subprocess.TimeoutExpired("server", 30)) as run:
+            with self.assertRaises(runner.subprocess.TimeoutExpired):
+                runner.stop_server(pathlib.Path("/runtime/bin/wine64"), env, None)
+            self.assertEqual(run.call_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
