@@ -15,6 +15,11 @@
  * call must reach the driver exactly once whether or not it went through a
  * proxy, and a flush must still report the driver's submitted result.
  *
+ * The deferred-context loop is the per-frame pattern of a multithreaded
+ * engine: record a few draws, finish a command list, execute it, destroy it.
+ * After the first iteration every list should come from recycled memory, which
+ * is checked, since that is what keeps finishing a list off the frame lock.
+ *
  * Output is one "overhead: <metric>=<value>" line per figure so the workflow
  * can lift them into the step summary without parsing prose.
  */
@@ -28,6 +33,8 @@
 
 #define DRAW_ITERATIONS 200000
 #define FLUSH_ITERATIONS 50000
+#define LIST_ITERATIONS 20000
+#define DRAWS_PER_LIST 16
 
 static int failures;
 
@@ -63,6 +70,9 @@ int main(void)
 {
     typedef LONG (WINAPI *get_count_fn)(void);
     typedef void (WINAPI *get_extended_draw_counts_fn)(LONG *, LONG *, LONG *);
+    typedef void (WINAPI *get_execute_counts_fn)(LONG *, LONG *);
+    typedef void (WINAPI *get_deferred_counts_fn)(LONG *, LONG *, LONG *, LONG *,
+            LONG *, LONG *, LONG *, int *);
     WineD3D11On12AdapterDevice out;
     struct mock_device device;
     struct mock_queue queue;
@@ -72,6 +82,16 @@ int main(void)
     HMODULE mock_driver;
     get_count_fn get_draw_count, get_flush_count;
     get_extended_draw_counts_fn get_extended_draw_counts;
+    get_execute_counts_fn get_execute_counts;
+    get_deferred_counts_fn get_deferred_counts;
+    WineD3D11On12DeferredContext context;
+    WineD3D11On12CommandList list;
+    D3D10DDI_HDEVICE context_handle;
+    LONGLONG record_ticks = 0, finish_ticks = 0, execute_ticks = 0, destroy_ticks = 0;
+    LONG executes_before, executed_before, executes, executed;
+    LONG created_before, recycled_before, created, recycled;
+    HRESULT list_hr = S_OK;
+    LONG j;
     LONG indexed, instanced, indexed_instanced;
     LONG draws_before, flushes_before;
     LONGLONG start;
@@ -93,9 +113,17 @@ int main(void)
     get_extended_draw_counts = mock_driver
             ? (get_extended_draw_counts_fn)(void *)GetProcAddress(mock_driver,
                     "WineD3D11On12MockDriverGetExtendedDrawCounts") : NULL;
-    check(get_draw_count && get_flush_count && get_extended_draw_counts,
+    get_execute_counts = mock_driver
+            ? (get_execute_counts_fn)(void *)GetProcAddress(mock_driver,
+                    "WineD3D11On12MockDriverGetExecuteCounts") : NULL;
+    get_deferred_counts = mock_driver
+            ? (get_deferred_counts_fn)(void *)GetProcAddress(mock_driver,
+                    "WineD3D11On12MockDriverGetDeferredCounts") : NULL;
+    check(get_draw_count && get_flush_count && get_extended_draw_counts
+            && get_execute_counts && get_deferred_counts,
           "the mock driver's counters are exported");
-    if (!get_draw_count || !get_flush_count || !get_extended_draw_counts)
+    if (!get_draw_count || !get_flush_count || !get_extended_draw_counts
+            || !get_execute_counts || !get_deferred_counts)
         return 1;
 
     mock_device_init(&device);
@@ -158,6 +186,54 @@ int main(void)
     check(get_flush_count() - flushes_before == FLUSH_ITERATIONS,
           "every flush reaches the driver exactly once");
     check(all_submitted, "every flush reports the driver's submitted result");
+
+    memset(&context, 0, sizeof(context));
+    context.size = sizeof(context);
+    hr = WineD3D11On12CreateDeferredContextV1(&out, 0, &context);
+    check(hr == S_OK && context.contextFuncs, "a deferred context is created");
+    if (SUCCEEDED(hr))
+    {
+        context_handle.pDrvPrivate = context.hDrvContext;
+        get_execute_counts(&executes_before, &executed_before);
+        get_deferred_counts(NULL, NULL, NULL, &created_before, &recycled_before,
+                NULL, NULL, NULL);
+        for (i = 0; i < LIST_ITERATIONS && SUCCEEDED(list_hr); ++i)
+        {
+            memset(&list, 0, sizeof(list));
+            list.size = sizeof(list);
+            start = now();
+            for (j = 0; j < DRAWS_PER_LIST; ++j)
+                context.contextFuncs->pfnDraw(context_handle, 3, 0);
+            record_ticks += now() - start;
+            start = now();
+            list_hr = WineD3D11On12CreateCommandListV1(&context, &list);
+            finish_ticks += now() - start;
+            start = now();
+            if (SUCCEEDED(list_hr))
+                list_hr = WineD3D11On12ExecuteCommandListV1(&out, &list);
+            execute_ticks += now() - start;
+            start = now();
+            WineD3D11On12DestroyCommandListV1(&list);
+            destroy_ticks += now() - start;
+        }
+        report("deferred_record_draw_ns", record_ticks, frequency.QuadPart,
+                LIST_ITERATIONS * DRAWS_PER_LIST);
+        report("finish_command_list_ns", finish_ticks, frequency.QuadPart,
+                LIST_ITERATIONS);
+        report("execute_command_list_ns", execute_ticks, frequency.QuadPart,
+                LIST_ITERATIONS);
+        report("destroy_command_list_ns", destroy_ticks, frequency.QuadPart,
+                LIST_ITERATIONS);
+        get_execute_counts(&executes, &executed);
+        get_deferred_counts(NULL, NULL, NULL, &created, &recycled, NULL, NULL, NULL);
+        check(SUCCEEDED(list_hr) && executes - executes_before == LIST_ITERATIONS
+                && executed - executed_before == LIST_ITERATIONS * DRAWS_PER_LIST,
+              "every recorded draw runs once per executed list");
+        check(created - created_before == 1
+                && recycled - recycled_before == LIST_ITERATIONS - 1,
+              "after the first, every list is made from recycled memory");
+        WineD3D11On12DestroyDeferredContextV1(&context);
+    }
 
     /* Closing the device is what emits the telemetry report, so the
      * workflow's check of that report depends on this call. */

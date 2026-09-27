@@ -14,7 +14,8 @@
 #
 # Usage:
 #   python3 scripts/summarize_overhead.py OFF_STDOUT OFF_STDERR \
-#       ON_STDOUT ON_STDERR --draws N --flushes N >> "$GITHUB_STEP_SUMMARY"
+#       ON_STDOUT ON_STDERR --draws N --flushes N --command-lists N \
+#       >> "$GITHUB_STEP_SUMMARY"
 
 import argparse
 import pathlib
@@ -43,7 +44,7 @@ def reports(text):
     return found
 
 
-def check_reports(off_stderr, on_stderr, draws, flushes):
+def check_reports(off_stderr, on_stderr, draws, flushes, command_lists):
     errors = []
     if reports(off_stderr):
         errors.append("a telemetry report was printed with RELAY12_TELEMETRY "
@@ -61,6 +62,9 @@ def check_reports(off_stderr, on_stderr, draws, flushes):
         # every submission is an explicit one.
         "submits": flushes,
         "opportunistic_submits": 0,
+        # Executes on the immediate table only; draws recorded on a deferred
+        # context go through its own table, which is not wrapped.
+        "command_lists": command_lists,
     }
     for key, value in expected.items():
         if report.get(key) != value:
@@ -88,13 +92,14 @@ def main(argv=None):
         parser.add_argument(name, type=pathlib.Path)
     parser.add_argument("--draws", type=int, required=True)
     parser.add_argument("--flushes", type=int, required=True)
+    parser.add_argument("--command-lists", type=int, required=True)
     args = parser.parse_args(argv)
 
     def read(path):
         return path.read_text(errors="replace")
 
     errors = check_reports(read(args.off_stderr), read(args.on_stderr),
-                           args.draws, args.flushes)
+                           args.draws, args.flushes, args.command_lists)
     off, on = metrics(read(args.off_stdout)), metrics(read(args.on_stdout))
     if off.get("telemetry") != "off" or on.get("telemetry") != "on":
         errors.append("the two runs did not see the telemetry switch they "

@@ -77,6 +77,15 @@ which D3D11On12 treats as "use the worker thread"
 (`BatchedContextUseWorkerThread` in `third_party/D3D11On12/src/device.cpp`).
 The ring this item proposed exists; there is nothing to build.
 
+Deferred contexts use the same machinery. A command list is a DTL batch
+recorded on the application's thread, and executing it appends that batch to
+the immediate context's, so it is replayed on the same worker thread. The core's
+command-list exports (30–34, see [`D3D11ON12.md`](D3D11ON12.md)) are shaped to
+keep the calling threads cheap. Recording adds nothing per call. Warm command
+lists come from recycled memory and are finished outside the frame lock.
+Telemetry counts executions (`command_lists`, `execute_avg_ns`), and the
+overhead benchmark times record, finish, execute and destroy.
+
 ## 3. Apple Silicon Unified Memory (UMA)
 
 **Already true.** DTL queries `D3D12_FEATURE_ARCHITECTURE1` into
