@@ -1,38 +1,128 @@
 # Performance & Latency Research Roadmap
 
-Because `relay12` operates as a specialized architectural bridge rather than a monolithic translation engine like DXVK, its latency and overhead characteristics are entirely unique. While it benefits from near-zero CPU state tracking (handled natively by `d3d11.dll`) and zero GPU emulation (handled directly by D3DMetal), the layer introduces overhead specifically at the **Command Batching**, **Pipeline State Caching**, and **Memory Marshalling** boundaries.
+This roadmap covers CPU overhead in the D3D11-on-12 path: the DDI host in
+`relay12-d3d11`, the pinned D3D11On12 driver, and D3D12TranslationLayer (DTL)
+beneath it. Each item states what is already true of the pinned sources, what
+is proposed, and what evidence decides it. Nothing here lands without a
+measurement that shows it helped (see [Measurement](#measurement)).
 
-The following represent the highest-impact research vectors for minimizing latency and pushing `relay12`'s CPU overhead ceiling.
+## Where the time goes for PEAK
+
+PEAK does **not** render through D3D11On12. Unity renders natively on D3D12,
+through winecx-gptk's `d3d12shim` into D3DMetal; Relay12's D3D11On12 device
+serves only Unity's On12 interop. PEAK's per-frame cost is therefore the
+shim's, and the shim's hot path (the `ResourceBarrier` interposer) is tracked
+in winecx-gptk rather than here. Items 1-5 pay off for workloads that actually
+issue D3D11 draws through D3D11On12.
+
+---
+
+## Measurement
+
+Measurement comes first, because every item below is a trade and the roadmap
+previously asserted costs nobody had measured. See the "Performance
+measurement" section of [`TESTS.md`](TESTS.md) for how to run each tool.
+
+- **DDI telemetry** (`RELAY12_TELEMETRY=1`). The core wraps the draw and flush
+  slots of the driver's function table with a timing proxy and reports, once at
+  device destruction, draw and flush counts and average costs, the number of
+  draws slower than 1 ms (the host-visible sign of a pipeline-state compile
+  wait), and the number of command-list submissions -- counted from the
+  driver's post-submit callback -- split into explicit and opportunistic.
+  Unset, the proxies are never installed. The switch is read once per process
+  through `InitOnce`.
+- **Dispatch overhead benchmark** (`tests/d3d11on12overhead.c`). Runs in
+  `validate-d3d11on12` against the mock driver with telemetry off and on, and
+  publishes both to the job summary. Informational only: a shared runner under
+  Wine is too noisy for a threshold. What does fail the job is a telemetry
+  report whose counts disagree with what the benchmark dispatched.
+- **Application frame rate.** `scripts/check_peak_smoke_log.py` writes a
+  `frame_rate` object (mean, 1% low, minimum) into `result.json`, computed from
+  the Metal HUD's frame counts and timestamps. Runs are made through Whisky,
+  before and after each change.
+- **End-to-end D3D11 benchmark** (`tests/e2e_d3d11_overhead.cpp`). Needs a real
+  D3D12 under the full stack, so CI only compiles it.
 
 ---
 
 ## 1. Asynchronous & Persistent PSO Compilation
-Right now, if `D3D11On12` encounters a new combination of shaders, blend states, and input layouts, it must instantaneously weave and compile a new Direct3D 12 Pipeline State Object (PSO) entirely on the game's main render thread, causing micro-stutter.
 
-### Research Goals
-- **Asynchronous Compilation:** Investigate patching `D3D11On12` or implementing a WDDM DDI intercept that allows for asynchronous pipeline compilation. By returning an empty/dummy PSO to the game until the real compilation finishes on a background worker thread, we could eliminate loading-screen and traversal stutters (similar to `DXVK_ASYNC`).
-- **Disk Caching:** Explore intercepting the `GetCache` DDI to serialize and store `D3D11On12`'s built pipelines to macOS disk setups, allowing `relay12` to instantly reload PSOs across application restarts.
+**Already true.** DTL compiles pipeline state objects on a thread pool:
+D3D11On12's `GetImmCtxArgs` sets `UseThreadpoolForPSOCreates = true`
+(`third_party/D3D11On12/src/device.cpp`). But the first draw that uses a new
+PSO still blocks on it -- `PipelineState::GetForUse` waits on the thread-pool
+work item (`third_party/D3D12TranslationLayer/include/PipelineState.hpp`,
+`GetForUse`). There is no `ID3D12PipelineLibrary` cache, so every run
+recompiles every PSO.
 
-## 2. Multi-Threaded Command Submission (CS Worker Thread)
-Because `d3d11.dll` handles state tracking synchronously, `relay12` currently generates and submits all D3D12 Command Lists directly on the calling application thread.
+**Proposed.** A persistent cache: a DTL patch that loads and stores an
+`ID3D12PipelineLibrary` keyed by the PSO description, under a path Whisky
+provides.
 
-### Research Goals
-- **Lock-Free Command Rings:** Research building a dedicated **Command Submission (CS) Thread** beneath the DDI layer. The game thread would rapidly write raw commands into a lock-free ring buffer and immediately return, allowing the engine to proceed natively while the dedicated worker thread translates those WDDM commands into D3D12 lists and submits them to D3DMetal independently.
+**Decided by.** A probe first (`tests/peak_on12_probe.cpp`, run through
+Whisky): does D3DMetal report `D3D12_FEATURE_SHADER_CACHE` support, and does
+`ID3D12Device1::CreatePipelineLibrary` succeed? If not, this item is closed --
+D3DMetal's own Metal shader cache may already cover it. Telemetry's
+`slow_draws` is the before/after figure.
 
-## 3. Apple Silicon Unified Memory Exploitation (UMA)
-D3D11 maps memory under the assumption of discrete PCIe bandwidth (VRAM vs. System RAM), and D3D12 cleanly enforces Readback/Upload heaps. However, Apple Silicon utilizes a massive, physically Unified Memory Architecture (UMA).
+**Out of scope.** Returning a placeholder PSO and skipping draws until the real
+one compiles (`DXVK_ASYNC`-style). It changes rendering output and needs an
+opt-in design of its own.
 
-### Research Goals
-- **Eliminating Staging Copies:** When a D3D11 game requests CPU-readback of an active texture, `relay12` currently halts, syncs the D3D12 queue, and copies the data to a staging heap. We should research D3DMetal's `D3D12_HEAP_TYPE_CUSTOM` implementations to map Metal's shared memory pages directly into the game. By mapping memory as both CPU-visible and GPU-visible simultaneously, we could eliminate entire classes of WDDM staging operations.
+## 2. Multi-Threaded Command Submission
 
-## 4. Smart Command Flush Heuristics
-Because D3D11 is an immediate-mode API, games do not explicitly declare when to execute GPU queues. `relay12` must defer commands until it feels it is "safe" or optimal to execute them, or until `Flush()` is explicitly called. Delaying flushes minimizes CPU overhead by maximizing batching, but hurts latency. Continual flushing minimizes latency but starves the CPU.
+**Already true.** DTL's `BatchedContext` records the application's calls and
+replays them on a worker thread. The core passes `createDevice.Flags == 0`,
+which D3D11On12 treats as "use the worker thread"
+(`BatchedContextUseWorkerThread` in `third_party/D3D11On12/src/device.cpp`).
+The ring this item proposed exists; there is nothing to build.
 
-### Research Goals
-- **Contextual Render Boundaries:** Train `relay12` to identify specific RenderPass logic boundaries inside the raw command stream to construct heuristic execution triggers. For example, explicitly triggering a D3D12 execute queue following heavy Compute Shader Dispatches (`Dispatch`) or massive frame-clears (`ClearRenderTargetView`), rather than waiting for an arbitrary byte-limit on the command queue to be reached.
+Deferred contexts use the same machinery. A command list is a DTL batch
+recorded on the application's thread, and executing it appends that batch to
+the immediate context's, so it is replayed on the same worker thread. The core's
+command-list exports (30–34, see [`D3D11ON12.md`](D3D11ON12.md)) are shaped to
+keep the calling threads cheap. Recording adds nothing per call. Warm command
+lists come from recycled memory and are finished outside the frame lock.
+Telemetry counts executions (`command_lists`, `execute_avg_ns`), and the
+overhead benchmark times record, finish, execute and destroy.
+
+## 3. Apple Silicon Unified Memory (UMA)
+
+**Already true.** DTL queries `D3D12_FEATURE_ARCHITECTURE1` into
+`m_architecture` (`ImmediateContext::QueryArchitectureFlags`), but nothing reads
+`isUMA` or `iscacheCoherentUMA`. Staging resources always live in the
+`READBACK`/`UPLOAD` heaps chosen by `Resource::GetD3D12HeapType`, and mapping a
+dynamic texture for read goes through a copy (`MapDynamicTexture`).
+
+**Proposed.** When the device reports cache-coherent UMA, place CPU-read/write
+staging resources in a CPU-visible `CUSTOM` heap (`WRITE_BACK`, `L0`) instead,
+removing the copy.
+
+**Decided by.** A probe of `ARCHITECTURE1` and of `CUSTOM` heap creation with
+those properties on D3DMetal. Correctness is gated by the mock driver's
+byte-exact readback tests.
+
+## 4. Command Flush Heuristics
+
+**A bug, not a heuristic.** DTL submits a command list early when the upload
+space allocated since the last submit exceeds
+`MaxAllocatedUploadHeapSpacePerCommandList`
+(`CommandListManager::SubmitCommandListIfNeeded`). The limit is
+`min(256 MB, CreationArgs.MaxAllocatedUploadHeapSpacePerCommandList)`, and
+D3D11On12's `GetImmCtxArgs` never sets that field, so it is zero-initialised.
+The limit is therefore zero: the first `PostRender` after *any* upload submits
+if the GPU is idle. A title that updates a dynamic constant buffer before each
+draw -- the common D3D11 pattern -- can pay a submission per draw. The fix is a D3D11On12 patch that sets the
+field to DTL's own 256 MB default.
+
+**Proposed afterwards, only if measured.** Telemetry's `opportunistic_submits`
+shows whether submit churn remains once the limit is fixed. Only then consider
+submitting after heavy `Dispatch` or full render-target clears.
 
 ## 5. Stripping Redundant Resource Barriers
-`D3D11On12` is highly defensive and generates hundreds of explicit D3D12 `ResourceBarrier` transition commands per frame to guarantee safety across API calls. However, modern Metal drivers on macOS implicitly track their own dependency graphs and physical resource barriers under the hood.
 
-### Research Goals
-- **Barrier Filtering:** Measure what happens if `relay12` actively strips or filters particular D3D12 state transitions (such as `D3D12_RESOURCE_STATE_COMMON` returns) before they are serialized and passed to D3DMetal. If D3DMetal intrinsically enforces its own bounding on Apple Silicon, stripping these explicit barrier commands from `relay12`'s lists could trivially trim significant CPU translation overhead with no loss of stability.
+**Experiment only.** Whether D3DMetal tolerates missing transitions is unknown,
+and stripping DTL's barriers risks silent corruption rather than a crash. Count
+barriers per frame first; consider an environment-gated experiment only if the
+count is large enough to matter, and otherwise record this item as rejected with
+the numbers.

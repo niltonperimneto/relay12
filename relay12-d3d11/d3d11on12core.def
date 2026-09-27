@@ -28,3 +28,8 @@ WineD3D11On12UnmapTexture2DV1 @26
 WineD3D11On12CheckFrameSupportV1 @27
 WineD3D11On12CreateWrappedTexture2DV1 @28
 WineD3D11On12SetWrappedOwnershipV1 @29
+WineD3D11On12CreateDeferredContextV1 @30
+WineD3D11On12DestroyDeferredContextV1 @31
+WineD3D11On12CreateCommandListV1 @32
+WineD3D11On12DestroyCommandListV1 @33
+WineD3D11On12ExecuteCommandListV1 @34
