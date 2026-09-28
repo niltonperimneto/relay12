@@ -380,6 +380,9 @@ BOOL CALLBACK initializeTelemetry(PINIT_ONCE, PVOID, PVOID *) noexcept
  * see that wait directly, but it is what makes an empty draw take a frame's
  * worth of a millisecond. */
 constexpr LONGLONG telemetrySlowDrawDivisor = 1000;
+/* A census line every this many flushes: several seconds of play at the one or
+ * two flushes a frame a game makes, so a leak reads as a trend in the log. */
+constexpr LONG64 telemetryCensusFlushInterval = 1024;
 
 /* Per device, so two devices do not blur each other's figures.  Every counter
  * is moved only by Interlocked*: the driver's post-submit callback runs on the
@@ -403,6 +406,27 @@ struct DeviceTelemetry
     volatile LONG64 submits;
     volatile LONG64 commandListsExecuted;
     volatile LONG64 executeTicks;
+};
+
+/* Live device objects, to show a leak as a count that only climbs during
+ * gameplay. Kept whether or not telemetry is on: every change already happens
+ * under resourceRegistryLock, so it costs an increment. The flush proxy and the
+ * destruction report read it without the lock and only want a recent value.
+ *
+ * An orphaned texture is one the frontend destroyed while a render target view
+ * of it is still alive. Wine's frontend never does that -- each view holds its
+ * texture's backend reference until the view is gone -- so a nonzero count is
+ * an ordering bug, not a leak. A view the frontend leaks keeps its texture
+ * published and shows up in the live counts instead. */
+struct ResourceCensus
+{
+    volatile LONG buffers;
+    volatile LONG textures;
+    volatile LONG renderTargets;
+    volatile LONG orphanedTextures;
+    LONG peakTextures;
+    LONG peakRenderTargets;
+    LONG peakOrphanedTextures;
 };
 
 struct AdapterState;
@@ -574,6 +598,7 @@ struct AdapterState
     PipelineStateNode *pipelineStates;
     PipelineStateNode *boundPipelineStates[3];
     DeviceTelemetry telemetry;
+    ResourceCensus census;
     alignas(8) unsigned char privateDevice[1];
 };
 
@@ -695,6 +720,33 @@ void unlinkResource(ResourceState *resource) noexcept
     ReleaseSRWLockExclusive(&resourceRegistryLock);
 }
 
+/* Caller holds resourceRegistryLock. */
+void countCensus(volatile LONG &live, LONG &peak, LONG delta) noexcept
+{
+    const LONG now = InterlockedExchangeAdd(&live, delta) + delta;
+    if (now > peak)
+        peak = now;
+}
+
+/* Caller holds resourceRegistryLock. */
+void countOwnerResource(ResourceState *resource, LONG delta) noexcept
+{
+    ResourceCensus &census = resource->owner->census;
+    if (resource->kind == RESOURCE_KIND_TEXTURE2D)
+        countCensus(census.textures, census.peakTextures, delta);
+    else
+        InterlockedExchangeAdd(&census.buffers, delta);
+}
+
+/* Caller holds resourceRegistryLock. */
+void linkOwnerResource(ResourceState *resource) noexcept
+{
+    AdapterState *owner = resource->owner;
+    resource->ownerNext = owner->resources;
+    owner->resources = resource;
+    countOwnerResource(resource, 1);
+}
+
 void unlinkOwnerResource(ResourceState *resource) noexcept
 {
     AdapterState *owner = resource->owner;
@@ -704,7 +756,10 @@ void unlinkOwnerResource(ResourceState *resource) noexcept
     while (*link && *link != resource)
         link = &(*link)->ownerNext;
     if (*link)
+    {
         *link = resource->ownerNext;
+        countOwnerResource(resource, -1);
+    }
 }
 
 void destroyResourceState(ResourceState *resource) noexcept
@@ -757,7 +812,36 @@ void CALLBACK hostPerformAmortizedProcessing(D3D10DDI_HRTCORELAYER runtimeDevice
         InterlockedIncrement64(&state->telemetry.submits);
 }
 
-void reportTelemetry(const AdapterState *state) noexcept
+struct CensusSnapshot
+{
+    LONG buffers, textures, renderTargets, orphanedTextures;
+    LONG peakTextures, peakRenderTargets, peakOrphanedTextures;
+};
+
+CensusSnapshot snapshotCensus(const ResourceCensus &census) noexcept
+{
+    return {census.buffers, census.textures, census.renderTargets,
+            census.orphanedTextures, census.peakTextures,
+            census.peakRenderTargets, census.peakOrphanedTextures};
+}
+
+void reportCensus(const char *when, LONG64 flushes,
+        const CensusSnapshot &census) noexcept
+{
+    char report[320];
+    std::snprintf(report, sizeof(report),
+            "d3d11on12core census (%s): flushes=%lld buffers=%ld "
+            "textures=%ld peak_textures=%ld rtvs=%ld peak_rtvs=%ld "
+            "orphaned_textures=%ld peak_orphaned_textures=%ld\n",
+            when, static_cast<long long>(flushes), census.buffers,
+            census.textures, census.peakTextures, census.renderTargets,
+            census.peakRenderTargets, census.orphanedTextures,
+            census.peakOrphanedTextures);
+    wineD3D11DiagReport(report);
+}
+
+void reportTelemetry(const AdapterState *state,
+        const CensusSnapshot &atDestroy) noexcept
 {
     const DeviceTelemetry &telemetry = state->telemetry;
     if (!telemetry.ticksPerSecond)
@@ -797,6 +881,8 @@ void reportTelemetry(const AdapterState *state) noexcept
             static_cast<long long>(opportunistic),
             static_cast<long long>(executed), executeAverage);
     wineD3D11DiagReport(report);
+    /* What the frontend still held when it destroyed the device. */
+    reportCensus("device destroyed", flushes, atDestroy);
 }
 
 void destroyRenderTargetState(RenderTargetState *view) noexcept;
@@ -809,6 +895,9 @@ void destroyAdapterState(AdapterState *state) noexcept
 {
     if (!state)
         return;
+
+    /* Before the teardown below empties every list without counting. */
+    const CensusSnapshot atDestroy = snapshotCensus(state->census);
 
     /* Before anything a command list could reference, and before the device:
      * the driver retires a destroyed list's batch through the immediate
@@ -839,7 +928,7 @@ void destroyAdapterState(AdapterState *state) noexcept
     /* After DestroyDevice, which joins the worker thread that reports
      * submissions, so the submit count is final. */
     if (state->deviceCreated)
-        reportTelemetry(state);
+        reportTelemetry(state, atDestroy);
     if (state->adapterOpened && state->adapterFuncs.pfnCloseAdapter)
         state->adapterFuncs.pfnCloseAdapter(state->hAdapter);
     if (state->queue)
@@ -920,13 +1009,16 @@ void telemetryDrawIndexedInstanced(D3D10DDI_HDEVICE device,
 BOOL telemetryFlush(D3D10DDI_HDEVICE device, UINT contextType,
         UINT flushFlags)
 {
-    DeviceTelemetry &telemetry = adapterStateOf(device)->telemetry;
+    AdapterState *state = adapterStateOf(device);
+    DeviceTelemetry &telemetry = state->telemetry;
     const LONGLONG start = telemetryNow();
     const BOOL submitted = telemetry.flush(device, contextType, flushFlags);
     InterlockedAdd64(&telemetry.flushTicks, telemetryNow() - start);
-    InterlockedIncrement64(&telemetry.flushes);
+    const LONG64 flushes = InterlockedIncrement64(&telemetry.flushes);
     if (submitted)
         InterlockedIncrement64(&telemetry.flushesSubmitted);
+    if (!(flushes % telemetryCensusFlushInterval))
+        reportCensus("periodic", flushes, snapshotCensus(state->census));
     return submitted;
 }
 
@@ -1656,8 +1748,7 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateBufferV1(
     AcquireSRWLockExclusive(&resourceRegistryLock);
     resource->registryNext = resourceRegistry;
     resourceRegistry = resource;
-    resource->ownerNext = owner->resources;
-    owner->resources = resource;
+    linkOwnerResource(resource);
     ReleaseSRWLockExclusive(&resourceRegistryLock);
 
     InterlockedExchange(&owner->lastDdiError, S_OK);
@@ -1865,8 +1956,7 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateTexture2DV1(
     AcquireSRWLockExclusive(&resourceRegistryLock);
     resource->registryNext = resourceRegistry;
     resourceRegistry = resource;
-    resource->ownerNext = owner->resources;
-    owner->resources = resource;
+    linkOwnerResource(resource);
     ReleaseSRWLockExclusive(&resourceRegistryLock);
     InterlockedExchange(&owner->lastDdiError, S_OK);
     owner->deviceFuncs.pfnCreateResource(owner->hDevice, &args,
@@ -1915,6 +2005,11 @@ extern "C" HRESULT WINAPI WineD3D11On12DestroyTexture2DV1(
             {
                 resource = entry;
                 unlinkOwnerResource(entry);
+            }
+            else
+            {
+                ResourceCensus &census = entry->owner->census;
+                countCensus(census.orphanedTextures, census.peakOrphanedTextures, 1);
             }
             break;
         }
@@ -2561,6 +2656,7 @@ void destroyRenderTargetState(RenderTargetState *view) noexcept
         view->publicHandle->hDrvView = nullptr;
     }
     --view->resource->viewCount;
+    InterlockedDecrement(&view->owner->census.renderTargets);
     HeapFree(GetProcessHeap(), 0, view);
 }
 
@@ -2625,6 +2721,7 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateRenderTargetViewV1(
     if (FAILED(hr)) { HeapFree(GetProcessHeap(), 0, v); return hr; }
     v->created = true;
     ++resource->viewCount;
+    countCensus(owner->census.renderTargets, owner->census.peakRenderTargets, 1);
     v->ownerNext = owner->renderTargets;
     owner->renderTargets = v;
     v->registryNext = renderTargetRegistry;
@@ -2657,6 +2754,7 @@ extern "C" HRESULT WINAPI WineD3D11On12DestroyRenderTargetViewV1(WineD3D11On12Re
             {
                 orphan = r;
                 unlinkOwnerResource(r);
+                InterlockedDecrement(&r->owner->census.orphanedTextures);
             }
         }
         view->hDrvView = nullptr;
@@ -2941,8 +3039,7 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateWrappedTexture2DV1(
         FrameLock lock;
         r->registryNext = resourceRegistry;
         resourceRegistry = r;
-        r->ownerNext = owner->resources;
-        owner->resources = r;
+        linkOwnerResource(r);
     }
     InterlockedExchange(&owner->lastDdiError, S_OK);
     f.pfnOpenResource(owner->hDevice, &args, r->driverHandle, r->runtimeHandle);
