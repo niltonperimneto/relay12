@@ -260,7 +260,7 @@ jobs:
           x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Werror \
             -static -Icompat tests/relay_batch_submission_bench.cpp -lsynchronization \
             -o "$RUNNER_TEMP/relay_batch_submission_bench.exe"
-          timeout 120 wine "$RUNNER_TEMP/relay_batch_submission_bench.exe" \
+          timeout 120 wine "$RUNNER_TEMP/relay_batch_submission_bench.exe" --quick \
             | tee "$RUNNER_TEMP/relay_batch_submission_bench.log"
           cat "$RUNNER_TEMP/relay_batch_submission_bench.log" >> "$GITHUB_STEP_SUMMARY"
           worktree="$RUNNER_TEMP/dtl-port-source"
