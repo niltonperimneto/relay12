@@ -236,6 +236,22 @@ debugger:
 d3d11on12 pipeline telemetry: non_blocking=… draws_skipped_for_pso=… pso_waits=… pso_wait_ns=…
 ```
 
+With the same variable the core also reports a census of the device's live
+objects, every 1024 flushes and once more at destruction, taken before the
+teardown frees what is left:
+
+```
+d3d11on12core census (periodic|device destroyed): flushes=… buffers=… textures=… peak_textures=… rtvs=… peak_rtvs=… orphaned_textures=… peak_orphaned_textures=…
+```
+
+The counts are kept whether or not telemetry is on; only the report is gated.
+A frontend leak reads as `textures` or `rtvs` that only climb across the
+periodic lines. `orphaned_textures` counts textures destroyed while a view of
+them is still alive. Wine's frontend never does that, because each view holds
+its texture's backend reference, so anything above zero there is an ordering
+bug, not a leak. A leaked view keeps its texture published and shows in the
+live counts instead.
+
 A PSO wait or skip happens on DTL's worker thread, so the host's draw timing
 cannot see it; these counters can. `tests/test_telemetry.py` compares each
 proxy's signature with its slot's typedef in `ddi/wine_d3d11ddi.h`, since a

@@ -121,6 +121,55 @@ class ProxySignatures(unittest.TestCase):
                 self.assertEqual(fields[saved.group(1)], slots[slot])
 
 
+def function_body(source, name):
+    # The definition, not a forward declaration: the signature ends in a brace.
+    body = re.search(rf"^\w[\w\s\*&]*\b{name}\([^;{{]*?\)\s*(?:noexcept\s*)?\n\{{.*?^\}}",
+                     source, re.S | re.M)
+    if not body:
+        raise AssertionError(f"no definition of {name}")
+    return body.group(0)
+
+
+class ResourceCensus(unittest.TestCase):
+    """The live-object census is only worth reading if nothing bypasses it."""
+
+    def setUp(self):
+        self.source = CORE.read_text()
+
+    def test_resources_join_a_device_only_through_the_counted_link(self):
+        # A new creation path that links its resource by hand would be
+        # invisible to the census, and a leak through it would read as flat.
+        link = function_body(self.source, "linkOwnerResource")
+        for match in re.finditer(r"(\w+)->resources\s*=\s*([^;]+);", self.source):
+            if match.group(2).strip().endswith("->ownerNext"):
+                continue    # an unlink or the teardown pop, not a new member
+            with self.subTest(statement=match.group(0)):
+                self.assertIn(match.group(0), link)
+
+    def test_unlinking_uncounts(self):
+        body = function_body(self.source, "unlinkOwnerResource")
+        self.assertIn("countOwnerResource(resource, -1)", body)
+
+    def test_every_view_is_counted_both_ways(self):
+        self.assertEqual(
+            len(re.findall(r"\+\+\w+->viewCount;", self.source)),
+            len(re.findall(r"countCensus\(\w+->census\.renderTargets", self.source)))
+        destroy = function_body(self.source, "destroyRenderTargetState")
+        self.assertIn("InterlockedDecrement(&view->owner->census.renderTargets)",
+                      destroy)
+
+    def test_the_destruction_census_is_taken_before_teardown(self):
+        body = function_body(self.source, "destroyAdapterState")
+        self.assertLess(body.index("snapshotCensus(state->census)"),
+                        body.index("destroyAllDeferredWork(state)"))
+
+    def test_the_census_line_is_not_read_as_a_telemetry_report(self):
+        line = ("d3d11on12core census (device destroyed): flushes=0 buffers=0 "
+                "textures=2 peak_textures=2 rtvs=1 peak_rtvs=1 "
+                "orphaned_textures=0 peak_orphaned_textures=1\n")
+        self.assertIsNone(summarize.REPORT.search(line))
+
+
 class Gating(unittest.TestCase):
     def setUp(self):
         self.source = CORE.read_text()
