@@ -353,11 +353,14 @@ without sleepers, real payload recycling, and a forced notification between
 the final predicate check and the address wait. Null pointers are rejected
 because they are the ring's empty sentinel.
 
-`tests/relay_batch_submission_bench.cpp` compares the ring with Win32 semaphores
-and a mutex/deque. It checks every payload and prints three timing samples per
-implementation (100,000 transfers each), archived in the CI job summary. Times
-are informational; corrupted payloads and timeouts fail. This is a primitive
-handoff benchmark, not a substitute for running DTL or PEAK.
+`tests/relay_batch_submission_bench.cpp` compares upstream's semaphore/deque
+handoff with the ring as DTL builds it (128 spins, then an address wait) and
+with no spin. It checks every payload and a checksum of per-batch work, and
+prints CSV rows of wall and CPU time per batch, with and without that work,
+rotating the variant order across trials. CI runs `--quick` (5,000 transfers,
+three trials) into the job summary; the full run is 100,000 transfers and seven
+trials. Times are informational; corrupted payloads and timeouts fail. This is
+a primitive handoff benchmark, not a substitute for running DTL or PEAK.
 
 The DTL follow-up patch queues the finished batch before invoking completion
 callbacks, rechecks idle after callbacks, and preserves ProcessBatch's progress
