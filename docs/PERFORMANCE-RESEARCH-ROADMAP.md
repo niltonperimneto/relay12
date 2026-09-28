@@ -208,3 +208,34 @@ Existing installations must replace/rebuild the driver to regain the default.
 Correctness tests passed natively, under ThreadSanitizer, and under all three
 requested Wine settings. A PEAK run and application telemetry before/after
 remain necessary to assess actual frame-time impact, especially with MSYNC.
+
+#### Rerun with more trials (2026-09-28, later)
+
+A second run found the MSYNC regression above to be noise. It used 7 trials
+per variant instead of 3, rotated the starting variant each trial and reversed
+alternate trials, added a CPU-time column and a variant with per-batch work on
+the worker, and restarted the wineserver between modes so the setting
+actually took (the first attempt at MSYNC failed to bootstrap against a server
+left running without it). Same machine and Wine 11.17, median ns per batch:
+
+| Synchronization | Semaphore/deque | Ring, address wait (as built) | Ring CPU vs semaphore CPU |
+| --- | ---: | ---: | ---: |
+| Standard (`WINEMSYNC=0`) | 30,725 | 1,490 | 1,600 vs 23,700 |
+| MSYNC (startup confirmed) | 1,753 | 1,329 | 1,400 vs 3,500 |
+
+With 256 iterations of work per batch the ordering is the same (MSYNC: 1,732
+against 1,226). The ring is faster in both modes and uses less than half the
+CPU under MSYNC. The same sweep tried the ring with a Win32 semaphore in place
+of the address wait, and 0, 16, 32 and 128 spins before sleeping. The semaphore
+wait was never better than the address wait and was eight times slower without
+MSYNC, and the spin count moved the medians by less than the trial noise, so
+neither became a build option. Raw samples:
+[the sweep record](validation/2026-09-28-batch-handoff-sweep/result.json).
+
+This removes the benchmark half of the case for the semaphore default, not the
+PEAK half. The handoff is a few microseconds of a frame either way, so a
+PEAK slowdown, if real, would have to come from somewhere the primitive does
+not model: the worker's position relative to the GPU submission, or the
+128-spin busy wait competing with the game's own threads on a 6-core part. The
+default stays `semaphore` until a controlled PEAK comparison with frame times
+exists; `first-frame-ring-*` artifacts are the build to compare against.
