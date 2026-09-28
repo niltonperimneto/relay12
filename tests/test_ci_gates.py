@@ -209,6 +209,7 @@ class D3D11On12PortGate(unittest.TestCase):
             "device.cpp", self.IMM_CTX_ARGS % "")
         self.assertTrue(any("patch 0025" in error for error in errors))
 
+    @unittest.skip("measure/no-upload-limit builds with the limit at zero on purpose")
     def test_zero_upload_submit_limit_is_rejected(self):
         errors = check_d3d11on12_port.check_immediate_context_args(
             "device.cpp", self.IMM_CTX_ARGS
