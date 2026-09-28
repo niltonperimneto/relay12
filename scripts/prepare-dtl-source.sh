@@ -7,6 +7,14 @@ source_dir=${1:-third_party/D3D12TranslationLayer}
 repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 expected_revision=b68ebbc6dab4195f7d4819ea78f2a60c985b853a
 
+# MSYNC and PEAK measurements regress with the experimental address-wait ring.
+# Keep the upstream semaphore handoff unless explicitly building an A/B variant.
+batch_handoff=${RELAY12_BATCH_HANDOFF:-semaphore}
+case "$batch_handoff" in
+    semaphore|ring) ;;
+    *) echo "invalid RELAY12_BATCH_HANDOFF: $batch_handoff (expected semaphore or ring)" >&2; exit 1 ;;
+esac
+
 test -d "$source_dir"
 actual_revision=$(git -C "$source_dir" rev-parse HEAD)
 if test "$actual_revision" != "$expected_revision"; then
@@ -16,6 +24,10 @@ fi
 
 for patch in "$repository_root"/patches/dtl/*.patch; do
     test -e "$patch" || break
+    case "${patch##*/}" in
+        0022-lock-free-batch-submission.patch|0024-preserve-reentrant-batch-completion-order.patch)
+            test "$batch_handoff" = ring || continue ;;
+    esac
     git -C "$source_dir" apply --check --ignore-space-change \
             --ignore-whitespace "$patch"
     git -C "$source_dir" apply --ignore-space-change --ignore-whitespace \
@@ -36,7 +48,9 @@ cp "$repository_root/compat/relay_d3d12_struct_return.hpp" \
     "$source_dir/include/relay_d3d12_struct_return.hpp"
 cp "$repository_root/compat/relay_intsafe_compat.hpp" \
     "$source_dir/include/relay_intsafe_compat.hpp"
+cp "$repository_root/compat/relay_batch_ring.hpp" \
+    "$source_dir/include/relay_batch_ring.hpp"
 
 python3 "$repository_root/scripts/inventory_dtl_portability.py" \
     "$source_dir" --check "$repository_root/docs/dtl-portability-baseline.json"
-echo "prepared D3D12TranslationLayer source at $actual_revision"
+echo "prepared D3D12TranslationLayer source at $actual_revision (batch handoff: $batch_handoff)"

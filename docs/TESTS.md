@@ -348,3 +348,44 @@ checks, copied and stale handles, retention while bound, command-list state rese
 and idempotent release before/after teardown. A flush counter must remain zero.
 It runs in `validate-d3d11on12`; like other mock tests it proves dispatch and
 lifetime, not rendered output or a performance gain.
+
+
+### Batch worker handoff
+
+CI validates both `RELAY12_BATCH_HANDOFF=semaphore` (the default) and `ring`
+through the full build and Wine test suite. The selector is read during source
+preparation, not at runtime. `test_batch_handoff_selection.py` prepares fresh
+pinned clones and checks that default/explicit semaphore builds retain the
+upstream handoff, ring builds include the completion-order fix, and invalid
+values fail before modifying the clone.
+
+`tests/relay_batch_ring_test.cpp` exercises the exact primitives copied into the
+prepared DTL tree. CI builds/runs it both natively (`-pthread`) and as a static
+MinGW executable linked with `-lsynchronization`, using Wine's WaitOnAddress.
+Both runs have a 90-second deadline so a lost wake fails the job rather than
+hanging CI. It covers one million ordered transfers, bounded backpressure,
+concurrent scans under the synchronization lock, shutdown wakeup, no wake calls
+without sleepers, real payload recycling, and a forced notification between
+the final predicate check and the address wait. Null pointers are rejected
+because they are the ring's empty sentinel.
+
+`tests/relay_batch_submission_bench.cpp` compares upstream's semaphore/deque
+handoff with the ring as DTL builds it (128 spins, then an address wait) and
+with no spin. It checks every payload and a checksum of per-batch work, and
+prints CSV rows of wall and CPU time per batch, with and without that work,
+rotating the variant order across trials. CI runs `--quick` (5,000 transfers,
+three trials) into the job summary; the full run is 100,000 transfers and seven
+trials. Times are informational; corrupted payloads and timeouts fail. This is
+a primitive handoff benchmark, not a substitute for running DTL or PEAK.
+
+The DTL follow-up patch queues the finished batch before invoking completion
+callbacks, rechecks idle after callbacks, and preserves ProcessBatch's progress
+result when the worker finishes before the wait begins. Prepared-tree compilation
+covers integration; the host tests do not execute the full DTL worker against a
+GPU. Native ThreadSanitizer can additionally be run with:
+
+```sh
+c++ -std=c++17 -O1 -g -pthread -fsanitize=thread -Icompat \
+    tests/relay_batch_ring_test.cpp -o /tmp/relay_batch_ring_tsan
+/tmp/relay_batch_ring_tsan
+```

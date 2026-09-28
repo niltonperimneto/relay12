@@ -1,0 +1,204 @@
+{
+  "runtime": "wine-11.17 (WhiskyPreview runtime)",
+  "os": "macOS 27.2",
+  "hardware": "Apple A18 Pro, 6 cores",
+  "compiler": "llvm-mingw 20240619 UCRT, -O2 -static",
+  "scope": "Synthetic bounded batch handoff (5 outstanding, 100,000 batches per sample); not GPU, DTL or PEAK validation",
+  "method": "7 trials per variant and workload; each trial rotates the starting variant and alternate trials run in reverse order. work_iterations is per-batch LCG work on the worker. cpu is process user+kernel time per batch.",
+  "modes": {
+    "none": {
+      "backend_confirmation": "WINEMSYNC=0 WINEESYNC=0; wineserver restarted before the run",
+      "median": {
+        "work_0": {
+          "deque-semaphore": {
+            "ns_per_batch": 30725,
+            "cpu_ns_per_batch": 23700
+          },
+          "ring-address-w0-p0": {
+            "ns_per_batch": 1475,
+            "cpu_ns_per_batch": 1600
+          },
+          "ring-address-w128-p128": {
+            "ns_per_batch": 1490,
+            "cpu_ns_per_batch": 1600
+          },
+          "ring-address-w16-p16": {
+            "ns_per_batch": 1521,
+            "cpu_ns_per_batch": 1500
+          },
+          "ring-address-w32-p0": {
+            "ns_per_batch": 1662,
+            "cpu_ns_per_batch": 1600
+          },
+          "ring-address-w32-p32": {
+            "ns_per_batch": 1594,
+            "cpu_ns_per_batch": 1600
+          },
+          "ring-semaphore-w0-p0": {
+            "ns_per_batch": 13252,
+            "cpu_ns_per_batch": 10000
+          },
+          "ring-semaphore-w128-p128": {
+            "ns_per_batch": 11282,
+            "cpu_ns_per_batch": 8800
+          },
+          "ring-semaphore-w16-p16": {
+            "ns_per_batch": 12979,
+            "cpu_ns_per_batch": 9800
+          },
+          "ring-semaphore-w32-p0": {
+            "ns_per_batch": 13285,
+            "cpu_ns_per_batch": 9600
+          },
+          "ring-semaphore-w32-p32": {
+            "ns_per_batch": 12304,
+            "cpu_ns_per_batch": 9600
+          }
+        },
+        "work_256": {
+          "deque-semaphore": {
+            "ns_per_batch": 31385,
+            "cpu_ns_per_batch": 23100
+          },
+          "ring-address-w0-p0": {
+            "ns_per_batch": 1368,
+            "cpu_ns_per_batch": 1400
+          },
+          "ring-address-w128-p128": {
+            "ns_per_batch": 1377,
+            "cpu_ns_per_batch": 1400
+          },
+          "ring-address-w16-p16": {
+            "ns_per_batch": 1379,
+            "cpu_ns_per_batch": 1500
+          },
+          "ring-address-w32-p0": {
+            "ns_per_batch": 1418,
+            "cpu_ns_per_batch": 1500
+          },
+          "ring-address-w32-p32": {
+            "ns_per_batch": 1428,
+            "cpu_ns_per_batch": 1500
+          },
+          "ring-semaphore-w0-p0": {
+            "ns_per_batch": 12404,
+            "cpu_ns_per_batch": 9900
+          },
+          "ring-semaphore-w128-p128": {
+            "ns_per_batch": 12110,
+            "cpu_ns_per_batch": 9100
+          },
+          "ring-semaphore-w16-p16": {
+            "ns_per_batch": 12635,
+            "cpu_ns_per_batch": 9700
+          },
+          "ring-semaphore-w32-p0": {
+            "ns_per_batch": 12834,
+            "cpu_ns_per_batch": 9400
+          },
+          "ring-semaphore-w32-p32": {
+            "ns_per_batch": 12199,
+            "cpu_ns_per_batch": 9500
+          }
+        }
+      }
+    },
+    "msync": {
+      "backend_confirmation": "WINEMSYNC=1; 'msync: up and running' observed",
+      "median": {
+        "work_0": {
+          "deque-semaphore": {
+            "ns_per_batch": 1753,
+            "cpu_ns_per_batch": 3500
+          },
+          "ring-address-w0-p0": {
+            "ns_per_batch": 1370,
+            "cpu_ns_per_batch": 1400
+          },
+          "ring-address-w128-p128": {
+            "ns_per_batch": 1329,
+            "cpu_ns_per_batch": 1400
+          },
+          "ring-address-w16-p16": {
+            "ns_per_batch": 1373,
+            "cpu_ns_per_batch": 1400
+          },
+          "ring-address-w32-p0": {
+            "ns_per_batch": 1355,
+            "cpu_ns_per_batch": 1400
+          },
+          "ring-address-w32-p32": {
+            "ns_per_batch": 1325,
+            "cpu_ns_per_batch": 1400
+          },
+          "ring-semaphore-w0-p0": {
+            "ns_per_batch": 1644,
+            "cpu_ns_per_batch": 1700
+          },
+          "ring-semaphore-w128-p128": {
+            "ns_per_batch": 967,
+            "cpu_ns_per_batch": 1100
+          },
+          "ring-semaphore-w16-p16": {
+            "ns_per_batch": 1423,
+            "cpu_ns_per_batch": 1600
+          },
+          "ring-semaphore-w32-p0": {
+            "ns_per_batch": 1510,
+            "cpu_ns_per_batch": 1700
+          },
+          "ring-semaphore-w32-p32": {
+            "ns_per_batch": 1583,
+            "cpu_ns_per_batch": 1800
+          }
+        },
+        "work_256": {
+          "deque-semaphore": {
+            "ns_per_batch": 1732,
+            "cpu_ns_per_batch": 3400
+          },
+          "ring-address-w0-p0": {
+            "ns_per_batch": 1234,
+            "cpu_ns_per_batch": 1300
+          },
+          "ring-address-w128-p128": {
+            "ns_per_batch": 1226,
+            "cpu_ns_per_batch": 1300
+          },
+          "ring-address-w16-p16": {
+            "ns_per_batch": 1316,
+            "cpu_ns_per_batch": 1400
+          },
+          "ring-address-w32-p0": {
+            "ns_per_batch": 1311,
+            "cpu_ns_per_batch": 1300
+          },
+          "ring-address-w32-p32": {
+            "ns_per_batch": 1326,
+            "cpu_ns_per_batch": 1400
+          },
+          "ring-semaphore-w0-p0": {
+            "ns_per_batch": 1643,
+            "cpu_ns_per_batch": 1800
+          },
+          "ring-semaphore-w128-p128": {
+            "ns_per_batch": 1451,
+            "cpu_ns_per_batch": 1600
+          },
+          "ring-semaphore-w16-p16": {
+            "ns_per_batch": 1640,
+            "cpu_ns_per_batch": 1900
+          },
+          "ring-semaphore-w32-p0": {
+            "ns_per_batch": 1565,
+            "cpu_ns_per_batch": 1800
+          },
+          "ring-semaphore-w32-p32": {
+            "ns_per_batch": 1601,
+            "cpu_ns_per_batch": 1900
+          }
+        }
+      }
+    }
+  }
+}

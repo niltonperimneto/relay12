@@ -13,7 +13,16 @@ permissions:
 jobs:
   validate-d3d11on12:
     runs-on: ubuntu-26.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - handoff: semaphore
+            artifact_suffix: ''
+          - handoff: ring
+            artifact_suffix: '-ring'
     env:
+      RELAY12_BATCH_HANDOFF: ${{ matrix.handoff }}
       WINEDEBUG: -all
       # The tests are console programs; never wait on a mono or gecko install.
       WINEDLLOVERRIDES: mscoree,mshtml=
@@ -76,6 +85,9 @@ jobs:
           worktree="$RUNNER_TEMP/dtl-port-source"
           git clone --quiet --no-hardlinks third_party/D3D12TranslationLayer "$worktree"
           scripts/prepare-dtl-source.sh "$worktree"
+          c++ -std=c++17 -O2 -Wall -Wextra -Werror -pthread \
+            -Icompat tests/relay_batch_ring_test.cpp -o "$RUNNER_TEMP/relay_batch_ring_test"
+          timeout 90 "$RUNNER_TEMP/relay_batch_ring_test"
           git -C "$worktree" -c core.whitespace=cr-at-eol diff --check
           # A bypassed struct-returning call fails the MinGW build anyway;
           # this names the call and its wrapper instead of surfacing as a
@@ -241,6 +253,16 @@ jobs:
             -Icompat tests/relay_member_detect_test.cpp \
             -o "$RUNNER_TEMP/relay_member_detect.exe"
           wine "$RUNNER_TEMP/relay_member_detect.exe"
+          x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Werror \
+            -static -Icompat tests/relay_batch_ring_test.cpp -lsynchronization \
+            -o "$RUNNER_TEMP/relay_batch_ring_test.exe"
+          timeout 90 wine "$RUNNER_TEMP/relay_batch_ring_test.exe"
+          x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Werror \
+            -static -Icompat tests/relay_batch_submission_bench.cpp -lsynchronization \
+            -o "$RUNNER_TEMP/relay_batch_submission_bench.exe"
+          timeout 120 wine "$RUNNER_TEMP/relay_batch_submission_bench.exe" --quick \
+            | tee "$RUNNER_TEMP/relay_batch_submission_bench.log"
+          cat "$RUNNER_TEMP/relay_batch_submission_bench.log" >> "$GITHUB_STEP_SUMMARY"
           worktree="$RUNNER_TEMP/dtl-port-source"
           # A positive milestone now, not an expected failure. ATL, _com_error,
           # the D3DKMT present path and the SDK ETW header are all behind us,
@@ -814,7 +836,7 @@ jobs:
       - name: Upload first-frame runtime
         uses: actions/upload-artifact@v7
         with:
-          name: first-frame-${{ github.event.pull_request.head.sha || github.sha }}
+          name: first-frame${{ matrix.artifact_suffix }}-${{ github.event.pull_request.head.sha || github.sha }}
           path: artifacts/first-frame/
           if-no-files-found: error
           retention-days: 14
@@ -822,7 +844,7 @@ jobs:
       - name: Upload D3D11-on-12 development artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: d3d11on12probe-${{ github.event.pull_request.head.sha || github.sha }}
+          name: d3d11on12probe${{ matrix.artifact_suffix }}-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             d3d11on12probe.exe
             d3d11on12coretest.exe
