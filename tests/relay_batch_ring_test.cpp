@@ -298,9 +298,74 @@ namespace
         check(h.submitted.wakes() == 0, "notify() with no sleeper makes no wake call");
     }
 
+    // Deliberately pause after the final predicate check but before the OS
+    // comparison. A notification in this window must change the waited word,
+    // even though the waiter has not entered its system call yet.
+    struct DelayedWaitPolicy
+    {
+        inline static std::atomic<bool> entered{false}, proceed{false};
+        inline static std::atomic<bool> changed{false};
+        void wait(std::atomic<std::uint64_t>& word, std::uint64_t expected)
+        {
+            entered.store(true, std::memory_order_release);
+            while (!proceed.load(std::memory_order_acquire)) std::this_thread::yield();
+            changed.store(word.load(std::memory_order_acquire) != expected);
+        }
+        void wake_all(std::atomic<std::uint64_t>&) {}
+    };
+
+    void test_notification_before_address_wait()
+    {
+        RelayAddressWaiter<DelayedWaitPolicy, 0> waiter;
+        std::atomic<bool> ready{false};
+        std::thread consumer([&] { waiter.wait_until([&] { return ready.load(); }); });
+        while (!DelayedWaitPolicy::entered.load(std::memory_order_acquire)) std::this_thread::yield();
+        ready.store(true, std::memory_order_release);
+        waiter.notify();
+        DelayedWaitPolicy::proceed.store(true, std::memory_order_release);
+        consumer.join();
+        check(DelayedWaitPolicy::changed, "notification before the OS wait changes the compared word");
+    }
+
+    void test_payload_recycling()
+    {
+        struct Payload { std::uint64_t sequence = 0, inverse = 0; } storage[8];
+        RelaySpscRing<Payload*, 8> queued, free;
+        Waiter submitted, retired;
+        constexpr std::uint64_t count = 200000;
+        for (auto& p : storage) check(free.try_push(&p), "seed the free ring");
+        bool intact = true;
+        std::thread consumer([&] {
+            for (std::uint64_t i = 0; i < count; ++i)
+            {
+                submitted.wait_until([&] { return !queued.empty(); });
+                Payload* p = queued.front();
+                if (p->sequence != i || p->inverse != ~i) intact = false;
+                // Same lifetime ordering as DTL: publish a reusable block
+                // after the last payload access, then retire the queue slot.
+                check(free.try_push(p), "retired payload fits in free ring");
+                queued.pop();
+                retired.notify();
+            }
+        });
+        for (std::uint64_t i = 0; i < count; ++i)
+        {
+            retired.wait_until([&] { return !free.empty() && queued.size() < 5; });
+            Payload* p = nullptr;
+            check(free.try_pop(p), "reuse a retired payload");
+            p->sequence = i; p->inverse = ~i;
+            check(queued.try_push(p), "publish initialized payload");
+            submitted.notify();
+        }
+        consumer.join();
+        check(intact, "release/acquire publishes and safely recycles real payloads");
+        check(free.size() == 8 && queued.empty(), "every owned payload returns exactly once");
+    }
+
     void test_capacity_bound()
     {
         Ring ring;
+        check(!ring.try_push(nullptr) && ring.empty(), "null cannot hide a queued item");
         for (std::uint64_t i = 0; i < Ring::capacity(); ++i)
         {
             check(ring.try_push(encode(i)), "a push below capacity succeeds");
@@ -317,6 +382,8 @@ namespace
 int main()
 {
     test_capacity_bound();
+    test_notification_before_address_wait();
+    test_payload_recycling();
     test_fifo_million();
     test_blocked_producer_and_consumer_are_woken();
     test_scan_concurrent_with_pops();

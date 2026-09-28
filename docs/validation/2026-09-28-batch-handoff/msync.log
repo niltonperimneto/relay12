@@ -1,0 +1,6 @@
+semaphore batches=100000 ns_per_batch=1555 address_wakes=0
+ring batches=100000 ns_per_batch=2257 address_wakes=199550
+ring batches=100000 ns_per_batch=2252 address_wakes=198802
+semaphore batches=100000 ns_per_batch=2034 address_wakes=0
+semaphore batches=100000 ns_per_batch=1976 address_wakes=0
+ring batches=100000 ns_per_batch=1802 address_wakes=199980

@@ -102,7 +102,12 @@ D3D11On12 interop; the benefit is for D3D11 content drawn through D3D11On12.
 replays them on a worker thread. The core passes `createDevice.Flags == 0`,
 which D3D11On12 treats as "use the worker thread"
 (`BatchedContextUseWorkerThread` in `third_party/D3D11On12/src/device.cpp`).
-The ring this item proposed exists; there is nothing to build.
+Batch recording already exists; that does not eliminate the separate
+semaphore/deque handoff to the worker. Patch 0022 replaces that handoff with
+bounded SPSC queues and address waits, retaining the existing worker. Patch
+0024 preserves FIFO and idle semantics when completion callbacks re-enter
+submission. The queue operations are lock-free; recording serialization and
+the synchronization lock around queued flush requests remain.
 
 Deferred contexts use the same machinery. A command list is a DTL batch
 recorded on the application's thread, and executing it appends that batch to
@@ -163,3 +168,28 @@ new flush or draw-time lookup. The lifecycle test asserts zero explicit flushes;
 real workload telemetry and GPU output checks are still required before making
 performance claims. Persistent pipeline libraries remain the separate experiment
 in item 1.
+
+
+### Batch handoff measurement (2026-09-28)
+
+The handoff benchmark uses 100,000 real payload transfers, five outstanding
+batches, and three alternating trials per implementation. It compares a Win32
+semaphore/mutex/deque handoff with the ring/address waiter, not complete DTL
+rendering. On Apple A18 Pro, macOS 27.2, Wine 11.17:
+
+| Requested synchronization | Semaphore median ns/batch | Ring median ns/batch |
+| --- | ---: | ---: |
+| Standard (`WINEMSYNC=0`, `WINEESYNC=0`) | 42,537 | 1,511 |
+| `WINEESYNC=1` (activation unconfirmed) | 42,006 | 2,242 |
+| MSYNC (startup confirmed) | 1,976 | 2,252 |
+
+The ring improves this synthetic workload substantially without MSYNC but is
+about 14% slower at the median with MSYNC. Do not infer an ESYNC-backend result
+from an environment setting alone, or claim a universal performance improvement.
+The trials are noisy and some standard-mode measurement overlapped native
+sanitizer work. Raw samples and environment details are in
+[the validation record](validation/2026-09-28-batch-handoff/result.json).
+
+Correctness tests passed natively, under ThreadSanitizer, and under all three
+requested Wine settings. A PEAK run and application telemetry before/after
+remain necessary to assess actual frame-time impact, especially with MSYNC.
