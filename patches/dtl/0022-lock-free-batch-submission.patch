@@ -1,0 +1,442 @@
+Subject: [PATCH] dtl: hand batches to the worker thread without semaphores
+
+The immediate context records DDI calls into batches that a worker thread
+replays. Upstream hands each batch over with two Win32 semaphores and a
+mutex-guarded std::deque, and SubmitBatchIfIdle polls the consumed
+semaphore with a zero timeout every ten recorded commands while any batch
+is outstanding. On Windows those are cheap kernel calls. Under Wine every
+semaphore operation is a wineserver round trip unless esync/msync is
+active, so the game's recording thread pays an IPC every ten commands,
+another per submitted batch, and one per batch drained on every flush,
+map and synchronous destroy.
+
+Replace the handoff with the single-producer/single-consumer rings and
+address waiter from relay_batch_ring.hpp:
+
+  * m_QueuedBatches and m_FreeBatches become bounded rings of owning
+    pointers. The outstanding count is the distance between the queue's
+    indices, so IsBatchThreadIdle is two loads, not a system call.
+  * Each side sleeps only when there is genuinely nothing to do (worker
+    on an empty queue, recording thread on a full one or in
+    WaitForBatchThreadIdle), through WaitOnAddress, which Wine serves
+    without the server. A notify with nobody asleep is a fence and a load.
+  * SubmitBatch now finishes and queues a batch in one m_RecordingLock
+    scope. Every submitter already serialized on that lock, so the queue
+    has a single producer, and a batch ID below m_RecordingBatchID is
+    always in the queue when SyncWithBatch looks for it.
+  * m_SubmissionLock shrinks to an SRW lock, m_SyncLock, held only by
+    SyncWithBatch and by the worker while it picks up and retires a
+    batch. It keeps upstream's guarantees: SyncWithBatch sees a stable
+    queue and m_CompletedBatchID, a flush mask it ORs into a queued batch
+    is read at retire, and a PrepForCommandQueueSync done on an empty
+    queue finishes before the worker touches the immediate context again.
+    The worker's own flush stays inside the lock, before the slot is
+    released, as upstream ordered it.
+  * PostSubmitCallback still runs on the recording thread, now from
+    DrainCompletions whenever that thread sees the worker retire a batch.
+  * RetireBatch runs from post-batch functions, so on the worker when
+    there is one, which makes the worker the free ring's only producer.
+    A free ring that is full deletes the retired batch instead.
+  * Shutdown sets an exit flag and wakes the worker, which leaves once
+    the queue is empty, instead of posting a semaphore to an empty queue.
+
+The translation layer now imports WaitOnAddress/WakeByAddressAll from
+api-ms-win-core-synch-l1-2-0.dll, so link it with -lsynchronization.
+Command recording, non-worker ProcessBatch and deferred contexts are
+unchanged.
+
+diff --git a/include/BatchedContext.hpp b/include/BatchedContext.hpp
+index 9913797..fa88d46 100644
+--- a/include/BatchedContext.hpp
++++ b/include/BatchedContext.hpp
+@@ -2,6 +2,8 @@
+ // Licensed under the MIT License.
+ #pragma once
+ 
++#include "relay_batch_ring.hpp"
++
+ namespace D3D12TranslationLayer
+ {
+ 
+@@ -736,7 +738,7 @@ private:
+ 
+     bool WaitForBatchThreadIdle();
+     bool IsBatchThreadIdle();
+-    bool WaitForSingleBatch(DWORD timeout);
++    void DrainCompletions();
+     bool IsBatchThread();
+ 
+     void BatchThread();
+@@ -748,12 +750,19 @@ private:
+ 
+ private: // Referenced by recording and batch threads
+     SafeHANDLE m_BatchThread;
+-    SafeHANDLE m_BatchSubmittedSemaphore; // Signaled by recording thread to indicate new work available.
+-    SafeHANDLE m_BatchConsumedSemaphore; // Signaled by batch thread to indicate it's completed work, waited on by main thread when work submitted.
+ 
+-    OptLock<> m_SubmissionLock{ m_CreationArgs.SubmitBatchesToWorkerThread }; // Synchronizes the deques and free page list.
+-    std::deque<std::unique_ptr<Batch>> m_QueuedBatches;
+-    std::deque<std::unique_ptr<Batch>> m_FreeBatches;
++    // Owning pointers. Recording thread pushes (under m_RecordingLock), batch thread pops.
++    relay12::RelaySpscRing<Batch*, 8> m_QueuedBatches;
++    static_assert(decltype(m_QueuedBatches)::capacity() >= c_MaxOutstandingBatches, "queue must hold every outstanding batch");
++    // Owning pointers. Batch thread pushes retired batches, recording thread pops. Overflow is deleted.
++    relay12::RelaySpscRing<Batch*, 16> m_FreeBatches;
++    relay12::RelayBatchWaiter m_BatchSubmitted; // Batch thread waits here for work or exit.
++    relay12::RelayBatchWaiter m_BatchConsumed; // Recording thread waits here for room or idle.
++    std::atomic<bool> m_bBatchThreadExit{ false };
++
++    // Guards m_CompletedBatchID, the flush masks of queued batches, and the batch thread's
++    // pick-up and retire steps, against SyncWithBatch. Never taken per recorded command.
++    relay12::RelaySrwLock m_SyncLock;
+ 
+     // Note: Must be declared before BatchStorageAllocator
+     FreePageContainer m_FreePages{ m_CreationArgs.SubmitBatchesToWorkerThread };
+@@ -781,7 +790,7 @@ private: // Referenced by recording thread
+     static constexpr UINT c_CommandKickoffMinThreshold = 10; // Arbitrary for now
+     OptLock<std::recursive_mutex> m_RecordingLock{ m_CreationArgs.CreatesAndDestroysAreMultithreaded };
+     UINT m_CurrentCommandCount = 0;
+-    UINT m_NumOutstandingBatches = 0;
++    uint64_t m_ObservedConsumedBatches = 0; // Last m_QueuedBatches.consumed() seen by DrainCompletions.
+     uint64_t m_RecordingBatchID = 1;
+ 
+     BatchStorage m_CurrentBatch{ m_BatchStorageAllocator };
+diff --git a/src/BatchedContext.cpp b/src/BatchedContext.cpp
+index 309ca57..1e425ba 100644
+--- a/src/BatchedContext.cpp
++++ b/src/BatchedContext.cpp
+@@ -649,12 +649,6 @@ BatchedContext::BatchedContext(ImmediateContext& ImmCtx, CreationArgs args, Call
+ {
+     if (args.SubmitBatchesToWorkerThread)
+     {
+-        m_BatchSubmittedSemaphore.m_h = CreateSemaphore(nullptr, 0, c_MaxOutstandingBatches, nullptr);
+-        ThrowIfHandleNull(m_BatchSubmittedSemaphore);
+-
+-        m_BatchConsumedSemaphore.m_h = CreateSemaphore(nullptr, 0, c_MaxOutstandingBatches, nullptr);
+-        ThrowIfHandleNull(m_BatchConsumedSemaphore);
+-
+         m_BatchThread.m_h = CreateThread(
+             nullptr, 0,
+             [](void* pContext) -> DWORD
+@@ -678,17 +672,22 @@ BatchedContext::~BatchedContext()
+     }
+     if (m_CreationArgs.SubmitBatchesToWorkerThread)
+     {
+-        assert(m_NumOutstandingBatches == 0 && m_QueuedBatches.empty());
++        assert(m_QueuedBatches.empty());
+ 
+-        // When the batch thread wakes up after consuming a semaphore value, and
+-        // sees that the queue is empty, it will exit.
+-        BOOL value = ReleaseSemaphore(m_BatchSubmittedSemaphore, 1, nullptr);
+-        assert(value == TRUE);
+-        UNREFERENCED_PARAMETER(value);
++        // When the batch thread wakes up and sees the exit flag with an empty
++        // queue, it will exit.
++        m_bBatchThreadExit.store(true, std::memory_order_seq_cst);
++        m_BatchSubmitted.notify();
+ 
+         // Wait for it to exit.
+         WaitForSingleObject(m_BatchThread, INFINITE);
+     }
++
++    Batch* pFree = nullptr;
++    while (m_FreeBatches.try_pop(pFree))
++    {
++        delete pFree;
++    }
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+@@ -1362,7 +1361,7 @@ bool BatchedContext::SyncWithBatch(uint64_t& BatchID, bool DoNotFlush, TFunc&& G
+         }
+     }
+ 
+-    auto SubmissionLock = m_SubmissionLock.TakeLock();
++    std::lock_guard<relay12::RelaySrwLock> SyncLock(m_SyncLock);
+ 
+     if (m_CompletedBatchID < BatchID)
+     {
+@@ -1370,17 +1369,23 @@ bool BatchedContext::SyncWithBatch(uint64_t& BatchID, bool DoNotFlush, TFunc&& G
+         {
+             assert(!m_QueuedBatches.empty());
+ 
+-            // Make sure it's marked to flush when it's done.
+-            auto iter = std::find_if(m_QueuedBatches.begin(), m_QueuedBatches.end(),
+-                                     [&BatchID](std::unique_ptr<Batch> const& p)
++            // Make sure it's marked to flush when it's done: the last queued batch at or
++            // before BatchID. IDs increase along the queue.
++            Batch* pTarget = nullptr;
++            m_QueuedBatches.for_each_queued([&BatchID, &pTarget](Batch* p)
+             {
+-                return p->m_BatchID > BatchID;
++                if (p->m_BatchID <= BatchID)
++                {
++                    pTarget = p;
++                }
+             });
+-            assert(iter != m_QueuedBatches.begin());
+-            --iter;
++            assert(pTarget);
+ 
+             // We don't know what command list types to use on this timeline, so just request all.
+-            (*iter)->m_FlushRequestedMask |= COMMAND_LIST_TYPE_ALL_MASK;
++            if (pTarget)
++            {
++                pTarget->m_FlushRequestedMask |= COMMAND_LIST_TYPE_ALL_MASK;
++            }
+         }
+         return false;
+     }
+@@ -1406,13 +1411,21 @@ bool BatchedContext::SyncWithBatch(uint64_t& BatchID, bool DoNotFlush, TFunc&& G
+         if (FlushMask != 0)
+         {
+             // Not checking thread idle bit as we're already under the lock.
+-            if (m_QueuedBatches.empty())
++            Batch* pFront = nullptr;
++            m_QueuedBatches.for_each_queued([&pFront](Batch* p)
++            {
++                if (!pFront)
++                {
++                    pFront = p;
++                }
++            });
++            if (!pFront)
+             {
+                 m_ImmCtx.PrepForCommandQueueSync(FlushMask);
+             }
+             else
+             {
+-                m_QueuedBatches.front()->m_FlushRequestedMask |= FlushMask;
++                pFront->m_FlushRequestedMask |= FlushMask;
+             }
+             return false;
+         }
+@@ -1757,14 +1770,13 @@ bool TRANSLATION_API BatchedContext::ProcessBatch()
+ //----------------------------------------------------------------------------------------------------------------------------------
+ std::unique_ptr<BatchedContext::Batch> BatchedContext::GetIdleBatch()
+ {
+-    // Assumed m_SubmissionLock is held.
++    // Assumed m_RecordingLock is held: the recording thread is the free ring's only consumer.
+ 
+     // Find a free batch if possible
+-    if (!m_FreeBatches.empty())
++    Batch* pFree = nullptr;
++    if (m_FreeBatches.try_pop(pFree))
+     {
+-        auto batch = std::move(m_FreeBatches.front());
+-        m_FreeBatches.pop_front();
+-        return batch;
++        return std::unique_ptr<Batch>(pFree);
+     }
+     return std::unique_ptr<Batch>(new Batch(m_BatchStorageAllocator));
+ }
+@@ -1787,11 +1799,7 @@ std::unique_ptr<BatchedContext::Batch> BatchedContext::FinishBatch(bool bFlushIm
+         std::swap(m_CurrentBatch, NewBatch);
+         std::swap(m_PostBatchFunctions, NewPostBatchFunctions);
+ 
+-        // Synchronize with the worker thread potentially retiring batches
+-        {
+-            auto SubmissionLock = m_SubmissionLock.TakeLock();
+-            pRet = GetIdleBatch();
+-        }
++        pRet = GetIdleBatch();
+ 
+         pRet->PrepareToSubmit(std::move(NewBatch), std::move(NewPostBatchFunctions), m_RecordingBatchID, m_CurrentCommandCount, bFlushImmCtxAfterBatch);
+         m_CurrentCommandCount = 0;
+@@ -1835,15 +1843,19 @@ void TRANSLATION_API BatchedContext::SubmitCommandListBatch(Batch* pBatch)
+ void TRANSLATION_API BatchedContext::RetireBatch(std::unique_ptr<Batch> pBatch)
+ {
+     // Note: Only used for command list batches - implicit batches have slightly different retiring semantics
++    // It runs from a post-batch function, so on the batch thread when there is one: the
++    // free ring's only producer.
++    assert(IsBatchThread() || !m_CreationArgs.SubmitBatchesToWorkerThread);
+     for (auto& fn : pBatch->m_PostBatchFunctions)
+     {
+         fn();
+     }
+ 
+-    auto Lock = m_SubmissionLock.TakeLock();
+-
+     pBatch->Retire(m_FreePages);
+-    m_FreeBatches.emplace_back(std::move(pBatch));
++    if (m_FreeBatches.try_push(pBatch.get()))
++    {
++        pBatch.release();
++    }
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+@@ -1857,35 +1869,30 @@ bool TRANSLATION_API BatchedContext::SubmitBatch(bool bFlushImmCtxAfterBatch)
+         return ProcessBatch();
+     }
+ 
++    // Finishing and queueing under one recording-lock scope makes every submitter the same
++    // single producer, and means a batch ID below m_RecordingBatchID is always queued.
++    auto Lock = m_RecordingLock.TakeLock();
+     auto pBatch = FinishBatch(bFlushImmCtxAfterBatch);
+     if (!pBatch)
+     {
+         return false;
+     }
+ 
++    // Check if there's room in the queue.
++    assert(m_QueuedBatches.size() <= c_MaxOutstandingBatches);
++    if (m_QueuedBatches.size() >= c_MaxOutstandingBatches)
+     {
+-        auto Lock = m_SubmissionLock.TakeLock();
+-        m_QueuedBatches.emplace_back(std::move(pBatch));
++        m_BatchConsumed.wait_until([this]() { return m_QueuedBatches.size() < c_MaxOutstandingBatches; });
+     }
++    DrainCompletions();
+ 
+-    {
+-        auto Lock = m_RecordingLock.TakeLock();
+-
+-        // Check if there's room in the semaphores.
+-        assert(m_NumOutstandingBatches <= c_MaxOutstandingBatches);
+-        if (m_NumOutstandingBatches == c_MaxOutstandingBatches)
+-        {
+-            WaitForSingleBatch(INFINITE);
+-            assert(m_NumOutstandingBatches < c_MaxOutstandingBatches);
+-        }
+-
+-        // Wake up the batch thread
+-        BOOL value = ReleaseSemaphore(m_BatchSubmittedSemaphore, 1, nullptr);
+-        assert(value == TRUE);
+-        UNREFERENCED_PARAMETER(value);
++    bool bQueued = m_QueuedBatches.try_push(pBatch.get());
++    assert(bQueued);
++    UNREFERENCED_PARAMETER(bQueued);
++    pBatch.release();
+ 
+-        ++m_NumOutstandingBatches;
+-    }
++    // Wake up the batch thread, if it is asleep.
++    m_BatchSubmitted.notify();
+     return true;
+ }
+ 
+@@ -1908,11 +1915,12 @@ bool BatchedContext::WaitForBatchThreadIdle()
+ {
+     assert(!IsBatchThread());
+     bool bRet = false;
+-    while (m_NumOutstandingBatches)
++    if (!m_QueuedBatches.empty())
+     {
+         bRet = true;
+-        WaitForSingleBatch(INFINITE);
++        m_BatchConsumed.wait_until([this]() { return m_QueuedBatches.empty(); });
+     }
++    DrainCompletions();
+     return bRet;
+ }
+ 
+@@ -1920,24 +1928,27 @@ bool BatchedContext::WaitForBatchThreadIdle()
+ bool BatchedContext::IsBatchThreadIdle()
+ {
+     assert(!IsBatchThread());
+-    while (m_NumOutstandingBatches > 0 && WaitForSingleBatch(0));
+-    return m_NumOutstandingBatches == 0;
++    // Two loads; no system call. This runs every c_CommandKickoffMinThreshold commands.
++    bool bIdle = m_QueuedBatches.empty();
++    DrainCompletions();
++    return bIdle;
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+-bool BatchedContext::WaitForSingleBatch(DWORD timeout)
++void BatchedContext::DrainCompletions()
+ {
+     assert(!IsBatchThread());
+-    if (WaitForSingleObject(m_BatchConsumedSemaphore, timeout) == WAIT_OBJECT_0)
++    // PostSubmitCallback belongs to the recording thread. The batch thread only records that it
++    // flushed; deliver that once the recording thread sees a batch retire.
++    const uint64_t Consumed = m_QueuedBatches.consumed();
++    if (Consumed != m_ObservedConsumedBatches)
+     {
+-        --m_NumOutstandingBatches;
++        m_ObservedConsumedBatches = Consumed;
+         if (m_bFlushPendingCallback.exchange(false))
+         {
+             m_Callbacks.PostSubmitCallback();
+         }
+-        return true;
+     }
+-    return false;
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+@@ -1965,19 +1976,21 @@ void BatchedContext::BatchThread()
+     while (true)
+     {
+         // Wait for work
+-        WaitForSingleObject(m_BatchSubmittedSemaphore, INFINITE);
++        m_BatchSubmitted.wait_until([this]()
++        {
++            return !m_QueuedBatches.empty() || m_bBatchThreadExit.load(std::memory_order_acquire);
++        });
+ 
+-        // Figure out what we're supposed to be working on
++        // Figure out what we're supposed to be working on. Taken under the sync lock so that
++        // SyncWithBatch, which may flush the immediate context when it sees an empty queue,
++        // finishes before this thread starts touching the immediate context.
+         Batch* pBatchToProcess = nullptr;
+         {
+-            auto Lock = m_SubmissionLock.TakeLock();
+-            if (!m_QueuedBatches.empty())
+-            {
+-                pBatchToProcess = m_QueuedBatches.front().get();
+-            }
++            std::lock_guard<relay12::RelaySrwLock> Lock(m_SyncLock);
++            pBatchToProcess = m_QueuedBatches.front();
+         }
+ 
+-        // Semaphore was signaled but there's no work to be done, exit thread.
++        // Woken to exit with no work left to do, exit thread.
+         if (!pBatchToProcess)
+         {
+             return;
+@@ -1993,21 +2006,24 @@ void BatchedContext::BatchThread()
+         }
+ 
+         {
+-            auto Lock = m_SubmissionLock.TakeLock();
++            std::lock_guard<relay12::RelaySrwLock> Lock(m_SyncLock);
+ 
+             UINT FlushRequestedMask = pBatchToProcess->m_FlushRequestedMask;
+             m_CompletedBatchID = pBatchToProcess->m_BatchID;
+ 
+             pBatchToProcess->Retire(m_FreePages);
+-            m_FreeBatches.emplace_back(std::move(m_QueuedBatches.front()));
+-            m_QueuedBatches.pop_front();
++            if (!m_FreeBatches.try_push(pBatchToProcess))
++            {
++                delete pBatchToProcess;
++            }
+ 
+             m_ImmCtx.Flush(FlushRequestedMask);
++
++            // Last: releasing the slot publishes everything above to the recording thread.
++            m_QueuedBatches.pop();
+         }
+ 
+-        BOOL value = ReleaseSemaphore(m_BatchConsumedSemaphore, 1, nullptr);
+-        assert(value == TRUE);
+-        UNREFERENCED_PARAMETER(value);
++        m_BatchConsumed.notify();
+     }
+ }
+ 
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index ff1dc48..85152bf 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -98,7 +98,7 @@ endif()
+ source_group(Inlines FILES ${INL})
+ source_group("Header Files\\External" FILES ${EXTERNAL_INC})
+ 
+-target_link_libraries(d3d12translationlayer Microsoft::DirectX-Headers d3d12 dxgi)
++target_link_libraries(d3d12translationlayer Microsoft::DirectX-Headers d3d12 dxgi synchronization)
+ 
+ target_compile_definitions(d3d12translationlayer PUBLIC DYNAMIC_LOAD_DXCORE=1)
+ target_compile_definitions(d3d12translationlayer PRIVATE TRANSLATION_LAYER_SUPPORTS_D3DKMT_PRESENT=1)
