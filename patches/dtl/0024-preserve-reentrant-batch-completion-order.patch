@@ -1,0 +1,84 @@
+Subject: [PATCH] dtl: preserve FIFO and idle semantics across completion callbacks
+
+PostSubmitCallback crosses the runtime boundary and can re-enter recording.
+The address-wait handoff must publish the already-finished batch before calling
+it, otherwise nested submissions can overtake that batch and fill its slot.
+Likewise, recheck idle after callbacks: they can enqueue work even when the
+worker was idle before the callback. Keep ProcessBatch's progress result when
+a batch already completed before the caller begins waiting.
+
+--- a/src/BatchedContext.cpp
++++ b/src/BatchedContext.cpp
+@@ -1734,8 +1734,8 @@
+     if (m_CreationArgs.SubmitBatchesToWorkerThread)
+     {
+         auto Lock = m_RecordingLock.TakeLock();
+-        SubmitBatch();
+-        return WaitForBatchThreadIdle();
++        const bool submitted = SubmitBatch();
++        return WaitForBatchThreadIdle() || submitted;
+     }
+     else
+     {
+@@ -1884,8 +1884,6 @@
+     {
+         m_BatchConsumed.wait_until([this]() { return m_QueuedBatches.size() < c_MaxOutstandingBatches; });
+     }
+-    DrainCompletions();
+-
+     bool bQueued = m_QueuedBatches.try_push(pBatch.get());
+     assert(bQueued);
+     UNREFERENCED_PARAMETER(bQueued);
+@@ -1893,6 +1891,9 @@
+ 
+     // Wake up the batch thread, if it is asleep.
+     m_BatchSubmitted.notify();
++    // The callback may re-enter SubmitBatch. Publish this batch before invoking it,
++    // so nested submissions cannot overtake it or consume its reserved capacity.
++    DrainCompletions();
+     return true;
+ }
+ 
+@@ -1914,14 +1915,24 @@
+ bool BatchedContext::WaitForBatchThreadIdle()
+ {
+     assert(!IsBatchThread());
+-    bool bRet = false;
+-    if (!m_QueuedBatches.empty())
+-    {
++    bool bRet = m_QueuedBatches.consumed() != m_ObservedConsumedBatches;
++    for (;;)
++    {
++        if (!m_QueuedBatches.empty())
++        {
++            bRet = true;
++            m_BatchConsumed.wait_until([this]() { return m_QueuedBatches.empty(); });
++        }
++        DrainCompletions();
++        // A completion callback can submit more work. Do not report idle until
++        // that work and its callbacks have drained too.
++        if (m_QueuedBatches.empty() &&
++            m_QueuedBatches.consumed() == m_ObservedConsumedBatches)
++        {
++            return bRet;
++        }
+         bRet = true;
+-        m_BatchConsumed.wait_until([this]() { return m_QueuedBatches.empty(); });
+-    }
+-    DrainCompletions();
+-    return bRet;
++    }
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+@@ -1929,9 +1940,8 @@
+ {
+     assert(!IsBatchThread());
+     // Two loads; no system call. This runs every c_CommandKickoffMinThreshold commands.
+-    bool bIdle = m_QueuedBatches.empty();
+     DrainCompletions();
+-    return bIdle;
++    return m_QueuedBatches.empty();
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
