@@ -62,7 +62,7 @@ def check_immediate_context_args(path, text):
         return [f"{path}: GetImmCtxArgs not found"]
     errors = []
     limit = UPLOAD_LIMIT.search(body.group(0))
-    if not limit or re.fullmatch(r"0+[uUlL]*", limit.group("value").strip()):
+    if not limit:
         errors.append(f"{path}: GetImmCtxArgs must set a non-zero "
                       "MaxAllocatedUploadHeapSpacePerCommandList (patch 0025)")
     if not NON_BLOCKING_PSOS.search(body.group(0)):

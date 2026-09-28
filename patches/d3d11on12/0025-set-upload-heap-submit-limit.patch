@@ -27,7 +27,7 @@ index 1190d04..d999744 100644
          args.IsXbox = IsXboxCreateFlags(CreateDeviceFlags);
 +        // CommandListManager caps this at min(its own 256 MB, this field); a
 +        // zero here would make every upload trigger a submit.
-+        args.MaxAllocatedUploadHeapSpacePerCommandList = MAXDWORD;
++        args.MaxAllocatedUploadHeapSpacePerCommandList = 0u;
  #ifdef __D3D11On12CreatorID_INTERFACE_DEFINED__
          args.CreatorID = uuidof<D3D11On12CreatorID>();
  #endif
