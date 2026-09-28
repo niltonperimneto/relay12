@@ -336,6 +336,13 @@ lifetime, not rendered output or a performance gain.
 
 ### Batch worker handoff
 
+CI validates both `RELAY12_BATCH_HANDOFF=semaphore` (the default) and `ring`
+through the full build and Wine test suite. The selector is read during source
+preparation, not at runtime. `test_batch_handoff_selection.py` prepares fresh
+pinned clones and checks that default/explicit semaphore builds retain the
+upstream handoff, ring builds include the completion-order fix, and invalid
+values fail before modifying the clone.
+
 `tests/relay_batch_ring_test.cpp` exercises the exact primitives copied into the
 prepared DTL tree. CI builds/runs it both natively (`-pthread`) and as a static
 MinGW executable linked with `-lsynchronization`, using Wine's WaitOnAddress.
