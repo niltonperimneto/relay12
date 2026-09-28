@@ -61,6 +61,7 @@ namespace relay12
     {
         static_assert(std::is_pointer<T>::value, "the ring carries pointers; empty is reported as nullptr");
         static_assert(Capacity != 0 && (Capacity & (Capacity - 1)) == 0, "capacity must be a power of two");
+        static_assert(std::atomic<std::uint64_t>::is_always_lock_free, "ring indices must be lock-free");
         static constexpr std::uint64_t c_Mask = Capacity - 1;
 
     public:
@@ -69,6 +70,7 @@ namespace relay12
         // Producer only.
         bool try_push(T value) noexcept
         {
+            if (!value) return false; // nullptr is the empty sentinel.
             const std::uint64_t head = m_Head.load(std::memory_order_relaxed);
             if (head - m_Tail.load(std::memory_order_acquire) >= Capacity)
             {
@@ -238,7 +240,7 @@ namespace relay12
             }
         }
 
-        // Call after publishing the state ready() reads. Free when nobody
+        // Call after publishing the state ready() reads. No syscall when nobody
         // sleeps: one fence and one load.
         void notify()
         {

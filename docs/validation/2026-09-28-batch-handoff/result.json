@@ -1,0 +1,70 @@
+{
+  "runtime": "wine-11.17",
+  "os": "macOS 27.2",
+  "hardware": "Apple A18 Pro",
+  "compiler": "llvm-mingw 20240619 UCRT",
+  "scope": "Synthetic bounded batch handoff; not GPU or PEAK validation",
+  "native_thread_sanitizer": "pass",
+  "modes": {
+    "none": {
+      "ring_test": "pass",
+      "trials_ns_per_batch": {
+        "ring": [
+          1511,
+          1217,
+          3965
+        ],
+        "semaphore": [
+          32942,
+          42537,
+          95060
+        ]
+      },
+      "median_ns_per_batch": {
+        "ring": 1511,
+        "semaphore": 42537
+      },
+      "backend_confirmation": "WINEMSYNC=0 WINEESYNC=0 WINEFSYNC=0"
+    },
+    "esync": {
+      "ring_test": "pass",
+      "trials_ns_per_batch": {
+        "ring": [
+          2200,
+          2242,
+          2350
+        ],
+        "semaphore": [
+          42006,
+          36688,
+          52138
+        ]
+      },
+      "median_ns_per_batch": {
+        "ring": 2242,
+        "semaphore": 42006
+      },
+      "backend_confirmation": "requested via environment; ESYNC activation not confirmed"
+    },
+    "msync": {
+      "ring_test": "pass",
+      "trials_ns_per_batch": {
+        "ring": [
+          2257,
+          2252,
+          1802
+        ],
+        "semaphore": [
+          1555,
+          2034,
+          1976
+        ]
+      },
+      "median_ns_per_batch": {
+        "ring": 2252,
+        "semaphore": 1976
+      },
+      "backend_confirmation": "MSYNC startup message observed"
+    }
+  }
+}
