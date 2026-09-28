@@ -103,7 +103,8 @@ replays them on a worker thread. The core passes `createDevice.Flags == 0`,
 which D3D11On12 treats as "use the worker thread"
 (`BatchedContextUseWorkerThread` in `third_party/D3D11On12/src/device.cpp`).
 Batch recording already exists; that does not eliminate the separate
-semaphore/deque handoff to the worker. Patch 0022 replaces that handoff with
+semaphore/deque handoff to the worker, which remains the default. The opt-in
+patch 0022 replaces that handoff with
 bounded SPSC queues and address waits, retaining the existing worker. Patch
 0024 preserves FIFO and idle semantics when completion callbacks re-enter
 submission. The queue operations are lock-free; recording serialization and
@@ -189,6 +190,20 @@ from an environment setting alone, or claim a universal performance improvement.
 The trials are noisy and some standard-mode measurement overlapped native
 sanitizer work. Raw samples and environment details are in
 [the validation record](validation/2026-09-28-batch-handoff/result.json).
+
+The user also reported slower PEAK gameplay with the ring on their system.
+No frame-time capture or controlled comparison was supplied, so the magnitude
+and cause remain unquantified. Together with the MSYNC benchmark regression,
+this is sufficient reason to restore the semaphore handoff as the default.
+
+`prepare-dtl-source.sh` now defaults to `RELAY12_BATCH_HANDOFF=semaphore`.
+For an experimental comparison, prepare a fresh pinned clone with
+`RELAY12_BATCH_HANDOFF=ring scripts/prepare-dtl-source.sh /path/to/clone`.
+This is a build-time choice: changing the variable when launching an existing
+DLL has no effect. Only patches 0022 and 0024 are conditional; the PSO changes
+remain enabled. CI builds and tests both variants; normal `first-frame-*`
+artifacts use semaphores and `first-frame-ring-*` artifacts use the ring.
+Existing installations must replace/rebuild the driver to regain the default.
 
 Correctness tests passed natively, under ThreadSanitizer, and under all three
 requested Wine settings. A PEAK run and application telemetry before/after
