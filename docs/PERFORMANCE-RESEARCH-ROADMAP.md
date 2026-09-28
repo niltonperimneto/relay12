@@ -102,7 +102,13 @@ D3D11On12 interop; the benefit is for D3D11 content drawn through D3D11On12.
 replays them on a worker thread. The core passes `createDevice.Flags == 0`,
 which D3D11On12 treats as "use the worker thread"
 (`BatchedContextUseWorkerThread` in `third_party/D3D11On12/src/device.cpp`).
-The ring this item proposed exists; there is nothing to build.
+Batch recording already exists; that does not eliminate the separate
+semaphore/deque handoff to the worker, which remains the default. The opt-in
+patch 0022 replaces that handoff with
+bounded SPSC queues and address waits, retaining the existing worker. Patch
+0024 preserves FIFO and idle semantics when completion callbacks re-enter
+submission. The queue operations are lock-free; recording serialization and
+the synchronization lock around queued flush requests remain.
 
 Deferred contexts use the same machinery. A command list is a DTL batch
 recorded on the application's thread, and executing it appends that batch to
@@ -163,3 +169,73 @@ new flush or draw-time lookup. The lifecycle test asserts zero explicit flushes;
 real workload telemetry and GPU output checks are still required before making
 performance claims. Persistent pipeline libraries remain the separate experiment
 in item 1.
+
+
+### Batch handoff measurement (2026-09-28)
+
+The handoff benchmark uses 100,000 real payload transfers, five outstanding
+batches, and three alternating trials per implementation. It compares a Win32
+semaphore/mutex/deque handoff with the ring/address waiter, not complete DTL
+rendering. On Apple A18 Pro, macOS 27.2, Wine 11.17:
+
+| Requested synchronization | Semaphore median ns/batch | Ring median ns/batch |
+| --- | ---: | ---: |
+| Standard (`WINEMSYNC=0`, `WINEESYNC=0`) | 42,537 | 1,511 |
+| `WINEESYNC=1` (activation unconfirmed) | 42,006 | 2,242 |
+| MSYNC (startup confirmed) | 1,976 | 2,252 |
+
+The ring improves this synthetic workload substantially without MSYNC but is
+about 14% slower at the median with MSYNC. Do not infer an ESYNC-backend result
+from an environment setting alone, or claim a universal performance improvement.
+The trials are noisy and some standard-mode measurement overlapped native
+sanitizer work. Raw samples and environment details are in
+[the validation record](validation/2026-09-28-batch-handoff/result.json).
+
+The user also reported slower PEAK gameplay with the ring on their system.
+No frame-time capture or controlled comparison was supplied, so the magnitude
+and cause remain unquantified. Together with the MSYNC benchmark regression,
+this is sufficient reason to restore the semaphore handoff as the default.
+
+`prepare-dtl-source.sh` now defaults to `RELAY12_BATCH_HANDOFF=semaphore`.
+For an experimental comparison, prepare a fresh pinned clone with
+`RELAY12_BATCH_HANDOFF=ring scripts/prepare-dtl-source.sh /path/to/clone`.
+This is a build-time choice: changing the variable when launching an existing
+DLL has no effect. Only patches 0022 and 0024 are conditional; the PSO changes
+remain enabled. CI builds and tests both variants; normal `first-frame-*`
+artifacts use semaphores and `first-frame-ring-*` artifacts use the ring.
+Existing installations must replace/rebuild the driver to regain the default.
+
+Correctness tests passed natively, under ThreadSanitizer, and under all three
+requested Wine settings. A PEAK run and application telemetry before/after
+remain necessary to assess actual frame-time impact, especially with MSYNC.
+
+#### Rerun with more trials (2026-09-28, later)
+
+A second run found the MSYNC regression above to be noise. It used 7 trials
+per variant instead of 3, rotated the starting variant each trial and reversed
+alternate trials, added a CPU-time column and a variant with per-batch work on
+the worker, and restarted the wineserver between modes so the setting
+actually took (the first attempt at MSYNC failed to bootstrap against a server
+left running without it). Same machine and Wine 11.17, median ns per batch:
+
+| Synchronization | Semaphore/deque | Ring, address wait (as built) | Ring CPU vs semaphore CPU |
+| --- | ---: | ---: | ---: |
+| Standard (`WINEMSYNC=0`) | 30,725 | 1,490 | 1,600 vs 23,700 |
+| MSYNC (startup confirmed) | 1,753 | 1,329 | 1,400 vs 3,500 |
+
+With 256 iterations of work per batch the ordering is the same (MSYNC: 1,732
+against 1,226). The ring is faster in both modes and uses less than half the
+CPU under MSYNC. The same sweep tried the ring with a Win32 semaphore in place
+of the address wait, and 0, 16, 32 and 128 spins before sleeping. The semaphore
+wait was never better than the address wait and was eight times slower without
+MSYNC, and the spin count moved the medians by less than the trial noise, so
+neither became a build option. Raw samples:
+[the sweep record](validation/2026-09-28-batch-handoff-sweep/result.json).
+
+This removes the benchmark half of the case for the semaphore default, not the
+PEAK half. The handoff is a few microseconds of a frame either way, so a
+PEAK slowdown, if real, would have to come from somewhere the primitive does
+not model: the worker's position relative to the GPU submission, or the
+128-spin busy wait competing with the game's own threads on a 6-core part. The
+default stays `semaphore` until a controlled PEAK comparison with frame times
+exists; `first-frame-ring-*` artifacts are the build to compare against.
