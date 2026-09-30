@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import platform
 from pathlib import Path
 import re
 import statistics
@@ -72,9 +73,13 @@ def main():
                     except subprocess.TimeoutExpired:
                         code = 124
                 text = path.read_text(errors='replace')
+                if code == 0 and '[ ok ] UMA initialization, shader sampling and readback' not in text:
+                    code = 1
                 records.append(dict(trial=trial, mode=label, exit_code=code, log=path.name, **summarize(text)))
                 result_path.write_text(json.dumps({'sync_requested': args.sync, 'scope': 'D3D11On12 transfer workload; not PEAK FPS or physical residency',
-                                                   'wine': str(wine), 'samples': records}, indent=2) + '\n')
+                                                   'wine': str(wine), 'host': platform.platform(),
+                                                   'runtime_flags': {key: env.get(key) for key in ('D3DM_WINE_UNIX_CALL', 'D3DM_MTL4', 'WINEMSYNC', 'WINEESYNC', 'WINEFSYNC')},
+                                                   'samples': records}, indent=2) + '\n')
                 print(f'{trial} {label}: exit={code}', flush=True)
                 if code: return 1
     finally:

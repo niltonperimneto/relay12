@@ -5,7 +5,10 @@ It does not cap application resources, GPU work in flight, or the process's
 physical memory. The native D3D12 renderer used by PEAK remains outside this path.
 
 `D3D11ON12_COMPAT_MemoryProfile` accepts `auto` (default), `legacy`, or `balanced`.
-Auto selects balanced when the caller's D3D12 device reports UMA and
+The automatic promotion gate is currently disabled pending hardware acceptance;
+`auto` therefore retains legacy behavior and reports `qualification-pending`
+on otherwise eligible devices. Explicit `balanced` enables testing now. Once
+qualified, auto selects balanced when the caller's D3D12 device reports UMA and
 `GlobalMemoryStatusEx` reports positive physical memory at or below 8 GiB.
 Missing UMA/memory information and invalid settings select legacy. Explicit
 balanced is available for controlled tests on other devices. Selection is per

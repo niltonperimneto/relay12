@@ -42,7 +42,11 @@ int main()
     check(!SelectBalancedMemory(MemoryProfile::Auto, false, 8ull << 30));
     check(!SelectBalancedMemory(MemoryProfile::Auto, true, 0));
     check(!SelectBalancedMemory(MemoryProfile::Auto, true, (8ull << 30) + 1));
-    check(SelectBalancedMemory(MemoryProfile::Auto, true, 8ull << 30));
+    check(!SelectBalancedMemory(MemoryProfile::Auto, true, 8ull << 30));
+    check(SelectBalancedMemory(MemoryProfile::Auto, true, 8ull << 30, true));
+    check(!SelectBalancedMemory(MemoryProfile::Auto, false, 8ull << 30, true));
+    check(!SelectBalancedMemory(MemoryProfile::Auto, true, 0, true));
+    check(!SelectBalancedMemory(MemoryProfile::Auto, true, (8ull << 30) + 1, true));
     check(SelectBalancedMemory(MemoryProfile::Balanced, false, 0));
     std::atomic<unsigned> completed{0};
     {

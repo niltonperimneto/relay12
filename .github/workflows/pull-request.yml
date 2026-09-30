@@ -264,6 +264,9 @@ jobs:
             -static -Icompat tests/relay_memory_pool_test.cpp -o "$RUNNER_TEMP/relay_memory_pool_test.exe"
           timeout 90 wine "$RUNNER_TEMP/relay_memory_pool_test.exe"
           x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Werror \
+            -static -Icompat tests/relay_uma_upload_test.cpp -luuid -o "$RUNNER_TEMP/relay_uma_upload_test.exe"
+          timeout 90 wine "$RUNNER_TEMP/relay_uma_upload_test.exe"
+          x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Werror \
             -static -Icompat tests/relay_batch_submission_bench.cpp -lsynchronization \
             -o "$RUNNER_TEMP/relay_batch_submission_bench.exe"
           timeout 120 wine "$RUNNER_TEMP/relay_batch_submission_bench.exe" --quick \

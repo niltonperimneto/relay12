@@ -167,7 +167,7 @@ index 747e1f7..acea117 100644
      InternalRootSignature m_InternalUAVRootSig;
      unique_comptr<ID3D12PipelineState> m_pDrawAutoPSO;
 diff --git a/src/ImmediateContext.cpp b/src/ImmediateContext.cpp
-index 3d06d2a..8bd5799 100644
+index 3d06d2a..8a38787 100644
 --- a/src/ImmediateContext.cpp
 +++ b/src/ImmediateContext.cpp
 @@ -2,6 +2,7 @@
@@ -178,7 +178,7 @@ index 3d06d2a..8bd5799 100644
  #include "PrecompiledShaders.h"
  
  namespace D3D12TranslationLayer
-@@ -107,6 +108,27 @@ ImmediateContext::ImmediateContext(UINT nodeIndex, D3D12_FEATURE_DATA_D3D12_OPTI
+@@ -107,6 +108,28 @@ ImmediateContext::ImmediateContext(UINT nodeIndex, D3D12_FEATURE_DATA_D3D12_OPTI
      , m_residencyManager(*this)
      , m_architecture(QueryArchitectureFlags())
  {
@@ -193,7 +193,8 @@ index 3d06d2a..8bd5799 100644
 +        profile == relay12::MemoryProfile::Legacy ? "explicit-legacy" :
 +        profile == relay12::MemoryProfile::Balanced ? "explicit-balanced" :
 +        !m_architecture.isUMA ? "uma-unavailable" : !m_PhysicalMemory ? "memory-unavailable" :
-+        m_BalancedMemory ? "small-uma" : "large-memory";
++        m_PhysicalMemory > (8ull << 30) ? "large-memory" :
++        !relay12::AutomaticMemoryProfileQualified ? "qualification-pending" : "small-uma";
 +    if (m_BalancedMemory)
 +    {
 +        m_UploadBufferPool.ConfigureByteLimit(32ull << 20);
@@ -206,7 +207,7 @@ index 3d06d2a..8bd5799 100644
      UNREFERENCED_PARAMETER(debugFlags);
      memset(m_BlendFactor, 0, sizeof(m_BlendFactor));
      memset(m_auVertexOffsets, 0, sizeof(m_auVertexOffsets));
-@@ -143,7 +165,7 @@ ImmediateContext::ImmediateContext(UINT nodeIndex, D3D12_FEATURE_DATA_D3D12_OPTI
+@@ -143,7 +166,7 @@ ImmediateContext::ImmediateContext(UINT nodeIndex, D3D12_FEATURE_DATA_D3D12_OPTI
      D3D12_COMMAND_QUEUE_DESC SyncOnlyQueueDesc = { D3D12_COMMAND_LIST_TYPE_NONE };
      (void)m_pDevice12->CreateCommandQueue(&SyncOnlyQueueDesc, IID_PPV_ARGS(&m_pSyncOnlyQueue));
  
@@ -215,7 +216,7 @@ index 3d06d2a..8bd5799 100644
      {
          RelayComPtr<IDXCoreAdapterFactory> pFactory;
  #if DYNAMIC_LOAD_DXCORE
-@@ -195,8 +217,8 @@ ImmediateContext::ImmediateContext(UINT nodeIndex, D3D12_FEATURE_DATA_D3D12_OPTI
+@@ -195,8 +218,8 @@ ImmediateContext::ImmediateContext(UINT nodeIndex, D3D12_FEATURE_DATA_D3D12_OPTI
      hr = m_pDevice12->CreateDescriptorHeap(&m_ViewHeap.m_Desc, IID_PPV_ARGS(&m_ViewHeap.m_pDescriptorHeap));
      ThrowFailure(hr); //throw( _com_error )
      m_ViewHeap.m_DescriptorSize = m_pDevice12->GetDescriptorHandleIncrementSize(m_ViewHeap.m_Desc.Type);
@@ -226,7 +227,7 @@ index 3d06d2a..8bd5799 100644
      m_ViewHeap.m_BitsToSetOnNewHeap = e_ViewsDirty;
  
      if (!ComputeOnly())
-@@ -204,8 +226,8 @@ ImmediateContext::ImmediateContext(UINT nodeIndex, D3D12_FEATURE_DATA_D3D12_OPTI
+@@ -204,8 +227,8 @@ ImmediateContext::ImmediateContext(UINT nodeIndex, D3D12_FEATURE_DATA_D3D12_OPTI
          hr = m_pDevice12->CreateDescriptorHeap(&m_SamplerHeap.m_Desc, IID_PPV_ARGS(&m_SamplerHeap.m_pDescriptorHeap));
          ThrowFailure(hr); //throw( _com_error )
          m_SamplerHeap.m_DescriptorSize = m_pDevice12->GetDescriptorHandleIncrementSize(m_SamplerHeap.m_Desc.Type);
@@ -237,7 +238,7 @@ index 3d06d2a..8bd5799 100644
          m_SamplerHeap.m_BitsToSetOnNewHeap = e_SamplersDirty;
      }
  
-@@ -579,8 +601,8 @@ void ImmediateContext::RollOverHeap(OnlineDescriptorHeap& Heap) noexcept(false)
+@@ -579,8 +602,8 @@ void ImmediateContext::RollOverHeap(OnlineDescriptorHeap& Heap) noexcept(false)
      }
  
      Heap.m_DescriptorRingBuffer = CFencedRingBuffer(Heap.m_Desc.NumDescriptors);
@@ -248,7 +249,7 @@ index 3d06d2a..8bd5799 100644
  
      ID3D12DescriptorHeap* pHeaps[2] = {m_ViewHeap.m_pDescriptorHeap.get(), m_SamplerHeap.m_pDescriptorHeap.get()};
      GetGraphicsCommandList()->SetDescriptorHeaps(ComputeOnly() ? 1 : 2, pHeaps);
-@@ -1243,7 +1265,7 @@ void TRANSLATION_API ImmediateContext::SoSetTargets(_In_range_(0, 4) UINT NumTar
+@@ -1243,7 +1266,7 @@ void TRANSLATION_API ImmediateContext::SoSetTargets(_In_range_(0, 4) UINT NumTar
                  OffsetToBufferFilledSize,
                  0,
                  0,
@@ -257,7 +258,7 @@ index 3d06d2a..8bd5799 100644
                  1,
                  1
              };
-@@ -1258,7 +1280,7 @@ void TRANSLATION_API ImmediateContext::SoSetTargets(_In_range_(0, 4) UINT NumTar
+@@ -1258,7 +1281,7 @@ void TRANSLATION_API ImmediateContext::SoSetTargets(_In_range_(0, 4) UINT NumTar
      {
          bDirty |= m_CurrentState.m_SO.UpdateBinding(i, nullptr, e_Graphics);
      }
@@ -266,7 +267,7 @@ index 3d06d2a..8bd5799 100644
  }
  
  //----------------------------------------------------------------------------------------------------------------------------------
-@@ -1278,7 +1300,7 @@ void TRANSLATION_API ImmediateContext::OMSetRenderTargets(__in_ecount(NumRTVs) R
+@@ -1278,7 +1301,7 @@ void TRANSLATION_API ImmediateContext::OMSetRenderTargets(__in_ecount(NumRTVs) R
      {
          bDirtyRTVs = true; // RTVs and DSV are updated together
      }
@@ -275,7 +276,7 @@ index 3d06d2a..8bd5799 100644
  }
  
  //----------------------------------------------------------------------------------------------------------------------------------
-@@ -1795,7 +1817,7 @@ void TRANSLATION_API ImmediateContext::DiscardView(ViewBase* pView, const D3D12_
+@@ -1795,7 +1818,7 @@ void TRANSLATION_API ImmediateContext::DiscardView(ViewBase* pView, const D3D12_
  
      // D3D12 requires RenderTargets and DepthStenciles to be transitioned to the corresponding write state before discard.
      auto pAPIResource = GetUnderlyingResource(pView->m_pResource);
@@ -284,7 +285,7 @@ index 3d06d2a..8bd5799 100644
  
      if ((ResourceFlags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) || (ResourceFlags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL))
      {
-@@ -1898,7 +1920,7 @@ void TRANSLATION_API ImmediateContext::DiscardResource(Resource* pResource, cons
+@@ -1898,7 +1921,7 @@ void TRANSLATION_API ImmediateContext::DiscardResource(Resource* pResource, cons
      auto pAPIResource = GetUnderlyingResource(pResource);
  
      // D3D12 requires RenderTargets and DepthStenciles to be transitioned to the corresponding write state before discard.
@@ -293,7 +294,7 @@ index 3d06d2a..8bd5799 100644
      if ((ResourceFlags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) || (ResourceFlags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL))
      {
          D3D12_RESOURCE_STATES RequiredState =
-@@ -2389,9 +2411,9 @@ void TRANSLATION_API ImmediateContext::GenMips( SRV *pSRV, D3D12_FILTER_TYPE Fil
+@@ -2389,9 +2412,9 @@ void TRANSLATION_API ImmediateContext::GenMips( SRV *pSRV, D3D12_FILTER_TYPE Fil
                      // every pixel. Add a half point to the wSlice to make sure we sample from the two relevant
                      // z planes equally
                      float wVal = (wSlice + .5f) / numIterations;
@@ -306,7 +307,7 @@ index 3d06d2a..8bd5799 100644
                  }
  
                  GetGraphicsCommandList()->DrawInstanced(4, 1, 0, 0);
-@@ -3382,10 +3404,11 @@ COMMAND_LIST_TYPE ImmediateContext::GetFallbackCommandListType(UINT commandListT
+@@ -3382,10 +3405,11 @@ COMMAND_LIST_TYPE ImmediateContext::GetFallbackCommandListType(UINT commandListT
  
  ImmediateContext::ArchitectureFlags ImmediateContext::QueryArchitectureFlags()
  {
@@ -320,7 +321,7 @@ index 3d06d2a..8bd5799 100644
      
      ArchitectureFlags flags;
      flags.isTileBasedRenderer = data.TileBasedRenderer;
-@@ -4227,10 +4250,20 @@ void ImmediateContext::ReturnTransitionableBufferToPool(AllocatorHeapType HeapTy
+@@ -4227,10 +4251,20 @@ void ImmediateContext::ReturnTransitionableBufferToPool(AllocatorHeapType HeapTy
  {
      TDynamicBufferPool& Pool = GetBufferPool(HeapType);
  
@@ -345,7 +346,7 @@ index 3d06d2a..8bd5799 100644
  }
  
  //----------------------------------------------------------------------------------------------------------------------------------
-@@ -4460,11 +4493,11 @@ bool TRANSLATION_API ImmediateContext::MapDynamicTexture(Resource* pResource, UI
+@@ -4460,11 +4494,11 @@ bool TRANSLATION_API ImmediateContext::MapDynamicTexture(Resource* pResource, UI
              creationArgsCopy.m_flags11.StructureByteStride = 0;
  
              unique_comptr<Resource> renameResource = Resource::CreateResource(this, creationArgsCopy, ResourceAllocationContext::FreeThread);
@@ -362,7 +363,7 @@ index 3d06d2a..8bd5799 100644
              {
                  // Maintain the illusion that this data is read by the CPU directly from the mapped resource.
                  CDisablePredication DisablePredication(this);
-@@ -5865,3 +5898,33 @@ Resource* ImmediateContext::BltResolveManager::GetBltResolveTempForWindow(HWND h
+@@ -5865,3 +5899,33 @@ Resource* ImmediateContext::BltResolveManager::GetBltResolveTempForWindow(HWND h
  }
  
  }
