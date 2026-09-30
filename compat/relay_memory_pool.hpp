@@ -19,10 +19,15 @@ inline MemoryProfile ParseMemoryProfile(const char* value) noexcept
     if (!std::strcmp(value, "balanced")) return MemoryProfile::Balanced;
     return MemoryProfile::Invalid;
 }
-inline bool SelectBalancedMemory(MemoryProfile profile, bool uma, std::uint64_t physicalBytes) noexcept
+// Promotion stays disabled until the documented real-GPU acceptance run passes.
+// Explicit balanced remains available for that run; capability alone is not a
+// hardware correctness or frame-time result.
+inline constexpr bool AutomaticMemoryProfileQualified = false;
+inline bool SelectBalancedMemory(MemoryProfile profile, bool uma, std::uint64_t physicalBytes,
+                                 bool qualified = AutomaticMemoryProfileQualified) noexcept
 {
     if (profile == MemoryProfile::Balanced) return true;
-    return profile == MemoryProfile::Auto && uma && physicalBytes && physicalBytes <= (8ull << 30);
+    return qualified && profile == MemoryProfile::Auto && uma && physicalBytes && physicalBytes <= (8ull << 30);
 }
 struct PoolCounters {
     std::uint64_t retained = 0, peakRetained = 0, pending = 0, completed = 0;
