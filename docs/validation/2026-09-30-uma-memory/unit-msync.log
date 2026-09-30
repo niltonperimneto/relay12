@@ -1,0 +1,4 @@
+msync: bootstrapped mach port on wine-f3de59-msync.
+msync: up and running.
+[ ok ] memory profile, fence safety, allocation failure, byte limits and concurrent returns
+[ ok ] UMA direct-upload eligibility, initialization, fallback and failure propagation
