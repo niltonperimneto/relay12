@@ -32,6 +32,8 @@ def main():
     parser.add_argument('--trials', type=int, default=5)
     parser.add_argument('--timeout', type=int, default=180)
     parser.add_argument('--correctness-only', action='store_true')
+    parser.add_argument('--continue-on-failure', action='store_true', help='record every policy even when a baseline fails')
+    parser.add_argument('--transfer-only', action='store_true', help='GPU copy/readback only; does not qualify shader sampling')
     args = parser.parse_args()
     if args.trials < 1 or args.timeout < 1: parser.error('trials and timeout must be positive')
     prefix, artifacts = args.prefix.resolve(), args.artifacts.resolve()
@@ -46,7 +48,7 @@ def main():
     prefix.mkdir(parents=True, exist_ok=True); marker.touch()
     args.output.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, WINEPREFIX=str(prefix), WINESERVER=str(wine.parent / 'wineserver'), WINELOADER=str(wine),
-               WINEMSYNC='1' if args.sync == 'msync' else '0', WINEESYNC='0', WINEFSYNC='0', WINEDEBUG='-all',
+               WINEMSYNC='1' if args.sync == 'msync' else '0', WINEESYNC='0', WINEFSYNC='0', WINEDEBUG=os.environ.get('WINEDEBUG', '-all'),
                CX_APPLEGPTK_LIBD3DSHARED_PATH=str(shared), RELAY12_EXPERIMENTAL_FRAME='1', RELAY12_TELEMETRY='1',
                WINEDLLOVERRIDES='d3d11,d3d11on12,d3d11on12core,dxilconv=n;d3d11on12host,d3d12,dxgi=b;mscoree,mshtml=')
     modes = [('legacy', 'legacy', '0'), ('balanced', 'balanced', '0'), ('direct', 'balanced', '1')]
@@ -65,6 +67,7 @@ def main():
                 env.update(D3D11ON12_COMPAT_MemoryProfile=profile, D3D11ON12_COMPAT_UMADirectInitialUpload=direct)
                 command = [str(wine), str(artifacts / 'd3d11_e2e_uma.exe')]
                 if not args.correctness_only: command.append('--bench')
+                if args.transfer_only: command.append('--transfer-only')
                 path = args.output / f'{trial}-{label}.log'
                 with path.open('w') as log:
                     try:
@@ -73,18 +76,19 @@ def main():
                     except subprocess.TimeoutExpired:
                         code = 124
                 text = path.read_text(errors='replace')
-                if code == 0 and '[ ok ] UMA initialization, shader sampling and readback' not in text:
+                expected = '[ ok ] UMA initialization, ' + ('GPU copy' if args.transfer_only else 'shader sampling') + ' and readback'
+                if code == 0 and expected not in text:
                     code = 1
                 records.append(dict(trial=trial, mode=label, exit_code=code, log=path.name, **summarize(text)))
                 result_path.write_text(json.dumps({'sync_requested': args.sync, 'scope': 'D3D11On12 transfer workload; not PEAK FPS or physical residency',
-                                                   'wine': str(wine), 'host': platform.platform(),
+                                                   'wine': str(wine), 'host': platform.platform(), 'transfer_only': args.transfer_only,
                                                    'runtime_flags': {key: env.get(key) for key in ('D3DM_WINE_UNIX_CALL', 'D3DM_MTL4', 'WINEMSYNC', 'WINEESYNC', 'WINEFSYNC')},
                                                    'samples': records}, indent=2) + '\n')
                 print(f'{trial} {label}: exit={code}', flush=True)
-                if code: return 1
+                if code and not args.continue_on_failure: return 1
     finally:
         stop()
-    return 0
+    return int(any(record['exit_code'] for record in records))
 
 
 if __name__ == '__main__':

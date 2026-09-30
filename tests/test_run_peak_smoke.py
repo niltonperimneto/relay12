@@ -89,6 +89,16 @@ class Synchronization(unittest.TestCase):
                 self.assertEqual(env["WINESERVER"], "/runtime/bin/wineserver")
                 self.assertEqual(env["WINELOADER"], "/runtime/bin/wine64")
 
+    def test_no_active_server_still_requires_successful_wait(self):
+        absent = runner.subprocess.CalledProcessError(1, "wineserver -k")
+        with mock.patch.object(runner.subprocess, "run", side_effect=[absent, None]) as run:
+            runner.stop_server(pathlib.Path("/runtime/bin/wine64"), {}, None)
+        self.assertEqual(run.call_count, 2)
+        failed = runner.subprocess.CalledProcessError(1, "wineserver -w")
+        with mock.patch.object(runner.subprocess, "run", side_effect=[absent, failed]):
+            with self.assertRaises(runner.subprocess.CalledProcessError):
+                runner.stop_server(pathlib.Path("/runtime/bin/wine64"), {}, None)
+
     def test_server_shutdown_waits_and_does_not_ignore_failure(self):
         env = {"WINEPREFIX": "/test-prefix"}
         with mock.patch.object(runner.subprocess, "run") as run:

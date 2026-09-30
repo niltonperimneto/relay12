@@ -586,7 +586,7 @@ jobs:
             tests/peak_on12_probe.cpp -luuid
           x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
             -static -fno-exceptions -fno-rtti -o d3d11_e2e_uma.exe \
-            tests/e2e_uma_memory.cpp -ld3d12 -ld3dcompiler -lpsapi -luuid
+            tests/e2e_uma_memory.cpp -ld3d12 -ldxgi -ld3dcompiler -lpsapi -luuid
 
       - name: Run the D3D11-on-12 concurrency stress
         run: |
