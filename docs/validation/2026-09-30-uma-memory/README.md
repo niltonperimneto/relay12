@@ -30,6 +30,9 @@ checker results and filtered graphics logs are retained alongside this report.
 Both legacy and balanced runs selected D3D12, created the On12 device and
 presented frames, with no crash or device removal reported. Neither showed
 wrapped-resource activity, so the strict smoke checker rejected both runs.
+The current core does not emit the successful `wrapped` stage marker required
+by the checker. This is an instrumentation gap: absence of the marker does not
+prove that PEAK never used wrapped resources.
 Both reported `ConnectExternalTokenValidationFailed` during EOS login;
 no gameplay qualification was obtained. The observed startup rates (25.23 and
 33.37 FPS respectively) are single, unmatched runs with different cache/warmup
@@ -41,7 +44,8 @@ Remaining acceptance work:
    readback support, then rerun the byte-exact On12 tests.
 2. Investigate the backend's UMA/coherency reports before qualifying direct
    uploads; require actual direct-success telemetry.
-3. Exercise PEAK's wrapped-resource path and verify its successful trace markers.
+3. Add success/failure tracing to the wrapped-resource path, then exercise it
+   in PEAK and verify the required successful markers.
 4. Run five alternating trials in a repeatable workload, collecting completed
    cache bytes, process footprint/swap and frame-time distributions. Timed
    startup presentation rates cannot establish a performance improvement.
