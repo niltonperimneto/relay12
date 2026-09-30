@@ -579,10 +579,10 @@ jobs:
             tests/e2e_d3d11_async_pso.cpp -ld3d12 -ld3d11 -ld3dcompiler -luuid
           # Compiled only: a hardware probe, run through Whisky on D3DMetal.
           x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
-            -fno-exceptions -fno-rtti -o peak_on12_probe.exe \
+            -static -fno-exceptions -fno-rtti -o peak_on12_probe.exe \
             tests/peak_on12_probe.cpp -luuid
           x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
-            -fno-exceptions -fno-rtti -o d3d11_e2e_uma.exe \
+            -static -fno-exceptions -fno-rtti -o d3d11_e2e_uma.exe \
             tests/e2e_uma_memory.cpp -ld3d12 -ld3dcompiler -lpsapi -luuid
 
       - name: Run the D3D11-on-12 concurrency stress

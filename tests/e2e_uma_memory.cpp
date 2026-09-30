@@ -141,6 +141,8 @@ static bool run(bool bench)
 }
 int main(int argc, char** argv)
 {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    std::puts("[info] starting UMA memory test");
     const bool bench = argc == 2 && !std::strcmp(argv[1], "--bench");
     if (argc > 1 && !bench) return 2;
     const bool ok = run(bench);

@@ -6,6 +6,7 @@
 #include <limits>
 #include <list>
 #include <mutex>
+#include <memory>
 #include <new>
 #include <utility>
 
@@ -31,7 +32,7 @@ struct PoolCounters {
 // Only retired resources enter this pool. "Retained" includes pending GPU
 // references; only completed entries count towards the reclaimable byte cap.
 // Fence values belong to one timeline. Caller drains that timeline at teardown.
-template<class Resource>
+template<class Resource, class Allocator = std::allocator<Resource>>
 class BoundedMemoryPool {
     struct Entry {
         std::uint64_t key, bytes, fence;
@@ -39,7 +40,8 @@ class BoundedMemoryPool {
         Entry(std::uint64_t k, std::uint64_t b, std::uint64_t f)
             : key(k), bytes(b), fence(f) {}
     };
-    std::list<Entry> entries;
+    using EntryAllocator = typename std::allocator_traits<Allocator>::template rebind_alloc<Entry>;
+    std::list<Entry, EntryAllocator> entries;
     std::mutex mutex;
     const std::uint64_t cap;
     std::uint64_t completedFence = 0;
@@ -51,9 +53,16 @@ class BoundedMemoryPool {
         for (const auto& entry : entries)
             (entry.fence <= completedFence ? counters.completed : counters.pending) += entry.bytes;
     }
+    void advanceFence(std::uint64_t completed) noexcept
+    {
+        if (completed > completedFence)
+        {
+            completedFence = completed;
+            classify();
+        }
+    }
     void trimLocked() noexcept
     {
-        classify();
         // Oldest return first; never wait or release an unfinished entry.
         for (auto it = entries.begin(); it != entries.end() && counters.completed > cap;)
         {
@@ -79,6 +88,7 @@ public:
         catch (const std::bad_alloc&) { return false; }
         entries.back().resource = std::move(resource);
         counters.retained += bytes;
+        (fence <= completedFence ? counters.completed : counters.pending) += bytes;
         counters.peakRetained = (std::max)(counters.peakRetained, counters.retained);
         trimLocked();
         return true;
@@ -86,13 +96,14 @@ public:
     Resource take(std::uint64_t key, std::uint64_t completed)
     {
         std::lock_guard<std::mutex> lock(mutex);
-        completedFence = (std::max)(completedFence, completed);
+        advanceFence(completed);
         for (auto it = entries.begin(); it != entries.end(); ++it)
         {
             if (it->key == key && it->fence <= completedFence)
             {
                 Resource result = std::move(it->resource);
                 counters.retained -= it->bytes;
+                counters.completed -= it->bytes;
                 entries.erase(it);
                 ++counters.reuses;
                 trimLocked();
@@ -110,13 +121,12 @@ public:
     void trim(std::uint64_t completed) noexcept
     {
         std::lock_guard<std::mutex> lock(mutex);
-        completedFence = (std::max)(completedFence, completed);
+        advanceFence(completed);
         trimLocked();
     }
     PoolCounters snapshot() noexcept
     {
         std::lock_guard<std::mutex> lock(mutex);
-        classify();
         return counters;
     }
 };
