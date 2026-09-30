@@ -125,7 +125,7 @@
   "performance_comparison_valid": false,
   "automatic_balanced_activation": false,
   "limitations": [
-    "No wrapped-resource activity observed in either PEAK run.",
+    "No wrapped-resource trace evidence in either PEAK run; the current core does not emit the success marker required by the checker, so absence is not proof the path was unused.",
     "PEAK startup smoke runs are not matched gameplay benchmarks.",
     "No completed On12 transfer frames or direct-success telemetry.",
     "Published logs are filtered excerpts; checker results were computed from full local logs."
