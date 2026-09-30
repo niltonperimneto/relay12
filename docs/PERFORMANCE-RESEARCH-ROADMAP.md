@@ -121,19 +121,13 @@ overhead benchmark times record, finish, execute and destroy.
 
 ## 3. Apple Silicon Unified Memory (UMA)
 
-**Already true.** DTL queries `D3D12_FEATURE_ARCHITECTURE1` into
-`m_architecture` (`ImmediateContext::QueryArchitectureFlags`), but nothing reads
-`isUMA` or `iscacheCoherentUMA`. Staging resources always live in the
-`READBACK`/`UPLOAD` heaps chosen by `Resource::GetD3D12HeapType`, and mapping a
-dynamic texture for read goes through a copy (`MapDynamicTexture`).
-
-**Proposed.** When the device reports cache-coherent UMA, place CPU-read/write
-staging resources in a CPU-visible `CUSTOM` heap (`WRITE_BACK`, `L0`) instead,
-removing the copy.
-
-**Decided by.** A probe of `ARCHITECTURE1` and of `CUSTOM` heap creation with
-those properties on D3DMetal. Correctness is gated by the mock driver's
-byte-exact readback tests.
+Balanced staging caches and opt-in direct initial uploads are described in
+[UMA memory management](UMA-MEMORY.md), including fallback behavior, telemetry,
+and hardware acceptance criteria. Upload/readback heaps already pass through
+GetCustomHeapProperties; simply replacing their heap type does not eliminate a
+copy. The direct path targets initial uploads of simple owned textures only.
+Repeated updates, dynamic texture Map and native D3D12 allocation policy remain
+separate work. Hardware qualification is required before claiming a Neo benefit.
 
 ## 4. Command Flush Heuristics
 

@@ -37,6 +37,8 @@
 #include <d3d11on12.h>
 #include <dxgi1_6.h>
 #include <cstdio>
+#include "uma_gpu_probe.hpp"
+#include "../compat/relay_d3d12_struct_return.hpp"
 
 typedef HRESULT(WINAPI *CreateDevice12Fn)(IUnknown *, D3D_FEATURE_LEVEL, REFIID, void **);
 typedef HRESULT(WINAPI *On12CreateDeviceFn)(IUnknown *, UINT, const D3D_FEATURE_LEVEL *, UINT,
@@ -115,6 +117,14 @@ static void reportPsoCache(ID3D12Device *device)
 
 static void reportUma(ID3D12Device *device)
 {
+    MEMORYSTATUSEX memory = {};
+    memory.dwLength = sizeof(memory);
+    const BOOL hasMemory = GlobalMemoryStatusEx(&memory);
+    const auto uploadProperties = RelayD3D12CustomHeapProperties(device, 1, D3D12_HEAP_TYPE_UPLOAD);
+    const auto readbackProperties = RelayD3D12CustomHeapProperties(device, 1, D3D12_HEAP_TYPE_READBACK);
+    std::printf("perf: physical_bytes=%llu memory_query=%d upload_page=%u readback_page=%u\n",
+        static_cast<unsigned long long>(memory.ullTotalPhys), hasMemory,
+        unsigned(uploadProperties.CPUPageProperty), unsigned(readbackProperties.CPUPageProperty));
     D3D12_FEATURE_DATA_ARCHITECTURE1 architecture = {};
     HRESULT hr = device->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE1, &architecture,
             sizeof(architecture));
@@ -250,6 +260,14 @@ int main()
     std::printf("CreateCommandQueue hr=0x%08lx\n", static_cast<unsigned long>(hr));
     if (FAILED(hr) || !queue)
         return 1;
+
+    for (DXGI_FORMAT format : {DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM})
+    {
+        const HRESULT gpuHr = uma_probe::check(device12, queue, format);
+        std::printf("perf: UMA GPU visibility format=%u hr=0x%08lx result=%s\n", unsigned(format),
+            static_cast<unsigned long>(gpuHr), gpuHr == S_OK ? "pass" : gpuHr == S_FALSE ? "unsupported" : "fail");
+        if (FAILED(gpuHr)) return 1;
+    }
 
     ID3D11Device *device11 = nullptr;
     ID3D11DeviceContext *context11 = nullptr;
