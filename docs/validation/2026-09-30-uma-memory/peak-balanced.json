@@ -1,0 +1,49 @@
+{
+  "qualified": false,
+  "checks": [
+    {
+      "name": "graphics-api",
+      "passed": true,
+      "detail": "selected Direct3D 12"
+    },
+    {
+      "name": "no-d3d11-fallback",
+      "passed": true,
+      "detail": "On12 driver device created"
+    },
+    {
+      "name": "relay12-stages",
+      "passed": true,
+      "detail": "8 traced stages succeeded"
+    },
+    {
+      "name": "wrapped-resources",
+      "passed": false,
+      "detail": "no successful 'wrapped' stage marker"
+    },
+    {
+      "name": "presented-frame",
+      "passed": true,
+      "detail": "Metal HUD counted frames 221 to 2624 over 57 reports"
+    },
+    {
+      "name": "no-device-removal",
+      "passed": true,
+      "detail": "none reported"
+    },
+    {
+      "name": "no-crash",
+      "passed": true,
+      "detail": "none reported"
+    }
+  ],
+  "unsupported": {},
+  "frame_rate": {
+    "mean_fps": 33.37,
+    "p1_low_fps": 3.48,
+    "min_fps": 3.48,
+    "frames": 2403,
+    "seconds": 72.009,
+    "windows": 56
+  }
+}
