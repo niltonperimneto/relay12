@@ -8,14 +8,18 @@
 #include <vector>
 
 static std::atomic<bool> failAllocation{false};
-void* operator new(std::size_t size)
-{
-    if (failAllocation.exchange(false)) throw std::bad_alloc();
-    if (void* p = std::malloc(size ? size : 1)) return p;
-    throw std::bad_alloc();
-}
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+template<class T> struct FailAllocator {
+    using value_type = T;
+    FailAllocator() = default;
+    template<class U> FailAllocator(const FailAllocator<U>&) noexcept {}
+    T* allocate(std::size_t count) {
+        if (failAllocation.exchange(false)) throw std::bad_alloc();
+        return std::allocator<T>{}.allocate(count);
+    }
+    void deallocate(T* p, std::size_t count) noexcept { std::allocator<T>{}.deallocate(p, count); }
+    template<class U> bool operator==(const FailAllocator<U>&) const noexcept { return true; }
+    template<class U> bool operator!=(const FailAllocator<U>&) const noexcept { return false; }
+};
 static void check(bool value) { if (!value) std::abort(); }
 struct Resource {
     std::atomic<unsigned>* completed;
@@ -23,7 +27,7 @@ struct Resource {
     ~Resource() { check(completed->load() >= fence); }
 };
 using Ptr = std::unique_ptr<Resource>;
-using Pool = relay12::BoundedMemoryPool<Ptr>;
+using Pool = relay12::BoundedMemoryPool<Ptr, FailAllocator<Ptr>>;
 static Ptr make(std::atomic<unsigned>& completed, unsigned fence)
 {
     return Ptr(new Resource{&completed, fence});
