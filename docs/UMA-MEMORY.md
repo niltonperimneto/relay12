@@ -51,6 +51,11 @@ On12, samples them using shaders, and checks every readback pixel for RGBA/BGRA.
 `--bench` runs five upload bursts with 48 textures per burst, recording upload,
 transfer-frame and cycle times plus process working set where available. These
 serial transfer frames include readback and are not a game FPS estimate.
+`--transfer-only` skips shader-resource-view creation and samples GPU copies
+instead; it cannot qualify sampling behavior. `--continue-on-failure` records
+all profiles but preserves a failing exit status. Both the test and the probe
+initialize DXGI before creating a D3D12 device, as required by the tested Wine
+bridge.
 
 Use an isolated prefix and a configured Wine/GPTK runtime; never replace a game
 installation merely to run the benchmark. Add the runtime's licensed dxilconv.dll

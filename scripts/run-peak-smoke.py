@@ -62,8 +62,14 @@ def run_environment(runtime, prefix, sync="none"):
 def stop_server(wine, env, log):
     """Stop and reap only the validated test prefix before changing its mode."""
     for flag in ("-k", "-w"):
-        subprocess.run([str(wine.parent / "wineserver"), flag], env=env,
-                       stdout=log, stderr=subprocess.STDOUT, timeout=30, check=True)
+        try:
+            subprocess.run([str(wine.parent / "wineserver"), flag], env=env,
+                           stdout=log, stderr=subprocess.STDOUT, timeout=30, check=True)
+        except subprocess.CalledProcessError as error:
+            # Wine returns 1 for -k when this prefix has no active server.
+            # Still require -w to succeed before launching/changing modes.
+            if flag != "-k" or error.returncode != 1:
+                raise
 
 
 def main(argv=None):

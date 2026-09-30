@@ -216,9 +216,24 @@ int main()
         return 2;
     }
 
+    // Match normal application startup: D3DMetal's Wine bridge requires DXGI
+    // initialization before a direct D3D12CreateDevice call on this runtime.
+    using InitFactoryFn = HRESULT(WINAPI*)(REFIID, void**);
+    HMODULE initDxgi = LoadLibraryW(L"dxgi.dll");
+    auto initFactory = initDxgi ? reinterpret_cast<InitFactoryFn>(
+        reinterpret_cast<void*>(GetProcAddress(initDxgi, "CreateDXGIFactory1"))) : nullptr;
+    IDXGIFactory1* initialFactory = nullptr;
+    IDXGIAdapter1* initialAdapter = nullptr;
+    if (!initFactory || FAILED(initFactory(IID_IDXGIFactory1, reinterpret_cast<void**>(&initialFactory))) || !initialFactory)
+        return 1;
+    const HRESULT adapterHr = initialFactory->EnumAdapters1(0, &initialAdapter);
+    initialFactory->Release();
+    if (FAILED(adapterHr) || !initialAdapter) return 1;
+
     ID3D12Device *device12 = nullptr;
-    HRESULT hr = createDevice12(nullptr, D3D_FEATURE_LEVEL_11_0, IID_ID3D12Device,
+    HRESULT hr = createDevice12(initialAdapter, D3D_FEATURE_LEVEL_11_0, IID_ID3D12Device,
             reinterpret_cast<void **>(&device12));
+    initialAdapter->Release();
     std::printf("D3D12CreateDevice hr=0x%08lx\n", static_cast<unsigned long>(hr));
     if (FAILED(hr) || !device12)
         return 1;
