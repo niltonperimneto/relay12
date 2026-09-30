@@ -18,9 +18,10 @@ inline bool UnsupportedUmaOperation(HRESULT hr) noexcept
 }
 // S_FALSE means unsupported: no object or partial initialization escapes.
 // Allocation failure and device loss remain errors; the caller must propagate.
-inline HRESULT CreateUmaInitialTexture(ID3D12Device* device, UINT nodeMask,
+template<class Device, class Resource = ID3D12Resource>
+inline HRESULT CreateUmaInitialTexture(Device* device, UINT nodeMask,
     const D3D12_RESOURCE_DESC& desc, const void* data, UINT rowPitch, UINT depthPitch,
-    ID3D12Resource** output) noexcept
+    Resource** output) noexcept
 {
     *output = nullptr;
     if (!UmaInitialTextureEligible(desc) || !data || desc.Width > rowPitch / 4u) return S_FALSE;
@@ -29,7 +30,7 @@ inline HRESULT CreateUmaInitialTexture(ID3D12Device* device, UINT nodeMask,
     heap.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
     heap.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
     heap.CreationNodeMask = heap.VisibleNodeMask = nodeMask;
-    ID3D12Resource* candidate = nullptr;
+    Resource* candidate = nullptr;
     HRESULT hr = device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
         D3D12_RESOURCE_STATE_COMMON, nullptr, IID_ID3D12Resource, reinterpret_cast<void**>(&candidate));
     if (SUCCEEDED(hr) && !candidate) hr = E_FAIL;
