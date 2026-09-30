@@ -87,3 +87,7 @@ caches within their limits after cleanup, and measurable staging-memory reductio
 Across five alternating trials, median and p95 transfer-frame time must not regress
 by more than 5%. Direct uploads remain opt-in even after passing. Do not claim
 macOS 27/Neo qualification until the raw hardware results have been recorded.
+
+Hardware results: [2026-09-30 A18 Pro validation](validation/2026-09-30-uma-memory/README.md).
+Raw GPU transfers and PEAK D3D12/MSYNC startup passed their individual checks,
+but On12 sampling/readback and wrapped-resource qualification remain incomplete.

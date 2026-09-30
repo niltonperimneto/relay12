@@ -1,0 +1,133 @@
+{
+  "qualified": false,
+  "date": "2026-09-30",
+  "runtime_commit": "402d3458efbc2f7d8ba12c5beab7a31b471fca9f",
+  "harness_commit": "240c628f2d21bbbe63bcc1f183967f95981da90f",
+  "runtime": "WineCX GPTK 4.7.54 / Wine 11.17 / D3DMetal 4.0b2",
+  "hardware": "Apple A18 Pro",
+  "physical_bytes": 8589934592,
+  "os": "macOS 27.2",
+  "runtime_flags": {
+    "D3DM_WINE_UNIX_CALL": "1",
+    "D3DM_MTL4": "1"
+  },
+  "python_tests": 193,
+  "static_gates": "pass",
+  "native_pool": "pass",
+  "native_pool_tsan": "pass",
+  "unit_tests": {
+    "none": {
+      "pool": "pass",
+      "direct_upload_failure_handling": "pass"
+    },
+    "msync": {
+      "pool": "pass",
+      "direct_upload_failure_handling": "pass"
+    }
+  },
+  "raw_gpu_upload_copy_readback": {
+    "RGBA8": "pass",
+    "BGRA8": "pass"
+  },
+  "reported_architecture": {
+    "hr": "00000000",
+    "UMA": false,
+    "CacheCoherentUMA": false
+  },
+  "on12_direct_path_qualified": false,
+  "on12_sampling": {
+    "passed": false,
+    "operation": "CreateShaderResourceView",
+    "hr": "887a0004"
+  },
+  "on12_transfer_only": {
+    "none": [
+      {
+        "trial": 0,
+        "mode": "legacy",
+        "exit_code": 1,
+        "log": "transfer-none-legacy.log",
+        "transfer_frames": 0,
+        "median_ms": null,
+        "p95_ms": null,
+        "memory_telemetry": []
+      },
+      {
+        "trial": 0,
+        "mode": "balanced",
+        "exit_code": 1,
+        "log": "transfer-none-balanced.log",
+        "transfer_frames": 0,
+        "median_ms": null,
+        "p95_ms": null,
+        "memory_telemetry": []
+      },
+      {
+        "trial": 0,
+        "mode": "direct",
+        "exit_code": 1,
+        "log": "transfer-none-direct.log",
+        "transfer_frames": 0,
+        "median_ms": null,
+        "p95_ms": null,
+        "memory_telemetry": []
+      }
+    ],
+    "msync": [
+      {
+        "trial": 0,
+        "mode": "legacy",
+        "exit_code": 1,
+        "log": "transfer-msync-legacy.log",
+        "transfer_frames": 0,
+        "median_ms": null,
+        "p95_ms": null,
+        "memory_telemetry": []
+      },
+      {
+        "trial": 0,
+        "mode": "balanced",
+        "exit_code": 1,
+        "log": "transfer-msync-balanced.log",
+        "transfer_frames": 0,
+        "median_ms": null,
+        "p95_ms": null,
+        "memory_telemetry": []
+      },
+      {
+        "trial": 0,
+        "mode": "direct",
+        "exit_code": 1,
+        "log": "transfer-msync-direct.log",
+        "transfer_frames": 0,
+        "median_ms": null,
+        "p95_ms": null,
+        "memory_telemetry": []
+      }
+    ]
+  },
+  "peak": {
+    "legacy": {
+      "result": "peak-legacy.json",
+      "requested_profile": "legacy",
+      "sync": "msync",
+      "qualified": false,
+      "online_authentication": "ConnectExternalTokenValidationFailed"
+    },
+    "balanced": {
+      "result": "peak-balanced.json",
+      "requested_profile": "balanced",
+      "sync": "msync",
+      "qualified": false,
+      "online_authentication": "ConnectExternalTokenValidationFailed"
+    }
+  },
+  "performance_comparison_valid": false,
+  "automatic_balanced_activation": false,
+  "limitations": [
+    "No wrapped-resource activity observed in either PEAK run.",
+    "PEAK startup smoke runs are not matched gameplay benchmarks.",
+    "No completed On12 transfer frames or direct-success telemetry.",
+    "Published logs are filtered excerpts; checker results were computed from full local logs."
+  ]
+}
