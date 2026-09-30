@@ -23,6 +23,9 @@ cp "$repository_root/compat/relay_msvc_pragma.hpp" \
 cp "$repository_root/compat/relay_member_detect.hpp" \
     "$source_dir/include/relay_member_detect.hpp"
 
+cp "$repository_root/compat/relay_uma_upload.hpp" \
+    "$source_dir/include/relay_uma_upload.hpp"
+
 for patch in "$repository_root"/patches/d3d11on12/*.patch; do
     # The pinned Microsoft tree stores these sources as CRLF. The relay patch
     # series is kept as normal LF text, so whitespace matching is intentional;
