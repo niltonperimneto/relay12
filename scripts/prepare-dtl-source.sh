@@ -34,6 +34,9 @@ for patch in "$repository_root"/patches/dtl/*.patch; do
             "$patch"
 done
 
+cp "$repository_root/compat/relay_memory_pool.hpp" \
+    "$source_dir/include/relay_memory_pool.hpp"
+
 # These are canonical across the DTL and D3D11On12 ports. Copying after the
 # upstream patch series prevents either prepared tree from carrying a fork.
 cp "$repository_root/compat/relay_ownership.hpp" \

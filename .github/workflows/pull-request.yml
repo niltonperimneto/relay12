@@ -88,6 +88,9 @@ jobs:
           c++ -std=c++17 -O2 -Wall -Wextra -Werror -pthread \
             -Icompat tests/relay_batch_ring_test.cpp -o "$RUNNER_TEMP/relay_batch_ring_test"
           timeout 90 "$RUNNER_TEMP/relay_batch_ring_test"
+          c++ -std=c++17 -O2 -Wall -Wextra -Werror -pthread \
+            -Icompat tests/relay_memory_pool_test.cpp -o "$RUNNER_TEMP/relay_memory_pool_test"
+          timeout 90 "$RUNNER_TEMP/relay_memory_pool_test"
           git -C "$worktree" -c core.whitespace=cr-at-eol diff --check
           # A bypassed struct-returning call fails the MinGW build anyway;
           # this names the call and its wrapper instead of surfacing as a
@@ -257,6 +260,9 @@ jobs:
             -static -Icompat tests/relay_batch_ring_test.cpp -lsynchronization \
             -o "$RUNNER_TEMP/relay_batch_ring_test.exe"
           timeout 90 wine "$RUNNER_TEMP/relay_batch_ring_test.exe"
+          x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Werror \
+            -static -Icompat tests/relay_memory_pool_test.cpp -o "$RUNNER_TEMP/relay_memory_pool_test.exe"
+          timeout 90 wine "$RUNNER_TEMP/relay_memory_pool_test.exe"
           x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Werror \
             -static -Icompat tests/relay_batch_submission_bench.cpp -lsynchronization \
             -o "$RUNNER_TEMP/relay_batch_submission_bench.exe"
@@ -575,6 +581,9 @@ jobs:
           x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
             -fno-exceptions -fno-rtti -o peak_on12_probe.exe \
             tests/peak_on12_probe.cpp -luuid
+          x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
+            -fno-exceptions -fno-rtti -o d3d11_e2e_uma.exe \
+            tests/e2e_uma_memory.cpp -ld3d12 -ld3dcompiler -lpsapi -luuid
 
       - name: Run the D3D11-on-12 concurrency stress
         run: |
@@ -830,7 +839,7 @@ jobs:
         run: |
           mkdir -p artifacts/first-frame
           cp d3d11shim.dll artifacts/first-frame/d3d11.dll
-          cp d3d11on12core.dll d3d11on12host.dll d3d11_e2e_triangle.exe d3d11_e2e_wrapped.exe artifacts/first-frame/
+          cp d3d11on12core.dll d3d11on12host.dll d3d11_e2e_triangle.exe d3d11_e2e_wrapped.exe d3d11_e2e_uma.exe peak_on12_probe.exe artifacts/first-frame/
           cp "$RUNNER_TEMP/d3d11on12-build/src/d3d11on12.dll" artifacts/first-frame/
 
       - name: Upload first-frame runtime

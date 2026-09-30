@@ -1,0 +1,141 @@
+Subject: [PATCH] d3d11on12: opt in to direct UMA initial texture uploads
+
+Simple initial color-texture uploads can avoid temporary staging allocations
+on coherent UMA. Probe creation and initialization before constructing the DTL
+resource, falling back only for unsupported operations. No existing resource
+is replaced and no application data pointer survives the DDI call. Preserve
+allocation/device-loss failures and keep this path opt-in pending GPU tests.
+
+diff --git a/src/device.cpp b/src/device.cpp
+index cfb73d9..be5aebc 100644
+--- a/src/device.cpp
++++ b/src/device.cpp
+@@ -275,11 +275,11 @@ namespace D3D11On12
+         args.UseResidencyManagement = true;
+         args.DisableGPUTimeout = pAdapter->m_bAPIDisablesGPUTimeout;
+         args.IsXbox = IsXboxCreateFlags(CreateDeviceFlags);
+-        // CommandListManager caps this at min(its own 256 MB, this field); a
+-        // zero here would make every upload trigger a submit.
+-        args.MaxAllocatedUploadHeapSpacePerCommandList = MAXDWORD;
++        // CommandListManager caps this at min(its own 256 MB, this field); a
++        // zero here would make every upload trigger a submit.
++        args.MaxAllocatedUploadHeapSpacePerCommandList = MAXDWORD;
+ #ifdef __D3D11On12CreatorID_INTERFACE_DEFINED__
+-        args.CreatorID = uuidof<D3D11On12CreatorID>();
++        args.CreatorID = uuidof<D3D11On12CreatorID>();
+ #endif
+         return args;
+     }
+@@ -668,6 +668,7 @@ namespace D3D11On12
+         }
+         GetBatchedContext().ProcessBatch();
+         ReportPipelineTelemetry(GetImmediateContextNoFlush());
++        GetImmediateContextNoFlush().ReportMemoryTelemetry();
+     }
+ 
+     //----------------------------------------------------------------------------------------------------------------------------------
+@@ -1126,7 +1127,7 @@ namespace D3D11On12
+         m_SharedResourceHelpers.QueryResourceInfoFromKMTHandle(hKMTHandle, pFlagOverrides, &resourceInfoNextLayer);
+         switch (resourceInfoNextLayer.m_Type)
+         {
+-        default: throw D3D11On12Error(E_UNEXPECTED);
++        default: throw D3D11On12Error(E_UNEXPECTED);
+         case D3D12TranslationLayer::ResourceType:
+             pResourceInfo->m_Type = ResourceType;
+             pResourceInfo->Resource.m_ResourceDesc = resourceInfoNextLayer.Resource.m_ResourceDesc;
+@@ -1257,7 +1258,7 @@ namespace D3D11On12
+         {
+             return E_OUTOFMEMORY;
+         }
+-        catch( D3D11On12Error& ex )
++        catch( D3D11On12Error& ex )
+         {
+             return ex.Error();
+         }
+diff --git a/src/resource.cpp b/src/resource.cpp
+index c4fcfa6..fbd1d5a 100644
+--- a/src/resource.cpp
++++ b/src/resource.cpp
+@@ -1,6 +1,7 @@
+ // Copyright (c) Microsoft Corporation.
+ // Licensed under the MIT License.
+ #include "pch.hpp"
++#include "relay_uma_upload.hpp"
+ 
+ namespace D3D11On12
+ {
+@@ -249,7 +250,7 @@ RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+             {
+                 return CreateFunc();
+             }
+-            catch (D3D11On12Error&)
++            catch (D3D11On12Error&)
+             {
+                 if (pDevice->GetBatchedContext().ProcessBatch())
+                 {
+@@ -258,7 +259,46 @@ RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+                 throw;
+             }
+         };
+-        auto spUnderlyingResource = CreateAndRetry();
++        unique_comptr<D3D12TranslationLayer::Resource> spUnderlyingResource;
++        bool directInitialUpload = false;
++        if (context.UseDirectInitialUpload() && pCreateResource->pInitialDataUP &&
++            (pCreateResource->Usage == D3D10_DDI_USAGE_DEFAULT || pCreateResource->Usage == D3D10_DDI_USAGE_IMMUTABLE) &&
++            createArgs.m_flags11.BindFlags == D3D11_BIND_SHADER_RESOURCE &&
++            createArgs.m_flags11.MiscFlags == 0 && createArgs.m_flags11.CPUAccessFlags == 0 &&
++            !createArgs.IsShared() && !createArgs.m_PrivateCreateFn &&
++            relay12::UmaInitialTextureEligible(createArgs.m_desc12))
++        {
++            const auto& data = pCreateResource->pInitialDataUP[0];
++            unique_comptr<ID3D12Resource> candidate;
++            const HRESULT directHr = relay12::CreateUmaInitialTexture(context.m_pDevice12.get(), context.GetNodeMask(),
++                createArgs.m_desc12, data.pSysMem, data.SysMemPitch, data.SysMemSlicePitch, &candidate);
++            if (directHr == S_OK)
++            {
++                auto directArgs = createArgs;
++                directArgs.m_heapDesc.Properties = CD3DX12_HEAP_PROPERTIES(D3D12_CPU_PAGE_PROPERTY_WRITE_BACK, D3D12_MEMORY_POOL_L0,
++                    context.GetNodeMask(), context.GetNodeMask());
++                directArgs.m_heapDesc.Flags = D3D12_HEAP_FLAG_NONE;
++                // Synchronous construction takes its own reference. Clear this
++                // temporary callback before the candidate's local owner dies.
++                directArgs.m_PrivateCreateFn = [&](const D3D12TranslationLayer::ResourceCreationArgs&, ID3D12SwapChainAssistant*, ID3D12Resource** result) {
++                    *result = candidate.get();
++                    (*result)->AddRef();
++                };
++                spUnderlyingResource = D3D12TranslationLayer::Resource::CreateResource(
++                    &context, directArgs, pDevice->GetResourceAllocationContext());
++                spUnderlyingResource->Parent()->m_PrivateCreateFn = {};
++                directInitialUpload = true;
++                UINT64 stagingBytes = 0;
++                context.m_pDevice12->GetCopyableFootprints(&createArgs.m_desc12, 0, 1, 0, nullptr, nullptr, nullptr, &stagingBytes);
++                context.RecordDirectUpload(true, stagingBytes);
++            }
++            else
++            {
++                context.RecordDirectUpload(false);
++                ThrowFailure(directHr);
++            }
++        }
++        if (!spUnderlyingResource) spUnderlyingResource = CreateAndRetry();
+ 
+         // Check if we're supposed to be creating a shared resource
+         {
+@@ -280,7 +320,7 @@ RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+             {
+                 // Initial data upload should never be predicated
+                 D3D12TranslationLayer::ImmediateContext::CDisablePredication DisablePredication(context.CreatesAndDestroysAreMultithreaded() ? nullptr : &context);
+-                if (pCreateResource->pInitialDataUP)
++                if (pCreateResource->pInitialDataUP && !directInitialUpload)
+                 {
+                     pDevice->GetBatchedContext().UploadInitialData(
+                         spUnderlyingResource.get(),
+@@ -435,7 +475,7 @@ RELAY_SUPPRESS_CONSTANT_CONDITIONAL // conditional expression is constant
+         {
+             pDevice->GetBatchedContext().ResourceUpdateSubresourceUP(Resource::CastFromAndGetImmediateResource(hDst), DstSubresource, (D3D12_BOX*)pDstBox, pMem, SrcPitch, SrcDepth);
+         }
+-        catch (D3D11On12Error& err)
++        catch (D3D11On12Error& err)
+         {
+             if (err.Error() == E_OUTOFMEMORY)
+             {

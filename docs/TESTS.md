@@ -389,3 +389,11 @@ c++ -std=c++17 -O1 -g -pthread -fsanitize=thread -Icompat \
     tests/relay_batch_ring_test.cpp -o /tmp/relay_batch_ring_tsan
 /tmp/relay_batch_ring_tsan
 ```
+
+
+### UMA memory validation
+
+See [UMA memory management](UMA-MEMORY.md) for the bounded-pool unit tests,
+GPU-visible initial-upload probes, shader sampling/readback test, and isolated
+legacy/balanced/direct benchmark runner. The GPU tests compile in CI but need
+the real Wine/GPTK stack to run.

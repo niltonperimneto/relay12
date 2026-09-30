@@ -1,0 +1,398 @@
+Subject: [PATCH] dtl: bound completed staging caches on small UMA devices
+
+Upstream ages staging buffers by fence distance without a byte budget, retaining
+large upload/readback bursts on 8 GiB shared-memory systems. Use a separate
+bounded cache only for the balanced profile, preserving unfinished GPU uses
+and the legacy pool implementation. Track committed allocation bytes, not
+application payload size. Missing capabilities select legacy behavior.
+
+diff --git a/include/ImmediateContext.hpp b/include/ImmediateContext.hpp
+index 747e1f7..acea117 100644
+--- a/include/ImmediateContext.hpp
++++ b/include/ImmediateContext.hpp
+@@ -1,6 +1,7 @@
+ // Copyright (c) Microsoft Corporation.
+ // Licensed under the MIT License.
+ #pragma once
++#include "relay_memory_pool.hpp"
+ 
+ namespace D3D12TranslationLayer
+ {
+@@ -143,7 +144,7 @@ public:
+     {
+     }
+     CBoundedFencePool(CBoundedFencePool&& other) noexcept
+-        : CFencePool<TResourceType>(std::move(other)),
++        : CFencePool<TResourceType>(std::move(other)),
+         m_MaxInFlightDepth(other.m_MaxInFlightDepth)
+     {
+     }
+@@ -173,9 +174,21 @@ public:
+     {
+     }
+ 
+-    void ReturnToPool(UINT64 Size, TResourceType&& Resource, UINT64 FenceValue) noexcept
++    void ConfigureByteLimit(UINT64 limit)
++    {
++        m_Bounded.reset(new relay12::BoundedMemoryPool<TResourceType>(limit));
++    }
++    bool HasByteLimit() const noexcept { return !!m_Bounded; }
++    relay12::PoolCounters MemoryCounters() noexcept
++    {
++        return m_Bounded ? m_Bounded->snapshot() : relay12::PoolCounters{};
++    }
++    bool ReturnToPool(UINT64 Size, TResourceType&& Resource, UINT64 FenceValue, UINT64 AllocationBytes = 0) noexcept
+     {
+         UINT PoolIndex = IndexFromSize(Size);
++        if (m_Bounded)
++            return m_Bounded->put((UINT64(PoolIndex) + 1) * ResourceSizeMultiple,
++                AllocationBytes, FenceValue, std::move(Resource));
+         auto Lock = m_Lock.TakeLock();
+ 
+         if (PoolIndex >= m_MultiPool.size())
+@@ -184,13 +197,23 @@ public:
+         }
+ 
+         m_MultiPool[PoolIndex].ReturnToPool(std::move(Resource), FenceValue);
++        return true;
+     }
+ 
+     template <typename PFNCreateNew>
+     TResourceType RetrieveFromPool(UINT64 Size, UINT64 CurrentFenceValue, PFNCreateNew pfnCreateNew) noexcept(false)
+     {
+         UINT PoolIndex = IndexFromSize(Size);
+-        UINT AlignedSize = (PoolIndex + 1) * ResourceSizeMultiple;
++        UINT64 AlignedSize = (UINT64(PoolIndex) + 1) * ResourceSizeMultiple;
++        if (m_Bounded)
++        {
++            auto resource = m_Bounded->take(AlignedSize, CurrentFenceValue);
++            if (resource) return resource;
++            // No pool lock held across a D3D12 allocation.
++            resource = pfnCreateNew(AlignedSize);
++            m_Bounded->allocated();
++            return resource;
++        }
+ 
+         auto Lock = m_Lock.TakeLock();
+ 
+@@ -214,6 +237,7 @@ public:
+ 
+     void Trim(UINT64 CurrentFenceValue)
+     {
++        if (m_Bounded) { m_Bounded->trim(CurrentFenceValue); return; }
+         auto Lock = m_Lock.TakeLock();
+ 
+         for (TPool& pool : m_MultiPool)
+@@ -230,6 +254,7 @@ protected:
+     typedef std::vector<TPool> TMultiPool;
+ 
+ protected:
++    std::unique_ptr<relay12::BoundedMemoryPool<TResourceType>> m_Bounded;
+     TMultiPool m_MultiPool;
+     OptLock<> m_Lock;
+     UINT64 m_TrimThreshold;
+@@ -509,7 +534,7 @@ private: // Methods
+     {
+         SHeapEntry NewEntry;
+         ThrowFailure( m_pDevice->CreateDescriptorHeap(&m_Desc, IID_PPV_ARGS(&NewEntry.m_Heap)) ); // throw( _com_error )
+-        HeapOffset HeapBase = RelayD3D12CPUDescriptorHeapStart(NewEntry.m_Heap);
++        HeapOffset HeapBase = RelayD3D12CPUDescriptorHeapStart(NewEntry.m_Heap);
+         NewEntry.m_FreeList.push_back({HeapBase.ptr,
+                                         HeapBase.ptr + m_Desc.NumDescriptors * m_DescriptorSize}); // throw( bad_alloc )
+ 
+@@ -939,6 +964,21 @@ public:
+ #endif
+     CreationArgs m_CreationArgs;
+ 
++    void ReportMemoryTelemetry() noexcept;
++    bool UseDirectInitialUpload() const noexcept { return m_DirectInitialUpload; }
++    void RecordDirectUpload(bool success, UINT64 bytes = 0) noexcept
++    {
++        ++m_DirectAttempts;
++        if (success) { ++m_DirectSuccess; m_DirectAvoidedBytes += bytes; }
++        else ++m_DirectFallbacks;
++    }
++private:
++    bool m_BalancedMemory = false;
++    bool m_DirectInitialUpload = false;
++    const char* m_MemoryReason = "legacy";
++    UINT64 m_PhysicalMemory = 0;
++    std::atomic<UINT64> m_DirectAttempts{0}, m_DirectSuccess{0}, m_DirectFallbacks{0}, m_DirectAvoidedBytes{0};
++public:
+     bool RequiresBufferOutofBoundsHandling() { return m_CreationArgs.RequiresBufferOutOfBoundsHandling; }
+     bool IsXbox() { return m_CreationArgs.IsXbox; } // Currently only accurate with D3D11.
+ 
+@@ -1469,7 +1509,7 @@ public: // Methods
+         }
+         else
+         {
+-            return RelayD3D12CustomHeapProperties(m_pDevice12, GetNodeMask(), Type);
++            return RelayD3D12CustomHeapProperties(m_pDevice12, GetNodeMask(), Type);
+         }
+     }
+ 
+@@ -1562,20 +1602,20 @@ public: // variables
+ 
+     BlitHelper m_BlitHelper{ this };
+ 
+-    template <typename TIface> CDescriptorHeapManager& GetViewAllocator()
+-    {
+-        if constexpr (std::is_same_v<TIface, ShaderResourceViewType>)
+-            return m_SRVAllocator;
+-        else if constexpr (std::is_same_v<TIface, UnorderedAccessViewType>)
+-            return m_UAVAllocator;
+-        else if constexpr (std::is_same_v<TIface, RenderTargetViewType>)
+-            return m_RTVAllocator;
+-        else
+-        {
+-            static_assert(std::is_same_v<TIface, DepthStencilViewType>);
+-            return m_DSVAllocator;
+-        }
+-    }
++    template <typename TIface> CDescriptorHeapManager& GetViewAllocator()
++    {
++        if constexpr (std::is_same_v<TIface, ShaderResourceViewType>)
++            return m_SRVAllocator;
++        else if constexpr (std::is_same_v<TIface, UnorderedAccessViewType>)
++            return m_UAVAllocator;
++        else if constexpr (std::is_same_v<TIface, RenderTargetViewType>)
++            return m_RTVAllocator;
++        else
++        {
++            static_assert(std::is_same_v<TIface, DepthStencilViewType>);
++            return m_DSVAllocator;
++        }
++    }
+ 
+     InternalRootSignature m_InternalUAVRootSig;
+     unique_comptr<ID3D12PipelineState> m_pDrawAutoPSO;
+diff --git a/src/ImmediateContext.cpp b/src/ImmediateContext.cpp
+index 3d06d2a..8bd5799 100644
+--- a/src/ImmediateContext.cpp
++++ b/src/ImmediateContext.cpp
+@@ -2,6 +2,7 @@
+ // Licensed under the MIT License.
+ 
+ #include "pch.h"
++#include <cstdio>
+ #include "PrecompiledShaders.h"
+ 
+ namespace D3D12TranslationLayer
+@@ -107,6 +108,27 @@ ImmediateContext::ImmediateContext(UINT nodeIndex, D3D12_FEATURE_DATA_D3D12_OPTI
+     , m_residencyManager(*this)
+     , m_architecture(QueryArchitectureFlags())
+ {
++    char profileText[32] = {};
++    const DWORD profileLength = GetEnvironmentVariableA("D3D11ON12_COMPAT_MemoryProfile", profileText, sizeof(profileText));
++    const auto profile = profileLength >= sizeof(profileText) ? relay12::MemoryProfile::Invalid : relay12::ParseMemoryProfile(profileText);
++    MEMORYSTATUSEX memory = {};
++    memory.dwLength = sizeof(memory);
++    if (GlobalMemoryStatusEx(&memory)) m_PhysicalMemory = memory.ullTotalPhys;
++    m_BalancedMemory = relay12::SelectBalancedMemory(profile, m_architecture.isUMA, m_PhysicalMemory);
++    m_MemoryReason = profile == relay12::MemoryProfile::Invalid ? "invalid-profile" :
++        profile == relay12::MemoryProfile::Legacy ? "explicit-legacy" :
++        profile == relay12::MemoryProfile::Balanced ? "explicit-balanced" :
++        !m_architecture.isUMA ? "uma-unavailable" : !m_PhysicalMemory ? "memory-unavailable" :
++        m_BalancedMemory ? "small-uma" : "large-memory";
++    if (m_BalancedMemory)
++    {
++        m_UploadBufferPool.ConfigureByteLimit(32ull << 20);
++        m_ReadbackBufferPool.ConfigureByteLimit(16ull << 20);
++        m_DecoderBufferPool.ConfigureByteLimit(16ull << 20);
++    }
++    char direct[2] = {};
++    m_DirectInitialUpload = m_architecture.isUMA && m_architecture.iscacheCoherentUMA &&
++        GetEnvironmentVariableA("D3D11ON12_COMPAT_UMADirectInitialUpload", direct, sizeof(direct)) == 1 && direct[0] == '1';
+     UNREFERENCED_PARAMETER(debugFlags);
+     memset(m_BlendFactor, 0, sizeof(m_BlendFactor));
+     memset(m_auVertexOffsets, 0, sizeof(m_auVertexOffsets));
+@@ -143,7 +165,7 @@ ImmediateContext::ImmediateContext(UINT nodeIndex, D3D12_FEATURE_DATA_D3D12_OPTI
+     D3D12_COMMAND_QUEUE_DESC SyncOnlyQueueDesc = { D3D12_COMMAND_LIST_TYPE_NONE };
+     (void)m_pDevice12->CreateCommandQueue(&SyncOnlyQueueDesc, IID_PPV_ARGS(&m_pSyncOnlyQueue));
+ 
+-    LUID adapterLUID = RelayD3D12AdapterLuid(pDevice);
++    LUID adapterLUID = RelayD3D12AdapterLuid(pDevice);
+     {
+         RelayComPtr<IDXCoreAdapterFactory> pFactory;
+ #if DYNAMIC_LOAD_DXCORE
+@@ -195,8 +217,8 @@ ImmediateContext::ImmediateContext(UINT nodeIndex, D3D12_FEATURE_DATA_D3D12_OPTI
+     hr = m_pDevice12->CreateDescriptorHeap(&m_ViewHeap.m_Desc, IID_PPV_ARGS(&m_ViewHeap.m_pDescriptorHeap));
+     ThrowFailure(hr); //throw( _com_error )
+     m_ViewHeap.m_DescriptorSize = m_pDevice12->GetDescriptorHandleIncrementSize(m_ViewHeap.m_Desc.Type);
+-    m_ViewHeap.m_DescriptorHeapBase = RelayD3D12GPUDescriptorHeapStart(m_ViewHeap.m_pDescriptorHeap.get()).ptr;
+-    m_ViewHeap.m_DescriptorHeapBaseCPU = RelayD3D12CPUDescriptorHeapStart(m_ViewHeap.m_pDescriptorHeap.get()).ptr;
++    m_ViewHeap.m_DescriptorHeapBase = RelayD3D12GPUDescriptorHeapStart(m_ViewHeap.m_pDescriptorHeap.get()).ptr;
++    m_ViewHeap.m_DescriptorHeapBaseCPU = RelayD3D12CPUDescriptorHeapStart(m_ViewHeap.m_pDescriptorHeap.get()).ptr;
+     m_ViewHeap.m_BitsToSetOnNewHeap = e_ViewsDirty;
+ 
+     if (!ComputeOnly())
+@@ -204,8 +226,8 @@ ImmediateContext::ImmediateContext(UINT nodeIndex, D3D12_FEATURE_DATA_D3D12_OPTI
+         hr = m_pDevice12->CreateDescriptorHeap(&m_SamplerHeap.m_Desc, IID_PPV_ARGS(&m_SamplerHeap.m_pDescriptorHeap));
+         ThrowFailure(hr); //throw( _com_error )
+         m_SamplerHeap.m_DescriptorSize = m_pDevice12->GetDescriptorHandleIncrementSize(m_SamplerHeap.m_Desc.Type);
+-        m_SamplerHeap.m_DescriptorHeapBase = RelayD3D12GPUDescriptorHeapStart(m_SamplerHeap.m_pDescriptorHeap.get()).ptr;
+-        m_SamplerHeap.m_DescriptorHeapBaseCPU = RelayD3D12CPUDescriptorHeapStart(m_SamplerHeap.m_pDescriptorHeap.get()).ptr;
++        m_SamplerHeap.m_DescriptorHeapBase = RelayD3D12GPUDescriptorHeapStart(m_SamplerHeap.m_pDescriptorHeap.get()).ptr;
++        m_SamplerHeap.m_DescriptorHeapBaseCPU = RelayD3D12CPUDescriptorHeapStart(m_SamplerHeap.m_pDescriptorHeap.get()).ptr;
+         m_SamplerHeap.m_BitsToSetOnNewHeap = e_SamplersDirty;
+     }
+ 
+@@ -579,8 +601,8 @@ void ImmediateContext::RollOverHeap(OnlineDescriptorHeap& Heap) noexcept(false)
+     }
+ 
+     Heap.m_DescriptorRingBuffer = CFencedRingBuffer(Heap.m_Desc.NumDescriptors);
+-    Heap.m_DescriptorHeapBase = RelayD3D12GPUDescriptorHeapStart(Heap.m_pDescriptorHeap.get()).ptr;
+-    Heap.m_DescriptorHeapBaseCPU = RelayD3D12CPUDescriptorHeapStart(Heap.m_pDescriptorHeap.get()).ptr;
++    Heap.m_DescriptorHeapBase = RelayD3D12GPUDescriptorHeapStart(Heap.m_pDescriptorHeap.get()).ptr;
++    Heap.m_DescriptorHeapBaseCPU = RelayD3D12CPUDescriptorHeapStart(Heap.m_pDescriptorHeap.get()).ptr;
+ 
+     ID3D12DescriptorHeap* pHeaps[2] = {m_ViewHeap.m_pDescriptorHeap.get(), m_SamplerHeap.m_pDescriptorHeap.get()};
+     GetGraphicsCommandList()->SetDescriptorHeaps(ComputeOnly() ? 1 : 2, pHeaps);
+@@ -1243,7 +1265,7 @@ void TRANSLATION_API ImmediateContext::SoSetTargets(_In_range_(0, 4) UINT NumTar
+                 OffsetToBufferFilledSize,
+                 0,
+                 0,
+-                static_cast<UINT>(OffsetToBufferFilledSize + sizeof(UINT)),
++                static_cast<UINT>(OffsetToBufferFilledSize + sizeof(UINT)),
+                 1,
+                 1
+             };
+@@ -1258,7 +1280,7 @@ void TRANSLATION_API ImmediateContext::SoSetTargets(_In_range_(0, 4) UINT NumTar
+     {
+         bDirty |= m_CurrentState.m_SO.UpdateBinding(i, nullptr, e_Graphics);
+     }
+-    m_DirtyStates |= bDirty ? static_cast<UINT>(e_StreamOutputDirty) : 0u;
++    m_DirtyStates |= bDirty ? static_cast<UINT>(e_StreamOutputDirty) : 0u;
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+@@ -1278,7 +1300,7 @@ void TRANSLATION_API ImmediateContext::OMSetRenderTargets(__in_ecount(NumRTVs) R
+     {
+         bDirtyRTVs = true; // RTVs and DSV are updated together
+     }
+-    m_DirtyStates |= bDirtyRTVs ? static_cast<UINT>(e_RenderTargetsDirty) : 0u;
++    m_DirtyStates |= bDirtyRTVs ? static_cast<UINT>(e_RenderTargetsDirty) : 0u;
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+@@ -1795,7 +1817,7 @@ void TRANSLATION_API ImmediateContext::DiscardView(ViewBase* pView, const D3D12_
+ 
+     // D3D12 requires RenderTargets and DepthStenciles to be transitioned to the corresponding write state before discard.
+     auto pAPIResource = GetUnderlyingResource(pView->m_pResource);
+-    D3D12_RESOURCE_FLAGS ResourceFlags = RelayD3D12ResourceDesc(pAPIResource).Flags;
++    D3D12_RESOURCE_FLAGS ResourceFlags = RelayD3D12ResourceDesc(pAPIResource).Flags;
+ 
+     if ((ResourceFlags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) || (ResourceFlags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL))
+     {
+@@ -1898,7 +1920,7 @@ void TRANSLATION_API ImmediateContext::DiscardResource(Resource* pResource, cons
+     auto pAPIResource = GetUnderlyingResource(pResource);
+ 
+     // D3D12 requires RenderTargets and DepthStenciles to be transitioned to the corresponding write state before discard.
+-    D3D12_RESOURCE_FLAGS ResourceFlags = RelayD3D12ResourceDesc(pAPIResource).Flags;
++    D3D12_RESOURCE_FLAGS ResourceFlags = RelayD3D12ResourceDesc(pAPIResource).Flags;
+     if ((ResourceFlags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) || (ResourceFlags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL))
+     {
+         D3D12_RESOURCE_STATES RequiredState =
+@@ -2389,9 +2411,9 @@ void TRANSLATION_API ImmediateContext::GenMips( SRV *pSRV, D3D12_FILTER_TYPE Fil
+                     // every pixel. Add a half point to the wSlice to make sure we sample from the two relevant
+                     // z planes equally
+                     float wVal = (wSlice + .5f) / numIterations;
+-                    UINT wBits;
+-                    memcpy(&wBits, &wVal, sizeof(wBits));
+-                    GetGraphicsCommandList()->SetGraphicsRoot32BitConstant(GenerateMipsRootSignatureSlots::eRootConstants, wBits, 2);
++                    UINT wBits;
++                    memcpy(&wBits, &wVal, sizeof(wBits));
++                    GetGraphicsCommandList()->SetGraphicsRoot32BitConstant(GenerateMipsRootSignatureSlots::eRootConstants, wBits, 2);
+                 }
+ 
+                 GetGraphicsCommandList()->DrawInstanced(4, 1, 0, 0);
+@@ -3382,10 +3404,11 @@ COMMAND_LIST_TYPE ImmediateContext::GetFallbackCommandListType(UINT commandListT
+ 
+ ImmediateContext::ArchitectureFlags ImmediateContext::QueryArchitectureFlags()
+ {
+-    D3D12_FEATURE_DATA_ARCHITECTURE1 data;
++    D3D12_FEATURE_DATA_ARCHITECTURE1 data = {};
+     data.NodeIndex = m_nodeIndex;
+ 
+-    CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE1, &data, sizeof(data));
++    if (FAILED(m_pDevice12->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE1, &data, sizeof(data))))
++        return ArchitectureFlags{};
+     
+     ArchitectureFlags flags;
+     flags.isTileBasedRenderer = data.TileBasedRenderer;
+@@ -4227,10 +4250,20 @@ void ImmediateContext::ReturnTransitionableBufferToPool(AllocatorHeapType HeapTy
+ {
+     TDynamicBufferPool& Pool = GetBufferPool(HeapType);
+ 
+-    Pool.ReturnToPool(
+-        Size,
+-        std::move(spResource),
+-        FenceValue);
++    UINT64 allocationBytes = 0;
++    if (Pool.HasByteLimit())
++    {
++        const auto desc = RelayD3D12ResourceDesc(spResource.get());
++        allocationBytes = RelayD3D12ResourceAllocationInfo(m_pDevice12.get(), GetNodeMask(), 1, &desc).SizeInBytes;
++        if (allocationBytes == UINT64_MAX) allocationBytes = 0;
++        Pool.Trim(GetCompletedFenceValue(CommandListType(HeapType)));
++    }
++    if (!Pool.ReturnToPool(Size, std::move(spResource), FenceValue, allocationBytes))
++    {
++        // Metadata allocation failure must not free a GPU-referenced resource.
++        AddObjectToDeferredDeletionQueue(spResource.get(), CommandListType(HeapType), FenceValue, true);
++        spResource.reset();
++    }
+ }
+ 
+ //----------------------------------------------------------------------------------------------------------------------------------
+@@ -4460,11 +4493,11 @@ bool TRANSLATION_API ImmediateContext::MapDynamicTexture(Resource* pResource, UI
+             creationArgsCopy.m_flags11.StructureByteStride = 0;
+ 
+             unique_comptr<Resource> renameResource = Resource::CreateResource(this, creationArgsCopy, ResourceAllocationContext::FreeThread);
+-            pResource->SetCurrentCpuHeap(Subresource, renameResource.get());
+-
+-            CD3DX12_RANGE ReadRange(0, 0); // Map(DISCARD) is write-only
+-
+-            if (bNeedsReadbackCopy)
++            pResource->SetCurrentCpuHeap(Subresource, renameResource.get());
++
++            CD3DX12_RANGE ReadRange(0, 0); // Map(DISCARD) is write-only
++
++            if (bNeedsReadbackCopy)
+             {
+                 // Maintain the illusion that this data is read by the CPU directly from the mapped resource.
+                 CDisablePredication DisablePredication(this);
+@@ -5865,3 +5898,33 @@ Resource* ImmediateContext::BltResolveManager::GetBltResolveTempForWindow(HWND h
+ }
+ 
+ }
++
++namespace D3D12TranslationLayer {
++void ImmediateContext::ReportMemoryTelemetry() noexcept
++{
++    char enabled[2] = {};
++    if (GetEnvironmentVariableA("RELAY12_TELEMETRY", enabled, sizeof(enabled)) != 1 || enabled[0] != '1') return;
++    TrimResourcePools();
++    char report[768];
++    std::snprintf(report, sizeof(report),
++        "d3d11on12 memory telemetry: profile=%s reason=%s physical_bytes=%llu pool_counters_available=%u direct_attempts=%llu direct_success=%llu direct_fallbacks=%llu avoided_staging_bytes=%llu\n",
++        m_BalancedMemory ? "balanced" : "legacy", m_MemoryReason,
++        static_cast<unsigned long long>(m_PhysicalMemory), m_BalancedMemory ? 1u : 0u,
++        static_cast<unsigned long long>(m_DirectAttempts.load()), static_cast<unsigned long long>(m_DirectSuccess.load()),
++        static_cast<unsigned long long>(m_DirectFallbacks.load()), static_cast<unsigned long long>(m_DirectAvoidedBytes.load()));
++    OutputDebugStringA(report); std::fputs(report, stderr);
++    if (!m_BalancedMemory) return;
++    auto reportPool = [&](const char* name, TDynamicBufferPool& pool) {
++        const auto c = pool.MemoryCounters();
++        std::snprintf(report, sizeof(report),
++            "d3d11on12 pool telemetry: pool=%s retained_bytes=%llu peak_retained_bytes=%llu pending_bytes=%llu completed_bytes=%llu allocations=%llu reuses=%llu trims=%llu\n",
++            name, static_cast<unsigned long long>(c.retained), static_cast<unsigned long long>(c.peakRetained),
++            static_cast<unsigned long long>(c.pending), static_cast<unsigned long long>(c.completed),
++            static_cast<unsigned long long>(c.allocations), static_cast<unsigned long long>(c.reuses), static_cast<unsigned long long>(c.trims));
++        OutputDebugStringA(report); std::fputs(report, stderr);
++    };
++    reportPool("upload", m_UploadBufferPool);
++    reportPool("readback", m_ReadbackBufferPool);
++    reportPool("decoder", m_DecoderBufferPool);
++}
++}
