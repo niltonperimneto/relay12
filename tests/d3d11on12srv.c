@@ -20,6 +20,7 @@ int main(void)
     WineD3D11On12ShaderResourceView *views[2] = {NULL, &srv};
     D3D11_TEXTURE2D_DESC desc = {0};
     D3D11_SHADER_RESOURCE_VIEW_DESC sd = {0};
+    D3D11_MAPPED_SUBRESOURCE mapped = {0};
     LONG created, destroyed, bound, before;
     UINT start, count;
     void *last;
@@ -69,8 +70,24 @@ int main(void)
     CHECK(created == destroyed);
     views[0] = &srv;
     CHECK(WineD3D11On12SetPixelShaderResourcesV1(&owner, 0, 1, views) == E_INVALIDARG);
+    desc.BindFlags = 0; desc.Usage = D3D11_USAGE_STAGING;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    CHECK(WineD3D11On12CreateTexture2DV1(&owner, &desc, NULL, &texture) == S_OK);
+    CHECK(WineD3D11On12MapTexture2DV1(&owner, &texture, 0, D3D11_MAP_READ, 0, &mapped) == S_OK);
+    CHECK(mapped.pData && mapped.RowPitch >= desc.Width * 4);
+    CHECK(WineD3D11On12UnmapTexture2DV1(&owner, &texture, 0) == S_OK);
+    CHECK(WineD3D11On12DestroyTexture2DV1(&texture) == S_OK);
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE; desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.CPUAccessFlags = 0;
+    CHECK(WineD3D11On12CreateTexture2DV1(&owner, &desc, NULL, &texture) == S_OK);
+    CHECK(WineD3D11On12CreateShaderResourceViewV1(&owner, &texture, NULL, &srv) == S_OK);
     CHECK(WineD3D11On12CloseAdapterDeviceV1(&other) == S_OK);
     CHECK(WineD3D11On12CloseAdapterDeviceV1(&owner) == S_OK);
+    CHECK(!srv.runtimeState && !srv.hDrvView && !texture.runtimeState);
+    CHECK(WineD3D11On12DestroyShaderResourceViewV1(&srv) == S_OK);
+    CHECK(WineD3D11On12DestroyTexture2DV1(&texture) == S_OK);
+    counts(&created, &destroyed, &bound, &start, &count, &last);
+    CHECK(created == destroyed);
     printf("[%s] SRV failures, bindings and idempotent destruction\n", failures ? "fail" : " ok ");
     return !!failures;
 }
