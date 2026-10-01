@@ -91,3 +91,22 @@ macOS 27/Neo qualification until the raw hardware results have been recorded.
 Hardware results: [2026-09-30 A18 Pro validation](validation/2026-09-30-uma-memory/README.md).
 Raw GPU transfers and PEAK D3D12/MSYNC startup passed their individual checks,
 but On12 sampling/readback and wrapped-resource qualification remain incomplete.
+
+## Follow-up validation
+
+The core now traces completed wrapped-resource creation and ownership transitions
+with their actual HRESULTs when `RELAY12_TRACE_CREATION=1`. Ownership no-ops do
+not emit success markers. A traced PEAK startup that creates the On12 device but
+never calls wrapped creation does not qualify that resource path.
+
+The base frontend now supports owned RGBA8/BGRA8 Texture2D pixel SRVs, retaining
+bound views and their textures through backend child references. Binding a
+render target clears conflicting pixel SRVs; binding an alias of the current
+render target supplies a null SRV. Other resource/view dimensions and shader
+stages remain outside this slice. BGRA staging readback is also supported.
+
+`peak_on12_probe.exe --capabilities-only` records both architecture query versions,
+with poisoned output fields, and effective custom upload/readback heap properties.
+The poison distinguishes an actual false report from S_OK without initialized
+output. Capability reports come from the caller's D3D12 device; physical Apple
+unified memory alone cannot override the driver-visible coherency contract.

@@ -102,6 +102,9 @@ EXPECTED_EXPORTS = {
         39: "WineD3D11On12SetBlendStateV1",
         40: "WineD3D11On12SetDepthStencilStateV1",
         41: "WineD3D11On12SetRasterizerStateV1",
+        42: "WineD3D11On12CreateShaderResourceViewV1",
+        43: "WineD3D11On12DestroyShaderResourceViewV1",
+        44: "WineD3D11On12SetPixelShaderResourcesV1",
     },
 }
 

@@ -37,6 +37,7 @@
 #include <d3d11on12.h>
 #include <dxgi1_6.h>
 #include <cstdio>
+#include <cstring>
 #include "uma_gpu_probe.hpp"
 #include "../compat/relay_d3d12_struct_return.hpp"
 
@@ -125,7 +126,21 @@ static void reportUma(ID3D12Device *device)
     std::printf("perf: physical_bytes=%llu memory_query=%d upload_page=%u readback_page=%u\n",
         static_cast<unsigned long long>(memory.ullTotalPhys), hasMemory,
         unsigned(uploadProperties.CPUPageProperty), unsigned(readbackProperties.CPUPageProperty));
+    std::printf("perf: heap_upload type=%u pool=%u creation_mask=%u visible_mask=%u heap_readback type=%u pool=%u\n",
+        unsigned(uploadProperties.Type), unsigned(uploadProperties.MemoryPoolPreference),
+        uploadProperties.CreationNodeMask, uploadProperties.VisibleNodeMask,
+        unsigned(readbackProperties.Type), unsigned(readbackProperties.MemoryPoolPreference));
+    const UINT nodes = device->GetNodeCount();
+    std::printf("perf: node_count=%u\n", nodes);
+    D3D12_FEATURE_DATA_ARCHITECTURE legacy = {};
+    legacy.TileBasedRenderer = legacy.UMA = legacy.CacheCoherentUMA = -1;
+    const HRESULT legacyHr = device->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE, &legacy, sizeof(legacy));
+    std::printf("perf: ARCHITECTURE hr=0x%08lx UMA=%d CacheCoherentUMA=%d TileBasedRenderer=%d\n",
+        hresult(legacyHr), legacy.UMA, legacy.CacheCoherentUMA, legacy.TileBasedRenderer);
+    // Poison output members so S_OK with untouched storage is visible. NodeIndex
+    // is the caller's input; the valid node index for this single-node probe is 0.
     D3D12_FEATURE_DATA_ARCHITECTURE1 architecture = {};
+    architecture.TileBasedRenderer = architecture.UMA = architecture.CacheCoherentUMA = architecture.IsolatedMMU = -1;
     HRESULT hr = device->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE1, &architecture,
             sizeof(architecture));
     std::printf("perf: ARCHITECTURE1 hr=0x%08lx UMA=%d CacheCoherentUMA=%d TileBasedRenderer=%d\n",
@@ -197,8 +212,11 @@ static bool adapterHasLuid(IDXGIAdapter *adapter, const LUID &luid)
             && desc.AdapterLuid.HighPart == luid.HighPart;
 }
 
-int main()
+int main(int argc, char **argv)
 {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool capabilitiesOnly = argc == 2 && !std::strcmp(argv[1], "--capabilities-only");
+    if (argc > 1 && !capabilitiesOnly) return 2;
     HMODULE d3d12 = LoadLibraryW(L"d3d12.dll");
     HMODULE d3d11 = LoadLibraryW(L"d3d11.dll");
     if (!d3d12 || !d3d11)
@@ -240,6 +258,7 @@ int main()
 
     reportPsoCache(device12);
     reportUma(device12);
+    if (capabilitiesOnly) { device12->Release(); return 0; }
 
     // The adapter an IDXGIDevice on this device must report is the one whose
     // LUID the D3D12 device carries.
