@@ -423,9 +423,11 @@ struct ResourceCensus
     volatile LONG buffers;
     volatile LONG textures;
     volatile LONG renderTargets;
+    volatile LONG shaderResourceViews;
     volatile LONG orphanedTextures;
     LONG peakTextures;
     LONG peakRenderTargets;
+    LONG peakShaderResourceViews;
     LONG peakOrphanedTextures;
 };
 
@@ -434,6 +436,7 @@ struct PipelineStateNode;
 struct InputLayoutState;
 struct ShaderState;
 struct RenderTargetState;
+struct ShaderResourceViewState;
 struct DeferredContextState;
 struct CommandListState;
 struct ResourceState
@@ -470,6 +473,8 @@ InputLayoutState *inputLayoutRegistry;
 ShaderState *shaderRegistry;
 /* shared-state: published once through resourceRegistryOnce */
 RenderTargetState *renderTargetRegistry;
+/* shared-state: published once through resourceRegistryOnce */
+ShaderResourceViewState *shaderResourceViewRegistry;
 /* shared-state: published once through resourceRegistryOnce */
 DeferredContextState *deferredContextRegistry;
 /* shared-state: published once through resourceRegistryOnce */
@@ -589,6 +594,8 @@ struct AdapterState
     InputLayoutState *inputLayouts;
     ShaderState *shaders;
     RenderTargetState *renderTargets;
+    ShaderResourceViewState *shaderResourceViews;
+    ShaderResourceViewState *boundPixelResources[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
     DeferredContextState *deferredContexts;
     CommandListState *commandLists;
     /* Command-list blocks already through RecycleDestroyCommandList, kept for
@@ -815,13 +822,14 @@ void CALLBACK hostPerformAmortizedProcessing(D3D10DDI_HRTCORELAYER runtimeDevice
 struct CensusSnapshot
 {
     LONG buffers, textures, renderTargets, orphanedTextures;
+    LONG shaderResourceViews, peakShaderResourceViews;
     LONG peakTextures, peakRenderTargets, peakOrphanedTextures;
 };
 
 CensusSnapshot snapshotCensus(const ResourceCensus &census) noexcept
 {
     return {census.buffers, census.textures, census.renderTargets,
-            census.orphanedTextures, census.peakTextures,
+            census.orphanedTextures, census.shaderResourceViews, census.peakShaderResourceViews, census.peakTextures,
             census.peakRenderTargets, census.peakOrphanedTextures};
 }
 
@@ -832,11 +840,11 @@ void reportCensus(const char *when, LONG64 flushes,
     std::snprintf(report, sizeof(report),
             "d3d11on12core census (%s): flushes=%lld buffers=%ld "
             "textures=%ld peak_textures=%ld rtvs=%ld peak_rtvs=%ld "
-            "orphaned_textures=%ld peak_orphaned_textures=%ld\n",
+            "orphaned_textures=%ld peak_orphaned_textures=%ld srvs=%ld peak_srvs=%ld\n",
             when, static_cast<long long>(flushes), census.buffers,
             census.textures, census.peakTextures, census.renderTargets,
             census.peakRenderTargets, census.orphanedTextures,
-            census.peakOrphanedTextures);
+            census.peakOrphanedTextures, census.shaderResourceViews, census.peakShaderResourceViews);
     wineD3D11DiagReport(report);
 }
 
@@ -887,6 +895,7 @@ void reportTelemetry(const AdapterState *state,
 
 void destroyRenderTargetState(RenderTargetState *view) noexcept;
 void destroyAllRenderTargets(AdapterState *owner) noexcept;
+void destroyAllShaderResourceViews(AdapterState *owner) noexcept;
 void destroyAllDeferredWork(AdapterState *owner) noexcept;
 void destroyAllPipelineStates(AdapterState *owner) noexcept;
 void clearPipelineBindings(AdapterState *owner) noexcept;
@@ -904,6 +913,7 @@ void destroyAdapterState(AdapterState *state) noexcept
      * context. */
     destroyAllDeferredWork(state);
     destroyAllPipelineStates(state);
+    destroyAllShaderResourceViews(state);
     destroyAllRenderTargets(state);
     while (state->inputLayouts)
     {
@@ -2676,6 +2686,183 @@ void destroyAllRenderTargets(AdapterState *owner) noexcept
 }
 }
 
+
+namespace
+{
+struct ShaderResourceViewState
+{
+    ShaderResourceViewState *registryNext, *ownerNext;
+    AdapterState *owner;
+    ResourceState *resource;
+    WineD3D11On12ShaderResourceView *publicHandle;
+    D3D10DDI_HSHADERRESOURCEVIEW driverHandle;
+    bool created;
+    alignas(8) unsigned char privateView[1];
+};
+
+ShaderResourceViewState *findShaderResourceViewLocked(AdapterState *owner,
+        WineD3D11On12ShaderResourceView *view) noexcept
+{
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry, nullptr, nullptr);
+    if (!view || view->size != sizeof(*view)) return nullptr;
+    for (auto *v = shaderResourceViewRegistry; v; v = v->registryNext)
+        if (v == view->runtimeState && v->publicHandle == view && v->owner == owner
+                && v->created && v->driverHandle.pDrvPrivate == view->hDrvView) return v;
+    return nullptr;
+}
+
+void destroyShaderResourceViewState(ShaderResourceViewState *view) noexcept
+{
+    auto *owner = view->owner;
+    for (auto &bound : owner->boundPixelResources)
+        if (bound == view)
+        {
+            const D3D10DDI_HSHADERRESOURCEVIEW empty = {};
+            const UINT slot = static_cast<UINT>(&bound - owner->boundPixelResources);
+            owner->deviceFuncs.pfnPsSetShaderResources(owner->hDevice, slot, 1, &empty);
+            bound = nullptr;
+        }
+    if (view->created)
+        owner->deviceFuncs.pfnDestroyShaderResourceView(owner->hDevice, view->driverHandle);
+    if (view->publicHandle)
+    {
+        view->publicHandle->runtimeState = nullptr;
+        view->publicHandle->hDrvView = nullptr;
+    }
+    --view->resource->viewCount;
+    InterlockedDecrement(&view->owner->census.shaderResourceViews);
+    HeapFree(GetProcessHeap(), 0, view);
+}
+
+void destroyAllShaderResourceViews(AdapterState *owner) noexcept
+{
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry, nullptr, nullptr);
+    FrameLock lock;
+    while (owner->shaderResourceViews)
+    {
+        auto *v = owner->shaderResourceViews;
+        owner->shaderResourceViews = v->ownerNext;
+        auto **link = &shaderResourceViewRegistry;
+        while (*link && *link != v) link = &(*link)->registryNext;
+        if (*link) *link = v->registryNext;
+        destroyShaderResourceViewState(v);
+    }
+}
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12CreateShaderResourceViewV1(
+        WineD3D11On12AdapterDevice *device, WineD3D11On12Texture2D *texture,
+        const D3D11_SHADER_RESOURCE_VIEW_DESC *desc, WineD3D11On12ShaderResourceView *out) noexcept
+{
+    if (!out || out->size != sizeof(*out)) return E_INVALIDARG;
+    out->hDrvView = nullptr;
+    out->runtimeState = nullptr;
+    FrameLock lock;
+    auto *owner = frameOwner(device);
+    auto *resource = findTextureLocked(owner, texture);
+    if (!owner || !resource) return E_INVALIDARG;
+    const auto &d = resource->description;
+    if (!(d.BindFlags & D3D11_BIND_SHADER_RESOURCE)) return E_INVALIDARG;
+    if ((d.Format != DXGI_FORMAT_R8G8B8A8_UNORM && d.Format != DXGI_FORMAT_B8G8R8A8_UNORM)
+            || d.ArraySize != 1 || d.SampleDesc.Count != 1) return DXGI_ERROR_UNSUPPORTED;
+    if (desc && (desc->Format != d.Format || desc->ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D
+            || desc->Texture2D.MostDetailedMip >= d.MipLevels)) return E_INVALIDARG;
+    const UINT firstMip = desc ? desc->Texture2D.MostDetailedMip : 0;
+    const UINT mips = !desc || desc->Texture2D.MipLevels == UINT_MAX
+            ? d.MipLevels - firstMip : desc->Texture2D.MipLevels;
+    if (!mips || mips > d.MipLevels - firstMip) return E_INVALIDARG;
+    auto &f = owner->deviceFuncs;
+    if (!f.pfnCalcPrivateShaderResourceViewSize || !f.pfnCreateShaderResourceView
+            || !f.pfnDestroyShaderResourceView) return DXGI_ERROR_UNSUPPORTED;
+    D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW args = {};
+    args.hDrvResource = resource->driverHandle;
+    args.Format = d.Format;
+    args.ResourceDimension = D3D10DDIRESOURCE_TEXTURE2D;
+    args.Tex2D.MostDetailedMip = firstMip;
+    args.Tex2D.MipLevels = mips;
+    args.Tex2D.ArraySize = 1;
+    const SIZE_T size = f.pfnCalcPrivateShaderResourceViewSize(owner->hDevice, &args);
+    if (!size || size > SIZE_MAX - offsetof(ShaderResourceViewState, privateView)) return E_OUTOFMEMORY;
+    auto *v = static_cast<ShaderResourceViewState *>(HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+            offsetof(ShaderResourceViewState, privateView) + size));
+    if (!v) return E_OUTOFMEMORY;
+    v->owner = owner; v->resource = resource; v->publicHandle = out;
+    v->driverHandle.pDrvPrivate = v->privateView;
+    D3D10DDI_HRTSHADERRESOURCEVIEW runtime = {v};
+    InterlockedExchange(&owner->lastDdiError, S_OK);
+    f.pfnCreateShaderResourceView(owner->hDevice, &args, v->driverHandle, runtime);
+    const HRESULT hr = frameError(owner);
+    if (FAILED(hr)) { HeapFree(GetProcessHeap(), 0, v); return hr; }
+    v->created = true;
+    ++resource->viewCount;
+    countCensus(owner->census.shaderResourceViews, owner->census.peakShaderResourceViews, 1);
+    v->ownerNext = owner->shaderResourceViews; owner->shaderResourceViews = v;
+    v->registryNext = shaderResourceViewRegistry; shaderResourceViewRegistry = v;
+    out->hDrvView = v->driverHandle.pDrvPrivate; out->runtimeState = v;
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12DestroyShaderResourceViewV1(
+        WineD3D11On12ShaderResourceView *view) noexcept
+{
+    InitOnceExecuteOnce(&resourceRegistryOnce, initializeResourceRegistry, nullptr, nullptr);
+    if (!view || view->size != sizeof(*view)) return E_INVALIDARG;
+    ResourceState *orphan = nullptr;
+    {
+        FrameLock lock;
+        auto **link = &shaderResourceViewRegistry;
+        while (*link && !((*link)->publicHandle == view && *link == view->runtimeState
+                && (*link)->driverHandle.pDrvPrivate == view->hDrvView)) link = &(*link)->registryNext;
+        if (*link)
+        {
+            auto *v = *link; *link = v->registryNext;
+            auto **ownerLink = &v->owner->shaderResourceViews;
+            while (*ownerLink && *ownerLink != v) ownerLink = &(*ownerLink)->ownerNext;
+            if (*ownerLink) *ownerLink = v->ownerNext;
+            auto *r = v->resource;
+            destroyShaderResourceViewState(v);
+            if (!r->viewCount && !r->publicHandle)
+            {
+                orphan = r; unlinkOwnerResource(r);
+                InterlockedDecrement(&r->owner->census.orphanedTextures);
+            }
+        }
+        view->hDrvView = nullptr; view->runtimeState = nullptr;
+    }
+    if (orphan) destroyResourceState(orphan);
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12SetPixelShaderResourcesV1(
+        WineD3D11On12AdapterDevice *device, UINT start, UINT count,
+        WineD3D11On12ShaderResourceView *const *views) noexcept
+{
+    if (start > D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT
+            || count > D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT - start
+            || (count && !views)) return E_INVALIDARG;
+    FrameLock lock;
+    auto *owner = frameOwner(device);
+    if (!owner || !owner->deviceFuncs.pfnPsSetShaderResources) return DXGI_ERROR_UNSUPPORTED;
+    D3D10DDI_HSHADERRESOURCEVIEW handles[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
+    ShaderResourceViewState *resolved[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
+    for (UINT i = 0; i < count; ++i)
+    {
+        auto *v = views[i] ? findShaderResourceViewLocked(owner, views[i]) : nullptr;
+        if (views[i] && !v) return E_INVALIDARG;
+        // The frontend implements D3D11's automatic RTV/SRV hazard unbinding.
+        if (v && v->resource == owner->boundRenderTarget) return DXGI_ERROR_INVALID_CALL;
+        resolved[i] = v;
+        if (v) handles[i] = v->driverHandle;
+    }
+    if (!count) return S_OK;
+    InterlockedExchange(&owner->lastDdiError, S_OK);
+    owner->deviceFuncs.pfnPsSetShaderResources(owner->hDevice, start, count, handles);
+    const HRESULT hr = frameError(owner);
+    if (SUCCEEDED(hr))
+        for (UINT i = 0; i < count; ++i) owner->boundPixelResources[start + i] = resolved[i];
+    return hr;
+}
+
 extern "C" HRESULT WINAPI WineD3D11On12CreateRenderTargetViewV1(
         WineD3D11On12AdapterDevice *device, WineD3D11On12Texture2D *texture,
         const D3D11_RENDER_TARGET_VIEW_DESC *desc, WineD3D11On12RenderTargetView *out) noexcept
@@ -2772,6 +2959,8 @@ extern "C" HRESULT WINAPI WineD3D11On12SetRenderTargetV1(
     if (!owner || !owner->deviceFuncs.pfnSetRenderTargets) return DXGI_ERROR_UNSUPPORTED;
     auto *v = findViewLocked(owner, view);
     if (view && !v) return E_INVALIDARG;
+    for (auto *srv : owner->boundPixelResources)
+        if (v && srv && srv->resource == v->resource) return DXGI_ERROR_INVALID_CALL;
     D3D10DDI_HRENDERTARGETVIEW handle = v ? v->driverHandle : D3D10DDI_HRENDERTARGETVIEW{};
     InterlockedExchange(&owner->lastDdiError, S_OK);
     owner->deviceFuncs.pfnSetRenderTargets(owner->hDevice, &handle, v ? 1 : 0,
@@ -2860,15 +3049,21 @@ extern "C" HRESULT WINAPI WineD3D11On12MapTexture2DV1(WineD3D11On12AdapterDevice
     if (d.Usage != D3D11_USAGE_STAGING || mode != D3D11_MAP_READ
             || !(d.CPUAccessFlags & D3D11_CPU_ACCESS_READ) || flags) return DXGI_ERROR_UNSUPPORTED;
     if (r->mapped[subresource]) return DXGI_ERROR_INVALID_CALL;
-    if (d.Format != DXGI_FORMAT_R8G8B8A8_UNORM || d.SampleDesc.Count != 1) return DXGI_ERROR_UNSUPPORTED;
+    if ((d.Format != DXGI_FORMAT_R8G8B8A8_UNORM && d.Format != DXGI_FORMAT_B8G8R8A8_UNORM)
+            || d.SampleDesc.Count != 1) return DXGI_ERROR_UNSUPPORTED;
     auto &f = owner->deviceFuncs;
-    if (!f.pfnStagingResourceMap || !f.pfnStagingResourceUnmap) return DXGI_ERROR_UNSUPPORTED;
+    if (!f.pfnStagingResourceMap || !f.pfnStagingResourceUnmap)
+    {
+        traceCreation("staging map callbacks unavailable", DXGI_ERROR_UNSUPPORTED);
+        return DXGI_ERROR_UNSUPPORTED;
+    }
     D3D10DDI_MAPPED_SUBRESOURCE mapped = {};
     InterlockedExchange(&owner->lastDdiError, S_OK);
     /* The pinned driver's staging Map synchronizes the copy with the GPU. */
     f.pfnStagingResourceMap(owner->hDevice, r->driverHandle, subresource,
             static_cast<D3D10_DDI_MAP>(mode), flags, &mapped);
     HRESULT hr = frameError(owner);
+    traceCreation("leave driver staging map", hr);
     if (FAILED(hr)) return hr;
     UINT width = d.Width >> (subresource % d.MipLevels);
     UINT height = d.Height >> (subresource % d.MipLevels);
@@ -2923,7 +3118,7 @@ extern "C" HRESULT WINAPI WineD3D11On12CheckFrameSupportV1(WineD3D11On12AdapterD
 /* In-process wrapping uses the driver's local handle map, not a Windows
  * shared handle. The driver consumes one resource reference on a successful
  * OpenResource; DestroyKMTHandle owns that reference on failure. */
-extern "C" HRESULT WINAPI WineD3D11On12CreateWrappedTexture2DV1(
+static HRESULT createWrappedTexture2D(
         WineD3D11On12AdapterDevice *device, IUnknown *object,
         const D3D11_RESOURCE_FLAGS *flags, D3D12_RESOURCE_STATES inputState,
         D3D12_RESOURCE_STATES outputState, D3D11_TEXTURE2D_DESC *description,
@@ -3069,6 +3264,18 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateWrappedTexture2DV1(
     return S_OK;
 }
 
+extern "C" HRESULT WINAPI WineD3D11On12CreateWrappedTexture2DV1(
+        WineD3D11On12AdapterDevice *device, IUnknown *object,
+        const D3D11_RESOURCE_FLAGS *flags, D3D12_RESOURCE_STATES inputState,
+        D3D12_RESOURCE_STATES outputState, D3D11_TEXTURE2D_DESC *description,
+        WineD3D11On12Texture2D *texture) noexcept
+{
+    const HRESULT hr = createWrappedTexture2D(device, object, flags, inputState,
+            outputState, description, texture);
+    traceCreation("leave driver wrapped resource creation", hr);
+    return hr;
+}
+
 extern "C" HRESULT WINAPI WineD3D11On12SetWrappedOwnershipV1(
         WineD3D11On12AdapterDevice *device, WineD3D11On12Texture2D *const *textures,
         UINT count, BOOL acquire) noexcept
@@ -3090,6 +3297,7 @@ extern "C" HRESULT WINAPI WineD3D11On12SetWrappedOwnershipV1(
         }
     auto *ddi = static_cast<WineD3D11On12DDIDevice *>(owner->hDevice.pDrvPrivate);
     InterlockedExchange(&owner->lastDdiError, S_OK);
+    UINT transitioned = 0;
     for (auto *r = owner->resources; r; r = r->ownerNext)
     {
         if (!r->wrappedResource) continue;
@@ -3107,13 +3315,17 @@ extern "C" HRESULT WINAPI WineD3D11On12SetWrappedOwnershipV1(
             // GPU transitions cannot be rolled back safely. Refuse further
             // wrapped use on this device until it is destroyed and recreated.
             owner->wrappedOwnershipError = frameError(owner);
+            traceCreation(acquire ? "wrapped resource acquisition" : "wrapped resource release", owner->wrappedOwnershipError);
             return owner->wrappedOwnershipError;
         }
         r->acquired = !!acquire;
+        ++transitioned;
     }
     if (!acquire) ddi->lpVtbl->ApplyAllResourceTransitions(ddi);
     const HRESULT hr = frameError(owner);
     if (FAILED(hr)) owner->wrappedOwnershipError = hr;
+    if (transitioned || FAILED(hr))
+        traceCreation(acquire ? "wrapped resource acquisition" : "wrapped resource release", hr);
     return hr;
 }
 
