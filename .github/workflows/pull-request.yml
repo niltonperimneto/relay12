@@ -573,7 +573,7 @@ jobs:
             tests/e2e_d3d11_triangle.cpp -ld3d12 -ld3dcompiler -luuid
           x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
             -fno-exceptions -fno-rtti -o d3d11_e2e_wrapped.exe \
-            tests/e2e_d3d11_wrapped.cpp -ld3d12 -luuid
+            tests/e2e_d3d11_wrapped.cpp -ld3d12 -ldxgi -luuid
           # Compiled only: it needs a real D3D12 under the full D3D11On12
           # stack, which this lane does not have.
           x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \

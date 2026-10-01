@@ -397,3 +397,10 @@ See [UMA memory management](UMA-MEMORY.md) for the bounded-pool unit tests,
 GPU-visible initial-upload probes, shader sampling/readback test, and isolated
 legacy/balanced/direct benchmark runner. The GPU tests compile in CI but need
 the real Wine/GPTK stack to run.
+
+`tests/d3d11on12srv.c` checks SRV creation error propagation, failed-output
+clearing, mip validation, cross-device/stale handles, atomic binding validation,
+resource retention and idempotent destruction. The public frontend lifetime test
+also covers SRV getters after public release, RTV/SRV hazard unbinding in both
+directions, and ClearState cleanup. Real shader sampling remains the GPU UMA
+harness's responsibility.
