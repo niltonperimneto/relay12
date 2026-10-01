@@ -153,7 +153,9 @@ class ResourceCensus(unittest.TestCase):
     def test_every_view_is_counted_both_ways(self):
         self.assertEqual(
             len(re.findall(r"\+\+\w+->viewCount;", self.source)),
-            len(re.findall(r"countCensus\(\w+->census\.renderTargets", self.source)))
+            len(re.findall(r"countCensus\(\w+->census\.(?:renderTargets|shaderResourceViews)", self.source)))
+        srv_destroy = function_body(self.source, "destroyShaderResourceViewState")
+        self.assertIn("InterlockedDecrement(&view->owner->census.shaderResourceViews)", srv_destroy)
         destroy = function_body(self.source, "destroyRenderTargetState")
         self.assertIn("InterlockedDecrement(&view->owner->census.renderTargets)",
                       destroy)

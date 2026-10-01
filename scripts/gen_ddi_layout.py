@@ -1192,6 +1192,7 @@ DEVICEFUNCS = Struct(
 # command-list handle group and no argument structure.  See the group note in
 # the header for why the rest of the family cannot follow yet.
 PROMOTED_SLOTS = {
+    "PFND3D10DDI_SETSHADERRESOURCES",
     "PFND3D10DDI_DESTROYDEVICE",
     "PFND3D10DDI_RESOURCEMAP",
     "PFND3D10DDI_RESOURCEUNMAP",

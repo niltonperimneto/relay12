@@ -2798,7 +2798,16 @@ typedef VOID (*PFND3D10DDI_SETRASTERIZERSTATE)(
 
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_RESOURCEUPDATESUBRESOURCEUP;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_SETCONSTANTBUFFERS;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETSHADERRESOURCES;
+/*
+ * Group: shader resource binding callback
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_setshaderresources
+ * Specification: https://github.com/MicrosoftDocs/windows-driver-docs-ddi/blob/staging/wdk-ddi-src/content/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_setshaderresources.md
+ * Retrieved: 2026-09-30
+ * Authored from the public syntax and cross-validated against the parameter
+ * descriptions in the documentation mirror. Shared by the six shader stages.
+ */
+typedef VOID (*PFND3D10DDI_SETSHADERRESOURCES)(D3D10DDI_HDEVICE hDevice,
+        UINT StartSlot, UINT NumViews, const D3D10DDI_HSHADERRESOURCEVIEW *views);
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETSAMPLERS;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SHADERRESOURCEVIEWREADAFTERWRITEHAZARD;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCEREADAFTERWRITEHAZARD;

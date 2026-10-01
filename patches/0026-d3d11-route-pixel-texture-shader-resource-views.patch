@@ -1,0 +1,309 @@
+Subject: d3d11: route Texture2D pixel SRVs and retain bound views
+
+The standalone host has no WineD3D view to sample owned On12 textures.
+Route the base Texture2D SRV lifecycle and pixel-stage bindings to the core,
+retain textures/views with backend child references, and implement D3D11
+output/input hazard unbinding. This permits byte-exact shader sampling of
+initial uploads while preserving the ordinary WineD3D path. Resolve the
+new exports as one required group so an older core cannot publish a partial
+backend. Later-version and other resource/stage views remain unsupported.
+
+diff --git a/dlls/d3d11/d3d11_main.c b/dlls/d3d11/d3d11_main.c
+index 0642b641..038e3fa2 100644
+--- a/dlls/d3d11/d3d11_main.c
++++ b/dlls/d3d11/d3d11_main.c
+@@ -511,6 +511,10 @@ struct d3d11_on12_backend
+     UINT creation_flags;
+     wine_d3d11on12_create_buffer_fn create_buffer;
+     wine_d3d11on12_destroy_buffer_fn destroy_buffer;
++    HRESULT (WINAPI *create_srv)(struct wine_d3d11on12_adapter_device *, void *,
++            const D3D11_SHADER_RESOURCE_VIEW_DESC *, void *);
++    HRESULT (WINAPI *destroy_srv)(void *);
++    HRESULT (WINAPI *set_pixel_resources)(struct wine_d3d11on12_adapter_device *, UINT, UINT, void *const *);
+     HRESULT (WINAPI *create_rtv)(struct wine_d3d11on12_adapter_device *, void *,
+             const D3D11_RENDER_TARGET_VIEW_DESC *, void *);
+     HRESULT (WINAPI *destroy_rtv)(void *);
+@@ -1048,6 +1052,7 @@ static void d3d11_on12_backend_set_render_targets(struct d3d11_device_context *c
+ {
+     struct d3d11_on12_backend *backend = context->device->backend_private;
+     struct d3d_rendertarget_view *view;
++    UINT i;
+     HRESULT hr;
+     if (count > 1 || depth || (count && !views))
+     {
+@@ -1055,6 +1060,18 @@ static void d3d11_on12_backend_set_render_targets(struct d3d11_device_context *c
+         return;
+     }
+     view = count ? unsafe_impl_from_ID3D11RenderTargetView(views[0]) : NULL;
++    if (view && view->device != &context->device->ID3D11Device5_iface) return;
++    for (i = 0; view && i < ARRAY_SIZE(context->bound_ps_srvs); ++i)
++    {
++        struct d3d_shader_resource_view *srv = context->bound_ps_srvs[i] ? context->bound_ps_srvs[i]->object : NULL;
++        if (srv && srv->resource == view->resource)
++        {
++            void *null_handle = NULL;
++            hr = backend->set_pixel_resources(&backend->adapter, i, 1, &null_handle);
++            if (FAILED(hr)) { WARN("On12 SRV hazard unbinding failed, hr %#lx.\n", hr); return; }
++            d3d11_backend_child_bind(&context->bound_ps_srvs[i], NULL);
++        }
++    }
+     hr = backend->set_render_target(&backend->adapter, view ? &view->backend_view : NULL);
+     if (FAILED(hr)) WARN("On12 target binding failed, hr %#lx.\n", hr);
+     if (SUCCEEDED(hr))
+@@ -1130,10 +1147,74 @@ static void d3d11_on12_backend_unmap_resource(struct d3d11_device_context *conte
+     if (FAILED(hr)) WARN("On12 unmap failed, hr %#lx.\n", hr);
+ }
+ 
++
++static void d3d11_on12_free_shader_resource_view(void *object)
++{
++    struct d3d_shader_resource_view *view = object;
++    struct d3d_device *device = impl_from_ID3D11Device5(view->device);
++    device->backend_ops->destroy_srv(device, view);
++    wined3d_private_store_cleanup(&view->private_store);
++    d3d11_backend_child_decref(&unsafe_impl_from_ID3D11Texture2D((ID3D11Texture2D *)view->resource)->backend_child);
++    free(view);
++}
++
++static HRESULT d3d11_on12_backend_create_srv(struct d3d_device *device, ID3D11Resource *resource,
++        const D3D11_SHADER_RESOURCE_VIEW_DESC *desc, struct d3d_shader_resource_view *view)
++{
++    struct d3d11_on12_backend *backend = device->backend_private;
++    struct d3d_texture2d *texture = d3d11_on12_texture(resource);
++    HRESULT hr;
++    if (!texture || texture->device != &device->ID3D11Device5_iface) return E_INVALIDARG;
++    view->backend_view.size = sizeof(view->backend_view);
++    hr = backend->create_srv(&backend->adapter, &texture->backend_texture, desc, &view->backend_view);
++    if (SUCCEEDED(hr))
++    {
++        view->backend_child.refs = 1;
++        view->backend_child.object = view;
++        view->backend_child.destroy = d3d11_on12_free_shader_resource_view;
++        d3d11_backend_child_incref(&texture->backend_child);
++    }
++    return hr;
++}
++
++static void d3d11_on12_backend_destroy_srv(struct d3d_device *device, struct d3d_shader_resource_view *view)
++{
++    struct d3d11_on12_backend *backend = device->backend_private;
++    HRESULT hr = backend->destroy_srv(&view->backend_view);
++    if (FAILED(hr)) WARN("On12 SRV destruction failed, hr %#lx.\n", hr);
++}
++
++static void d3d11_on12_backend_set_pixel_resources(struct d3d11_device_context *context,
++        UINT start, UINT count, ID3D11ShaderResourceView *const *views)
++{
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    struct d3d_rendertarget_view *rtv = context->bound_rtv ? context->bound_rtv->object : NULL;
++    struct d3d_shader_resource_view *resolved[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
++    void *handles[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
++    UINT i;
++    HRESULT hr;
++    if (start > ARRAY_SIZE(handles) || count > ARRAY_SIZE(handles) - start || (count && !views)) return;
++    for (i = 0; i < count; ++i)
++    {
++        struct d3d_shader_resource_view *view = unsafe_impl_from_ID3D11ShaderResourceView(views[i]);
++        if (view && (view->device != &context->device->ID3D11Device5_iface || !view->backend_child.destroy))
++        { WARN("On12 SRV binding requires views from this device.\n"); return; }
++        if (view && rtv && rtv->resource == view->resource) view = NULL;
++        resolved[i] = view;
++        handles[i] = view ? &view->backend_view : NULL;
++    }
++    hr = backend->set_pixel_resources(&backend->adapter, start, count, handles);
++    if (FAILED(hr)) { WARN("On12 SRV binding failed, hr %#lx.\n", hr); return; }
++    for (i = 0; i < count; ++i)
++        d3d11_backend_child_bind(&context->bound_ps_srvs[start + i], resolved[i] ? &resolved[i]->backend_child : NULL);
++}
++
+ static void d3d11_on12_backend_clear_state(struct d3d11_device_context *context)
+ {
++    ID3D11ShaderResourceView *resources[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {0};
+     ID3D11Buffer *buffers[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT] = {0};
+     UINT zeros[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT] = {0};
++    d3d11_on12_backend_set_pixel_resources(context, 0, ARRAY_SIZE(resources), resources);
+     d3d11_on12_backend_set_render_targets(context, 0, NULL, NULL);
+     d3d11_on12_backend_set_vertex_shader(context, NULL);
+     d3d11_on12_backend_set_pixel_shader(context, NULL);
+@@ -1146,6 +1227,9 @@ static void d3d11_on12_backend_clear_state(struct d3d11_device_context *context)
+ 
+ static const struct d3d11_backend_ops d3d11_on12_backend_ops =
+ {
++    .create_srv = d3d11_on12_backend_create_srv,
++    .destroy_srv = d3d11_on12_backend_destroy_srv,
++    .set_pixel_resources = d3d11_on12_backend_set_pixel_resources,
+     .clear_state = d3d11_on12_backend_clear_state,
+     .copy_resource = d3d11_on12_backend_copy_resource,
+     .map_resource = d3d11_on12_backend_map_resource,
+@@ -1334,6 +1418,19 @@ static HRESULT d3d11_on12_create_frame_backend(IUnknown *device,
+         return DXGI_ERROR_UNSUPPORTED;
+     }
+ 
++    address = GetProcAddress(backend->core_module, "WineD3D11On12CreateShaderResourceViewV1");
++    memcpy(&backend->create_srv, &address, sizeof(backend->create_srv));
++    address = GetProcAddress(backend->core_module, "WineD3D11On12DestroyShaderResourceViewV1");
++    memcpy(&backend->destroy_srv, &address, sizeof(backend->destroy_srv));
++    address = GetProcAddress(backend->core_module, "WineD3D11On12SetPixelShaderResourcesV1");
++    memcpy(&backend->set_pixel_resources, &address, sizeof(backend->set_pixel_resources));
++    if (!backend->create_srv || !backend->destroy_srv || !backend->set_pixel_resources)
++    {
++        FreeLibrary(backend->core_module);
++        free(backend);
++        return DXGI_ERROR_UNSUPPORTED;
++    }
++
+     address = GetProcAddress(backend->core_module, "WineD3D11On12CopyTexture2DV1");
+     memcpy(&backend->copy_texture, &address, sizeof(backend->copy_texture));
+     address = GetProcAddress(backend->core_module, "WineD3D11On12MapTexture2DV1");
+diff --git a/dlls/d3d11/d3d11_private.h b/dlls/d3d11/d3d11_private.h
+index 10854d1a..39192273 100644
+--- a/dlls/d3d11/d3d11_private.h
++++ b/dlls/d3d11/d3d11_private.h
+@@ -283,6 +283,8 @@ struct d3d_rendertarget_view *unsafe_impl_from_ID3D10RenderTargetView(ID3D10Rend
+ /* ID3D11ShaderResourceView, ID3D10ShaderResourceView1 */
+ struct d3d_shader_resource_view
+ {
++    struct d3d11_backend_child backend_child;
++    struct { UINT size, reserved; void *driver_view, *runtime_state; } backend_view;
+     ID3D11ShaderResourceView ID3D11ShaderResourceView_iface;
+     ID3D10ShaderResourceView1 ID3D10ShaderResourceView1_iface;
+     LONG refcount;
+@@ -627,6 +629,7 @@ struct d3d11_device_context
+ {
+     struct d3d11_backend_child *bound_vbs[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT];
+     struct d3d11_backend_child *bound_ib, *bound_layout, *bound_vs, *bound_ps, *bound_rtv;
++    struct d3d11_backend_child *bound_ps_srvs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
+     ID3D11DeviceContext4 ID3D11DeviceContext4_iface;
+     ID3D11Multithread ID3D11Multithread_iface;
+     ID3D11VideoContext ID3D11VideoContext_iface;
+@@ -644,6 +647,11 @@ struct d3d11_device_context
+  * immediate context. WineD3D remains the default backend. */
+ struct d3d11_backend_ops
+ {
++    HRESULT (*create_srv)(struct d3d_device *, ID3D11Resource *,
++            const D3D11_SHADER_RESOURCE_VIEW_DESC *, struct d3d_shader_resource_view *);
++    void (*destroy_srv)(struct d3d_device *, struct d3d_shader_resource_view *);
++    void (*set_pixel_resources)(struct d3d11_device_context *, UINT, UINT,
++            ID3D11ShaderResourceView *const *);
+     void (*clear_state)(struct d3d11_device_context *);
+     void (*copy_resource)(struct d3d11_device_context *, ID3D11Resource *, ID3D11Resource *);
+     HRESULT (*map_resource)(struct d3d11_device_context *, ID3D11Resource *, UINT,
+diff --git a/dlls/d3d11/device.c b/dlls/d3d11/device.c
+index a1f62b5f..67c288df 100644
+--- a/dlls/d3d11/device.c
++++ b/dlls/d3d11/device.c
+@@ -896,10 +896,10 @@ static void STDMETHODCALLTYPE d3d11_device_context_VSSetConstantBuffers(ID3D11De
+ static void STDMETHODCALLTYPE d3d11_device_context_PSSetShaderResources(ID3D11DeviceContext4 *iface,
+         UINT start_slot, UINT view_count, ID3D11ShaderResourceView *const *views)
+ {
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
++    struct d3d11_device_context *context = impl_from_ID3D11DeviceContext4(iface);
++    if (context->device->backend_ops->set_pixel_resources)
+     {
+-        WARN("On12 PSSetShaderResources is not supported.\n");
++        context->device->backend_ops->set_pixel_resources(context, start_slot, view_count, views);
+         return;
+     }
+ 
+@@ -2242,11 +2242,17 @@ static void STDMETHODCALLTYPE d3d11_device_context_PSGetShaderResources(ID3D11De
+     struct d3d11_device_context *context = impl_from_ID3D11DeviceContext4(iface);
+     unsigned int i;
+ 
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
++    if (context->device->backend_ops->set_pixel_resources)
+     {
+-        if (views) memset(views, 0, view_count * sizeof(*views));
+-        WARN("On12 PSGetShaderResources is not supported.\n");
++        if (!views || start_slot > D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT
++                || view_count > D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT - start_slot) return;
++        for (i = 0; i < view_count; ++i)
++        {
++            struct d3d11_backend_child *child = context->bound_ps_srvs[start_slot + i];
++            struct d3d_shader_resource_view *view = child ? child->object : NULL;
++            views[i] = view ? &view->ID3D11ShaderResourceView_iface : NULL;
++            if (views[i]) ID3D11ShaderResourceView_AddRef(views[i]);
++        }
+         return;
+     }
+ 
+@@ -5508,13 +5514,7 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_CreateShaderResourceView(ID3D11Dev
+     struct d3d_shader_resource_view *object;
+     HRESULT hr;
+ 
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11Device5(iface)->standalone_allocation)
+-    {
+-        if (view) *view = NULL;
+-        WARN("On12 CreateShaderResourceView is not supported.\n");
+-        return DXGI_ERROR_UNSUPPORTED;
+-    }
++    if (!view) return E_INVALIDARG;
+ 
+     TRACE("iface %p, resource %p, desc %p, view %p.\n", iface, resource, desc, view);
+ 
+diff --git a/dlls/d3d11/view.c b/dlls/d3d11/view.c
+index 9991f206..8cdb03b5 100644
+--- a/dlls/d3d11/view.c
++++ b/dlls/d3d11/view.c
+@@ -1850,10 +1850,10 @@ static HRESULT STDMETHODCALLTYPE d3d11_shader_resource_view_QueryInterface(ID3D1
+         return S_OK;
+     }
+ 
+-    if (IsEqualGUID(riid, &IID_ID3D10ShaderResourceView1)
++    if (!view->backend_child.destroy && (IsEqualGUID(riid, &IID_ID3D10ShaderResourceView1)
+             || IsEqualGUID(riid, &IID_ID3D10ShaderResourceView)
+             || IsEqualGUID(riid, &IID_ID3D10View)
+-            || IsEqualGUID(riid, &IID_ID3D10DeviceChild))
++            || IsEqualGUID(riid, &IID_ID3D10DeviceChild)))
+     {
+         ID3D10ShaderResourceView1_AddRef(&view->ID3D10ShaderResourceView1_iface);
+         *object = &view->ID3D10ShaderResourceView1_iface;
+@@ -1873,6 +1873,13 @@ static ULONG STDMETHODCALLTYPE d3d11_shader_resource_view_AddRef(ID3D11ShaderRes
+ 
+     TRACE("%p increasing refcount to %lu.\n", view, refcount);
+ 
++    if (refcount == 1 && view->backend_child.destroy)
++    {
++        d3d11_backend_child_incref(&view->backend_child);
++        ID3D11Device5_AddRef(view->device);
++        return refcount;
++    }
++
+     if (refcount == 1)
+     {
+         ID3D11Device5_AddRef(view->device);
+@@ -1889,6 +1896,14 @@ static ULONG STDMETHODCALLTYPE d3d11_shader_resource_view_Release(ID3D11ShaderRe
+ 
+     TRACE("%p decreasing refcount to %lu.\n", view, refcount);
+ 
++    if (!refcount && view->backend_child.destroy)
++    {
++        ID3D11Device5 *device = view->device;
++        d3d11_backend_child_decref(&view->backend_child);
++        ID3D11Device5_Release(device);
++        return 0;
++    }
++
+     if (!refcount)
+     {
+         ID3D11Device5 *device = view->device;
+@@ -2253,6 +2268,17 @@ static HRESULT d3d_shader_resource_view_init(struct d3d_shader_resource_view *vi
+     if (FAILED(hr))
+         return hr;
+ 
++    if (device->backend_ops->create_srv)
++    {
++        view->resource = resource;
++        view->device = &device->ID3D11Device5_iface;
++        if (FAILED(hr = device->backend_ops->create_srv(device, resource, &view->desc, view)))
++            return hr;
++        wined3d_private_store_init(&view->private_store);
++        ID3D11Device5_AddRef(view->device);
++        return S_OK;
++    }
++
+     if (FAILED(hr = wined3d_shader_resource_view_desc_from_d3d11(&wined3d_desc, &view->desc)))
+         return hr;
+ 

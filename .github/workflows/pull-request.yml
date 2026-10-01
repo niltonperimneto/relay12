@@ -517,6 +517,11 @@ jobs:
             -Irelay12-d3d11 -o d3d11on12frame.exe tests/d3d11on12frame.c \
             d3d11on12core.o wine_d3d11_diag.o -ld3d12 -ldxgi -ldxguid -luuid
           WINEDLLOVERRIDES=d3d11on12=n wine d3d11on12frame.exe
+          x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -Werror -Irelay12-d3d11 \
+            -c tests/d3d11on12srv.c -o d3d11on12srv.o
+          x86_64-w64-mingw32-g++ -o d3d11on12srv.exe d3d11on12srv.o \
+            d3d11on12core.o wine_d3d11_diag.o -ld3d12 -ldxgi -ldxguid -luuid
+          WINEDLLOVERRIDES=d3d11on12=n wine d3d11on12srv.exe
           x86_64-w64-mingw32-clang -std=gnu11 -O2 -Wall -Wextra -Werror \
             -Irelay12-d3d11 -o d3d11on12wrapped.exe tests/d3d11on12wrapped.c \
             d3d11on12core.o wine_d3d11_diag.o -ld3d12 -ldxgi -ldxguid -luuid

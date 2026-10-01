@@ -146,6 +146,41 @@ int main(void)
         address = GetProcAddress(driver, "WineD3D11On12MockDriverGetShaderCounts");
         memcpy(&shaders, &address, sizeof(shaders));
         REQUIRE(resources && shaders);
+        {
+            ID3D11Texture2D *sampled = NULL;
+            ID3D11ShaderResourceView *srv = NULL, *retained = NULL;
+            ID3D11RenderTargetView *output = NULL;
+            ID3D11Resource *resource = NULL;
+            D3D11_TEXTURE2D_DESC desc = {0};
+            desc.Width = 8; desc.Height = 4;
+            desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+            desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+            desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+            REQUIRE(ID3D11Device_CreateTexture2D(device, &desc, NULL, &sampled) == S_OK);
+            REQUIRE(ID3D11Device_CreateShaderResourceView(device, (ID3D11Resource *)sampled, NULL, &srv) == S_OK);
+            REQUIRE(ID3D11Device_CreateRenderTargetView(device, (ID3D11Resource *)sampled, NULL, &output) == S_OK);
+            ID3D11DeviceContext_PSSetShaderResources(context, 5, 1, &srv);
+            CHECK(ID3D11Texture2D_Release(sampled) == 0);
+            CHECK(ID3D11ShaderResourceView_Release(srv) == 0);
+            ID3D11DeviceContext_PSGetShaderResources(context, 5, 1, &retained);
+            REQUIRE(retained == srv);
+            ID3D11ShaderResourceView_GetResource(retained, &resource);
+            CHECK(resource == (ID3D11Resource *)sampled);
+            ID3D11Resource_Release(resource);
+            ID3D11DeviceContext_OMSetRenderTargets(context, 1, &output, NULL);
+            ID3D11DeviceContext_PSGetShaderResources(context, 5, 1, &srv);
+            CHECK(!srv); /* Output binding clears the conflicting input. */
+            ID3D11DeviceContext_PSSetShaderResources(context, 5, 1, &retained);
+            ID3D11DeviceContext_PSGetShaderResources(context, 5, 1, &srv);
+            CHECK(!srv); /* An input alias of the bound output becomes NULL. */
+            ID3D11DeviceContext_OMSetRenderTargets(context, 0, NULL, NULL);
+            ID3D11DeviceContext_PSSetShaderResources(context, 5, 1, &retained);
+            CHECK(ID3D11ShaderResourceView_Release(retained) == 0);
+            CHECK(ID3D11RenderTargetView_Release(output) == 0);
+            ID3D11DeviceContext_ClearState(context);
+            resources(&created, &destroyed, NULL);
+            CHECK(created == destroyed);
+        }
         bd.ByteWidth = 32; bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
         REQUIRE(ID3D11Device_CreateBuffer(device, &bd, NULL, &buffer) == S_OK);
         {

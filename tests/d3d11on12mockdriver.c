@@ -23,6 +23,11 @@ struct mock_rtv
     struct mock_image *image;
 };
 
+static LONG srv_create_calls, srv_destroy_calls, srv_bind_calls;
+static UINT srv_last_start, srv_last_count;
+static void *srv_last_view;
+static volatile LONG fail_next_srv;
+
 static LONG open_calls;
 static LONG create_calls;
 static LONG destroy_calls;
@@ -669,6 +674,44 @@ static void mock_ps_set_shader(D3D10DDI_HDEVICE device,
     InterlockedIncrement(&pixel_shader_bind_calls);
 }
 
+static SIZE_T mock_calc_private_srv_size(D3D10DDI_HDEVICE device,
+        const D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW *desc)
+{
+    (void)device; (void)desc;
+    return sizeof(struct mock_rtv);
+}
+
+static void mock_create_srv(D3D10DDI_HDEVICE device,
+        const D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW *desc,
+        D3D10DDI_HSHADERRESOURCEVIEW view, D3D10DDI_HRTSHADERRESOURCEVIEW runtime)
+{
+    struct mock_rtv *srv = view.pDrvPrivate;
+    (void)device; (void)runtime;
+    if (!desc || !srv || !desc->hDrvResource.pDrvPrivate
+            || desc->ResourceDimension != D3D10DDIRESOURCE_TEXTURE2D
+            || desc->Tex2D.ArraySize != 1 || !desc->Tex2D.MipLevels
+            || desc->Tex2D.FirstArraySlice || desc->Tex2D.PlaneSlice || desc->Tex2D.PlaneIndex)
+    { mock_report_error(E_INVALIDARG); return; }
+    if (InterlockedExchange(&fail_next_srv, 0)) { mock_report_error(E_OUTOFMEMORY); return; }
+    srv->image = desc->hDrvResource.pDrvPrivate;
+    InterlockedIncrement(&srv_create_calls);
+}
+
+static void mock_destroy_srv(D3D10DDI_HDEVICE device, D3D10DDI_HSHADERRESOURCEVIEW view)
+{
+    (void)device; (void)view;
+    InterlockedIncrement(&srv_destroy_calls);
+}
+
+static void mock_set_pixel_resources(D3D10DDI_HDEVICE device, UINT start, UINT count,
+        const D3D10DDI_HSHADERRESOURCEVIEW *views)
+{
+    (void)device;
+    srv_last_start = start; srv_last_count = count;
+    srv_last_view = count ? views[count - 1].pDrvPrivate : NULL;
+    InterlockedIncrement(&srv_bind_calls);
+}
+
 static SIZE_T mock_calc_private_render_target_view_size(D3D10DDI_HDEVICE device,
         const D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW *description)
 {
@@ -1091,6 +1134,10 @@ static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
     args->pWDDM2_6DeviceFuncs->pfnDestroyRenderTargetView =
             mock_destroy_render_target_view;
     args->pWDDM2_6DeviceFuncs->pfnSetRenderTargets = mock_set_render_targets;
+    args->pWDDM2_6DeviceFuncs->pfnCalcPrivateShaderResourceViewSize = mock_calc_private_srv_size;
+    args->pWDDM2_6DeviceFuncs->pfnCreateShaderResourceView = mock_create_srv;
+    args->pWDDM2_6DeviceFuncs->pfnDestroyShaderResourceView = mock_destroy_srv;
+    args->pWDDM2_6DeviceFuncs->pfnPsSetShaderResources = mock_set_pixel_resources;
     args->pWDDM2_6DeviceFuncs->pfnSetViewports = mock_set_viewports;
     args->pWDDM2_6DeviceFuncs->pfnClearRenderTargetView =
             mock_clear_render_target_view;
@@ -1322,4 +1369,15 @@ __declspec(dllexport) void WINAPI WineD3D11On12MockDriverFailNextCommandList(voi
 __declspec(dllexport) void WINAPI WineD3D11On12MockDriverReportError(HRESULT hr)
 {
     mock_report_error(hr);
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverFailNextSRV(void)
+{
+    InterlockedExchange(&fail_next_srv, 1);
+}
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetSRVCounts(
+        LONG *created, LONG *destroyed, LONG *bound, UINT *start, UINT *count, void **last)
+{
+    *created = srv_create_calls; *destroyed = srv_destroy_calls; *bound = srv_bind_calls;
+    *start = srv_last_start; *count = srv_last_count; *last = srv_last_view;
 }
