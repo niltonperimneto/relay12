@@ -3276,7 +3276,7 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateWrappedTexture2DV1(
     return hr;
 }
 
-extern "C" HRESULT WINAPI WineD3D11On12SetWrappedOwnershipV1(
+static HRESULT setWrappedOwnership(
         WineD3D11On12AdapterDevice *device, WineD3D11On12Texture2D *const *textures,
         UINT count, BOOL acquire) noexcept
 {
@@ -3315,7 +3315,6 @@ extern "C" HRESULT WINAPI WineD3D11On12SetWrappedOwnershipV1(
             // GPU transitions cannot be rolled back safely. Refuse further
             // wrapped use on this device until it is destroyed and recreated.
             owner->wrappedOwnershipError = frameError(owner);
-            traceCreation(acquire ? "wrapped resource acquisition" : "wrapped resource release", owner->wrappedOwnershipError);
             return owner->wrappedOwnershipError;
         }
         r->acquired = !!acquire;
@@ -3324,7 +3323,17 @@ extern "C" HRESULT WINAPI WineD3D11On12SetWrappedOwnershipV1(
     if (!acquire) ddi->lpVtbl->ApplyAllResourceTransitions(ddi);
     const HRESULT hr = frameError(owner);
     if (FAILED(hr)) owner->wrappedOwnershipError = hr;
-    if (transitioned || FAILED(hr))
+    if (transitioned && SUCCEEDED(hr))
+        traceCreation(acquire ? "wrapped resource acquisition" : "wrapped resource release", hr);
+    return hr;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12SetWrappedOwnershipV1(
+        WineD3D11On12AdapterDevice *device, WineD3D11On12Texture2D *const *textures,
+        UINT count, BOOL acquire) noexcept
+{
+    const HRESULT hr = setWrappedOwnership(device, textures, count, acquire);
+    if (FAILED(hr))
         traceCreation(acquire ? "wrapped resource acquisition" : "wrapped resource release", hr);
     return hr;
 }
