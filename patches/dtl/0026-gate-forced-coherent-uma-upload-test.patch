@@ -1,0 +1,86 @@
+Subject: [PATCH] dtl: gate a direct-upload coherency experiment per device
+
+D3DMetal reports UMA and CacheCoherentUMA false on the tested Apple device,
+although custom WRITE_BACK/L0 initialization and GPU readback succeed. Keep
+that advertised architecture for all ordinary DTL resource paths, but allow
+an explicit two-flag experiment to reach the already constrained On12 direct
+initial-upload candidate. Forcing global architecture flags would change
+Resource.cpp map/rename behavior beyond the experiment. Failed architecture
+queries and multi-node devices cannot activate it. Publish raw flags and the
+forced eligibility state so successful custom probes are not mistaken for
+actual direct uploads. No application-facing capability query is modified.
+
+diff --git a/include/ImmediateContext.hpp b/include/ImmediateContext.hpp
+index 47eefb6..3d3d2fb 100644
+--- a/include/ImmediateContext.hpp
++++ b/include/ImmediateContext.hpp
+@@ -975,6 +975,10 @@ public:
+ private:
+     bool m_BalancedMemory = false;
+     bool m_DirectInitialUpload = false;
++    // A device-local test gate; never replace the driver's architecture flags.
++    HRESULT m_ArchitectureQueryResult = E_FAIL;
++    bool m_ForceCoherentUMARequested = false;
++    bool m_ForcedDirectInitialUpload = false;
+     const char* m_MemoryReason = "legacy";
+     UINT64 m_PhysicalMemory = 0;
+     std::atomic<UINT64> m_DirectAttempts{0}, m_DirectSuccess{0}, m_DirectFallbacks{0}, m_DirectAvoidedBytes{0};
+diff --git a/src/ImmediateContext.cpp b/src/ImmediateContext.cpp
+index a5eda9d..b6cfc07 100644
+--- a/src/ImmediateContext.cpp
++++ b/src/ImmediateContext.cpp
+@@ -127,9 +127,25 @@ ImmediateContext::ImmediateContext(UINT nodeIndex, D3D12_FEATURE_DATA_D3D12_OPTI
+         m_ReadbackBufferPool.ConfigureByteLimit(16ull << 20);
+         m_DecoderBufferPool.ConfigureByteLimit(16ull << 20);
+     }
+-    char direct[2] = {};
+-    m_DirectInitialUpload = m_architecture.isUMA && m_architecture.iscacheCoherentUMA &&
+-        GetEnvironmentVariableA("D3D11ON12_COMPAT_UMADirectInitialUpload", direct, sizeof(direct)) == 1 && direct[0] == '1';
++    char direct[2] = {}, force[2] = {};
++    const bool directRequested = GetEnvironmentVariableA("D3D11ON12_COMPAT_UMADirectInitialUpload", direct, sizeof(direct)) == 1 && direct[0] == '1';
++    m_ForceCoherentUMARequested = GetEnvironmentVariableA("D3D11ON12_COMPAT_ForceCoherentUMA", force, sizeof(force)) == 1 && force[0] == '1';
++    const bool reportedCoherent = m_architecture.isUMA && m_architecture.iscacheCoherentUMA;
++    // Only bypass the initial-upload admission test, on a successfully queried
++    // single-node device. Forcing m_architecture would also change unrelated
++    // Resource.cpp map, rename and copy paths. Both explicit flags are required.
++    m_ForcedDirectInitialUpload = directRequested && m_ForceCoherentUMARequested && !reportedCoherent &&
++        SUCCEEDED(m_ArchitectureQueryResult) && m_pDevice12->GetNodeCount() == 1 && GetNodeMask() == 1;
++    m_DirectInitialUpload = directRequested && (reportedCoherent || m_ForcedDirectInitialUpload);
++    if (m_ForceCoherentUMARequested)
++    {
++        char report[256];
++        std::snprintf(report, sizeof(report),
++            "d3d11on12 experimental coherency override: requested=1 active=%u reported_uma=%u reported_coherent_uma=%u architecture_hr=0x%08lx\n",
++            m_ForcedDirectInitialUpload ? 1u : 0u, unsigned(m_architecture.isUMA), unsigned(m_architecture.iscacheCoherentUMA),
++            static_cast<unsigned long>(m_ArchitectureQueryResult));
++        OutputDebugStringA(report); std::fputs(report, stderr);
++    }
+     UNREFERENCED_PARAMETER(debugFlags);
+     memset(m_BlendFactor, 0, sizeof(m_BlendFactor));
+     memset(m_auVertexOffsets, 0, sizeof(m_auVertexOffsets));
+@@ -3408,7 +3424,8 @@ ImmediateContext::ArchitectureFlags ImmediateContext::QueryArchitectureFlags()
+     D3D12_FEATURE_DATA_ARCHITECTURE1 data = {};
+     data.NodeIndex = m_nodeIndex;
+ 
+-    if (FAILED(m_pDevice12->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE1, &data, sizeof(data))))
++    m_ArchitectureQueryResult = m_pDevice12->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE1, &data, sizeof(data));
++    if (FAILED(m_ArchitectureQueryResult))
+         return ArchitectureFlags{};
+     
+     ArchitectureFlags flags;
+@@ -5908,11 +5925,13 @@ void ImmediateContext::ReportMemoryTelemetry() noexcept
+     TrimResourcePools();
+     char report[768];
+     std::snprintf(report, sizeof(report),
+-        "d3d11on12 memory telemetry: profile=%s reason=%s physical_bytes=%llu pool_counters_available=%u direct_attempts=%llu direct_success=%llu direct_fallbacks=%llu avoided_staging_bytes=%llu\n",
++        "d3d11on12 memory telemetry: profile=%s reason=%s physical_bytes=%llu pool_counters_available=%u direct_attempts=%llu direct_success=%llu direct_fallbacks=%llu avoided_staging_bytes=%llu reported_uma=%u reported_coherent_uma=%u architecture_hr=0x%08lx force_coherent_uma_requested=%u forced_direct_upload=%u direct_enabled=%u\n",
+         m_BalancedMemory ? "balanced" : "legacy", m_MemoryReason,
+         static_cast<unsigned long long>(m_PhysicalMemory), m_BalancedMemory ? 1u : 0u,
+         static_cast<unsigned long long>(m_DirectAttempts.load()), static_cast<unsigned long long>(m_DirectSuccess.load()),
+-        static_cast<unsigned long long>(m_DirectFallbacks.load()), static_cast<unsigned long long>(m_DirectAvoidedBytes.load()));
++        static_cast<unsigned long long>(m_DirectFallbacks.load()), static_cast<unsigned long long>(m_DirectAvoidedBytes.load()),
++        unsigned(m_architecture.isUMA), unsigned(m_architecture.iscacheCoherentUMA), static_cast<unsigned long>(m_ArchitectureQueryResult),
++        m_ForceCoherentUMARequested ? 1u : 0u, m_ForcedDirectInitialUpload ? 1u : 0u, m_DirectInitialUpload ? 1u : 0u);
+     OutputDebugStringA(report); std::fputs(report, stderr);
+     if (!m_BalancedMemory) return;
+     auto reportPool = [&](const char* name, TDynamicBufferPool& pool) {
