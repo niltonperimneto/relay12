@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Compare UMA policies in an isolated Wine/GPTK prefix; preserve raw samples."""
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -20,6 +21,12 @@ def summarize(log):
             'median_ms': statistics.median(samples) if samples else None,
             'p95_ms': samples[min(len(samples)-1, (len(samples)*95 + 99)//100 - 1)] if samples else None,
             'memory_telemetry': [line for line in log.splitlines() if ' memory telemetry:' in line or ' pool telemetry:' in line]}
+
+
+def runtime_host_matches(runtime, staged):
+    """Wine prefers its installed builtin host over an adjacent staged DLL."""
+    installed = runtime / 'lib/wine/x86_64-windows/d3d11on12host.dll'
+    return not installed.is_file() or hashlib.sha256(installed.read_bytes()).digest() == hashlib.sha256(staged.read_bytes()).digest()
 
 
 def main():
@@ -45,6 +52,8 @@ def main():
     if prefix.exists() and any(prefix.iterdir()) and not marker.is_file(): parser.error('prefix must be empty or dedicated to this harness')
     shared = runtime / 'lib/external/libd3dshared.dylib'
     if not wine.is_file() or not shared.is_file(): parser.error('requires a Wine/GPTK runtime with D3DMetal')
+    if not runtime_host_matches(runtime, artifacts / 'd3d11on12host.dll'):
+        parser.error('runtime builtin host differs from the staged artifact; install it into a cloned runtime before testing')
     prefix.mkdir(parents=True, exist_ok=True); marker.touch()
     args.output.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, WINEPREFIX=str(prefix), WINESERVER=str(wine.parent / 'wineserver'), WINELOADER=str(wine),

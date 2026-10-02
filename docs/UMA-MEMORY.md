@@ -89,8 +89,8 @@ by more than 5%. Direct uploads remain opt-in even after passing. Do not claim
 macOS 27/Neo qualification until the raw hardware results have been recorded.
 
 Hardware results: [2026-09-30 A18 Pro validation](validation/2026-09-30-uma-memory/README.md).
-Raw GPU transfers and PEAK D3D12/MSYNC startup passed their individual checks,
-but On12 sampling/readback and wrapped-resource qualification remain incomplete.
+Raw GPU transfers and PEAK D3D12/MSYNC startup passed their individual checks.
+The sampling/readback failures recorded there are resolved in the follow-up below.
 
 ## Follow-up validation
 
@@ -110,3 +110,17 @@ with poisoned output fields, and effective custom upload/readback heap propertie
 The poison distinguishes an actual false report from S_OK without initialized
 output. Capability reports come from the caller's D3D12 device; physical Apple
 unified memory alone cannot override the driver-visible coherency contract.
+
+Wine prefers its installed builtin `d3d11on12host.dll` over the adjacent staged
+host when that module is bundled with the runtime. Both hardware runners reject
+an installed host whose hash differs from the staged artifact. Test with a cloned
+runtime containing the matching CI host in
+`lib/wine/x86_64-windows/d3d11on12host.dll`; an adjacent copy alone is insufficient
+on such runtimes. Keep the host builtin override because the Wine-built PE host
+cannot load through the native-only override on the tested runtime.
+
+[2026-10-01 integration results](validation/2026-10-01-uma-followup/README.md)
+record passing RGBA8/BGRA8 sampling and wrapped-resource GPU checks under standard
+synchronization and MSYNC. Direct upload remains capability-gated. The final PEAK
+retest with matching host artifacts awaits Steam sign-in; gameplay performance
+and physical-memory savings remain unqualified.
