@@ -90,6 +90,14 @@ the direct On12 path is valid. References:
 [D3D12 ARCHITECTURE1](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ns-d3d12-d3d12_feature_data_architecture1),
 [Metal shared storage](https://developer.apple.com/documentation/metal/mtlstoragemode/shared).
 
+[2026-10-02 forced-path evidence](validation/2026-10-02-forced-uma/README.md)
+confirms that the false reports originate at the D3DMetal backend boundary.
+With both flags enabled, four direct initial uploads succeed per correctness run
+with byte-exact RGBA8/BGRA8 shader pixels under standard synchronization and
+MSYNC. The force-only, absent and malformed-value controls retain capability
+gating. Automatic profile promotion and gameplay/performance qualification remain
+disabled or pending; these results qualify the scoped experimental path only.
+
 ## Validation
 
 `relay_memory_pool_test.cpp` checks profile selection, completed versus pending
