@@ -143,6 +143,12 @@ unhandled-crash, device-removal or MSYNC failure marker appears. A native thread
 sample times out, so the exact main-thread wait remains unproven. Authenticated
 Steam launch and gameplay measurement remain pending.
 
+The [Steam-ready follow-up](validation/2026-10-02-peak-steam-ready/README.md)
+with matching `971b374` artifacts records fresh login, successful Steam API
+initialization, successful Relay12 On12 device creation and a rendered PEAK main
+menu under MSYNC. The startup block is no longer reproduced. Gameplay, wrapped
+resource use and matched FPS/footprint measurements remain unqualified.
+
 ## Validation
 
 `relay_memory_pool_test.cpp` checks profile selection, completed versus pending
