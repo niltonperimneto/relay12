@@ -1,0 +1,162 @@
+Subject: [PATCH] dtl: retain upload bursts with configurable idle hysteresis
+
+The balanced 32 MiB completed-upload cap repeatedly destroyed 33 of 48 staging
+buffers in a measured 99 MiB Apple Silicon burst, tripling upload creation
+latency. Admit a bounded 128 MiB burst for two seconds of successful workload
+activity, then reclaim completed buffers to the 32 MiB soft cap on the next
+pool operation. Keep pending fences protected, release completed burst excess
+on OOM before existing fallback waits, and drain completed entries at teardown.
+Explicit bounded decimal settings permit constrained-device experiments;
+telemetry publishes the policy. Automatic balanced promotion stays disabled.
+
+diff --git a/include/ImmediateContext.hpp b/include/ImmediateContext.hpp
+index 3d3d2fb..2b81ca5 100644
+--- a/include/ImmediateContext.hpp
++++ b/include/ImmediateContext.hpp
+@@ -174,9 +174,13 @@ public:
+     {
+     }
+ 
++    void ConfigureByteLimit(relay12::PoolLimits limits)
++    {
++        m_Bounded.reset(new relay12::BoundedMemoryPool<TResourceType>(limits));
++    }
+     void ConfigureByteLimit(UINT64 limit)
+     {
+-        m_Bounded.reset(new relay12::BoundedMemoryPool<TResourceType>(limit));
++        ConfigureByteLimit(relay12::PoolLimits{limit, limit, 0});
+     }
+     bool HasByteLimit() const noexcept { return !!m_Bounded; }
+     relay12::PoolCounters MemoryCounters() noexcept
+@@ -235,9 +239,9 @@ public:
+         return std::move(m_MultiPool[PoolIndex].RetrieveFromPool(CurrentFenceValue, pfnCreateNew, AlignedSize)); // throw( _com_error )
+     }
+ 
+-    void Trim(UINT64 CurrentFenceValue)
++    void Trim(UINT64 CurrentFenceValue, relay12::PoolTrimReason reason = relay12::PoolTrimReason::Idle)
+     {
+-        if (m_Bounded) { m_Bounded->trim(CurrentFenceValue); return; }
++        if (m_Bounded) { m_Bounded->trim(CurrentFenceValue, reason); return; }
+         auto Lock = m_Lock.TakeLock();
+ 
+         for (TPool& pool : m_MultiPool)
+@@ -1023,7 +1027,7 @@ public:
+     void AddObjectToDeferredDeletionQueue(ID3D12Object* pUnderlying, const UINT64 lastCommandListIDs[(UINT)COMMAND_LIST_TYPE::MAX_VALID], bool completionRequired);
+ 
+     bool TrimDeletedObjects(bool deviceBeingDestroyed = false);
+-    bool TrimResourcePools();
++    bool TrimResourcePools(relay12::PoolTrimReason reason = relay12::PoolTrimReason::Idle);
+ 
+     unique_comptr<ID3D12Resource> AcquireTransitionableUploadBuffer(AllocatorHeapType HeapType, UINT64 Size) noexcept(false);
+ 
+diff --git a/src/ImmediateContext.cpp b/src/ImmediateContext.cpp
+index b6cfc07..acff910 100644
+--- a/src/ImmediateContext.cpp
++++ b/src/ImmediateContext.cpp
+@@ -5,8 +5,21 @@
+ #include <cstdio>
+ #include "PrecompiledShaders.h"
+ 
+-namespace D3D12TranslationLayer
+-{
++namespace D3D12TranslationLayer
++{
++// Device-local policy, with bounded decimal parsing. Missing settings keep
++// defaults; malformed values cannot silently disable memory reclamation.
++static UINT64 ReadPoolSetting(const char* name, UINT64 fallback, UINT64 maximum) noexcept
++{
++    char text[32] = {};
++    const DWORD length = GetEnvironmentVariableA(name, text, sizeof(text));
++    if (!length) return fallback;
++    std::uint64_t value = 0;
++    if (length < sizeof(text) && relay12::ParsePoolSetting(text, maximum, value)) return value;
++    std::fprintf(stderr, "d3d11on12 memory policy: invalid %s; using default %llu\n",
++        name, static_cast<unsigned long long>(fallback));
++    return fallback;
++}
+ 
+ //==================================================================================================================================
+ // 
+@@ -123,9 +136,12 @@ ImmediateContext::ImmediateContext(UINT nodeIndex, D3D12_FEATURE_DATA_D3D12_OPTI
+         !relay12::AutomaticMemoryProfileQualified ? "qualification-pending" : "small-uma";
+     if (m_BalancedMemory)
+     {
+-        m_UploadBufferPool.ConfigureByteLimit(32ull << 20);
+-        m_ReadbackBufferPool.ConfigureByteLimit(16ull << 20);
+-        m_DecoderBufferPool.ConfigureByteLimit(16ull << 20);
++        m_UploadBufferPool.ConfigureByteLimit(relay12::PoolLimits{
++            ReadPoolSetting("D3D11ON12_COMPAT_UploadCacheMiB", 32, 1024) << 20,
++            ReadPoolSetting("D3D11ON12_COMPAT_UploadBurstCacheMiB", 128, 1024) << 20,
++            ReadPoolSetting("D3D11ON12_COMPAT_UploadBurstGraceMs", 2000, 60000)});
++        m_ReadbackBufferPool.ConfigureByteLimit(ReadPoolSetting("D3D11ON12_COMPAT_ReadbackCacheMiB", 16, 1024) << 20);
++        m_DecoderBufferPool.ConfigureByteLimit(ReadPoolSetting("D3D11ON12_COMPAT_DecoderCacheMiB", 16, 1024) << 20);
+     }
+     char direct[2] = {}, force[2] = {};
+     const bool directRequested = GetEnvironmentVariableA("D3D11ON12_COMPAT_UMADirectInitialUpload", direct, sizeof(direct)) == 1 && direct[0] == '1';
+@@ -556,14 +572,18 @@ bool ImmediateContext::TrimDeletedObjects(bool deviceBeingDestroyed)
+     return m_DeferredDeletionQueueManager.GetLocked()->TrimDeletedObjects(deviceBeingDestroyed);
+ }
+ 
+-bool ImmediateContext::TrimResourcePools()
+-{
+-    m_UploadBufferPool.Trim(GetCompletedFenceValue(CommandListType(AllocatorHeapType::Upload)));
+-    m_ReadbackBufferPool.Trim(GetCompletedFenceValue(CommandListType(AllocatorHeapType::Readback)));
+-    m_DecoderBufferPool.Trim(GetCompletedFenceValue(CommandListType(AllocatorHeapType::Decoder)));
+-
+-    return true;
+-}
++bool ImmediateContext::TrimResourcePools(relay12::PoolTrimReason reason)
++{
++    const bool pressure = m_BalancedMemory && reason == relay12::PoolTrimReason::Pressure;
++    const auto before = pressure ? m_UploadBufferPool.MemoryCounters().trims +
++        m_ReadbackBufferPool.MemoryCounters().trims + m_DecoderBufferPool.MemoryCounters().trims : 0;
++    m_UploadBufferPool.Trim(GetCompletedFenceValue(CommandListType(AllocatorHeapType::Upload)), reason);
++    m_ReadbackBufferPool.Trim(GetCompletedFenceValue(CommandListType(AllocatorHeapType::Readback)), reason);
++    m_DecoderBufferPool.Trim(GetCompletedFenceValue(CommandListType(AllocatorHeapType::Decoder)), reason);
++    // OOM retry must make progress; never spin on an unchanged bounded cache.
++    return !pressure || before != m_UploadBufferPool.MemoryCounters().trims +
++        m_ReadbackBufferPool.MemoryCounters().trims + m_DecoderBufferPool.MemoryCounters().trims;
++}
+ 
+ void TRANSLATION_API ImmediateContext::PostSubmitNotification()
+ {
+@@ -4139,8 +4159,9 @@ inline bool IsSyncPointLessThanOrEqual(UINT64(&lhs)[(UINT)COMMAND_LIST_TYPE::MAX
+     return true;
+ }
+ //----------------------------------------------------------------------------------------------------------------------------------
+-bool ImmediateContext::ResourceAllocationFallback(ResourceAllocationContext threadingContext)
+-{
++bool ImmediateContext::ResourceAllocationFallback(ResourceAllocationContext threadingContext)
++{
++    if (m_BalancedMemory && TrimResourcePools(relay12::PoolTrimReason::Pressure)) return true;
+     if (TrimDeletedObjects())
+     {
+         return true;
+@@ -5920,9 +5941,10 @@ Resource* ImmediateContext::BltResolveManager::GetBltResolveTempForWindow(HWND h
+ namespace D3D12TranslationLayer {
+ void ImmediateContext::ReportMemoryTelemetry() noexcept
+ {
++    if (m_BalancedMemory) TrimResourcePools(relay12::PoolTrimReason::Teardown);
+     char enabled[2] = {};
+     if (GetEnvironmentVariableA("RELAY12_TELEMETRY", enabled, sizeof(enabled)) != 1 || enabled[0] != '1') return;
+-    TrimResourcePools();
++    if (!m_BalancedMemory) TrimResourcePools();
+     char report[768];
+     std::snprintf(report, sizeof(report),
+         "d3d11on12 memory telemetry: profile=%s reason=%s physical_bytes=%llu pool_counters_available=%u direct_attempts=%llu direct_success=%llu direct_fallbacks=%llu avoided_staging_bytes=%llu reported_uma=%u reported_coherent_uma=%u architecture_hr=0x%08lx force_coherent_uma_requested=%u forced_direct_upload=%u direct_enabled=%u\n",
+@@ -5937,10 +5959,13 @@ void ImmediateContext::ReportMemoryTelemetry() noexcept
+     auto reportPool = [&](const char* name, TDynamicBufferPool& pool) {
+         const auto c = pool.MemoryCounters();
+         std::snprintf(report, sizeof(report),
+-            "d3d11on12 pool telemetry: pool=%s retained_bytes=%llu peak_retained_bytes=%llu pending_bytes=%llu completed_bytes=%llu allocations=%llu reuses=%llu trims=%llu\n",
++            "d3d11on12 pool telemetry: pool=%s retained_bytes=%llu peak_retained_bytes=%llu pending_bytes=%llu completed_bytes=%llu allocations=%llu reuses=%llu trims=%llu soft_limit_bytes=%llu burst_limit_bytes=%llu grace_ms=%llu effective_limit_bytes=%llu burst_active=%u\n",
+             name, static_cast<unsigned long long>(c.retained), static_cast<unsigned long long>(c.peakRetained),
+             static_cast<unsigned long long>(c.pending), static_cast<unsigned long long>(c.completed),
+-            static_cast<unsigned long long>(c.allocations), static_cast<unsigned long long>(c.reuses), static_cast<unsigned long long>(c.trims));
++            static_cast<unsigned long long>(c.allocations), static_cast<unsigned long long>(c.reuses), static_cast<unsigned long long>(c.trims),
++            static_cast<unsigned long long>(c.softLimit), static_cast<unsigned long long>(c.burstLimit),
++            static_cast<unsigned long long>(c.graceMilliseconds), static_cast<unsigned long long>(c.effectiveLimit),
++            c.burstActive ? 1u : 0u);
+         OutputDebugStringA(report); std::fputs(report, stderr);
+     };
+     reportPool("upload", m_UploadBufferPool);
