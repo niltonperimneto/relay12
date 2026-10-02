@@ -1,0 +1,14 @@
+msync: bootstrapped mach port on wine-f3de59-msync.
+msync: up and running.
+D3D12CreateDevice hr=0x00000000
+perf: SHADER_CACHE hr=0x00000000 SupportFlags=0x1e
+perf: CreatePipelineLibrary hr=0x00000000 library=0000600000183B50
+perf: PipelineLibrary serialized size=104 hr=0x00000000
+perf: physical_bytes=8589930496 memory_query=1 upload_page=2 readback_page=3
+perf: heap_upload type=4 pool=1 creation_mask=1 visible_mask=1 heap_readback type=4 pool=1
+perf: node_count=1
+perf: ARCHITECTURE hr=0x00000000 UMA=0 CacheCoherentUMA=0 TileBasedRenderer=0
+perf: ARCHITECTURE1 hr=0x00000000 UMA=0 CacheCoherentUMA=0 TileBasedRenderer=0
+perf: CUSTOM WRITE_BACK/L0 buffer hr=0x00000000
+perf: CUSTOM WRITE_BACK/L0 buffer Map hr=0x00000000 cpu_round_trip=yes
+perf: CUSTOM WRITE_BACK/L0 texture hr=0x00000000

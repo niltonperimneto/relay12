@@ -1,0 +1,59 @@
+{
+  "date": "2026-10-01",
+  "runtime_commit": "e2b99d224f9524ebed78f8850ae674940c5a5012",
+  "ci_run": "https://github.com/niltonperimneto/relay12/actions/runs/36809578897",
+  "ci_semaphore": "pass",
+  "ci_ring": "pass",
+  "python_tests": 196,
+  "local_static_gates": "pass",
+  "hardware": "Apple A18 Pro / 8 GiB / macOS 27.2",
+  "runtime": "isolated WineCX GPTK 4.7.54 / Wine 11.17 / D3DMetal 4.0b2",
+  "runtime_host_matches_staged": true,
+  "sampling": {
+    "none": {
+      "legacy": "pass",
+      "balanced": "pass",
+      "direct": "pass"
+    },
+    "msync": {
+      "legacy": "pass",
+      "balanced": "pass",
+      "direct": "pass"
+    }
+  },
+  "wrapped_gpu": {
+    "none": "pass",
+    "msync": "pass"
+  },
+  "srv_unit": {
+    "none": "pass",
+    "msync": "pass"
+  },
+  "architecture": {
+    "legacy_hr": "00000000",
+    "architecture1_hr": "00000000",
+    "UMA": false,
+    "CacheCoherentUMA": false,
+    "poisoned_outputs_overwritten": true,
+    "upload_cpu_page_property": "WRITE_COMBINE",
+    "readback_cpu_page_property": "WRITE_BACK",
+    "memory_pool": "L0"
+  },
+  "on12_direct_upload_attempts": 0,
+  "on12_direct_upload_successes": 0,
+  "direct_upload_activation": "gated",
+  "automatic_balanced_activation": false,
+  "peak_traced_core": {
+    "presented_frames": true,
+    "wrapped_activity_observed": false,
+    "qualified": false,
+    "host": "old installed frontend; this run validates tracing only"
+  },
+  "peak_matched_runtime": {
+    "started": false,
+    "qualified": false,
+    "reason": "Steam signed out in the isolated runtime; no Player.log"
+  },
+  "performance_qualified": false,
+  "scope": "Correctness and integration follow-up; not gameplay FPS or physical-memory savings"
+}
