@@ -241,7 +241,7 @@ objects, every 1024 flushes and once more at destruction, taken before the
 teardown frees what is left:
 
 ```
-d3d11on12core census (periodic|device destroyed): flushes=… buffers=… textures=… peak_textures=… rtvs=… peak_rtvs=… orphaned_textures=… peak_orphaned_textures=…
+d3d11on12core census (periodic|device destroyed): flushes=… buffers=… textures=… peak_textures=… rtvs=… peak_rtvs=… orphaned_textures=… peak_orphaned_textures=… srvs=… peak_srvs=…
 ```
 
 The counts are kept whether or not telemetry is on; only the report is gated.

@@ -21,6 +21,7 @@ Metal's performance HUD is enabled for the run: its once-a-second frame counts
 are the evidence of presented frames when Unity presents through D3D12.
 """
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path, PureWindowsPath
@@ -72,6 +73,12 @@ def stop_server(wine, env, log):
                 raise
 
 
+def runtime_host_matches(runtime, staged):
+    """Wine prefers its installed builtin host over an adjacent staged DLL."""
+    installed = runtime / 'lib/wine/x86_64-windows/d3d11on12host.dll'
+    return not installed.is_file() or hashlib.sha256(installed.read_bytes()).digest() == hashlib.sha256(staged.read_bytes()).digest()
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -102,6 +109,9 @@ def main(argv=None):
     if (not wine.is_file() or not (wine.parent / "wineserver").is_file()
             or not (runtime / "lib/external/libd3dshared.dylib").is_file()):
         parser.error("--wine must name a configured Wine/GPTK runtime with D3DMetal")
+
+    if not runtime_host_matches(runtime, game / 'd3d11on12host.dll'):
+        parser.error('runtime builtin host differs from the staged artifact; install it into a cloned runtime before testing')
 
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)

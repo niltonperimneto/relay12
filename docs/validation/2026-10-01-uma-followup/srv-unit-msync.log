@@ -1,0 +1,3 @@
+msync: bootstrapped mach port on wine-f3de59-msync.
+msync: up and running.
+[ ok ] SRV failures, bindings and idempotent destruction

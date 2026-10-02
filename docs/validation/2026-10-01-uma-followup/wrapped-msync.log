@@ -1,0 +1,23 @@
+msync: bootstrapped mach port on wine-f3de59-msync.
+msync: up and running.
+d3d11on12core: leave driver wrapped resource creation (hr=0x00000000)
+d3d11on12core: wrapped resource acquisition (hr=0x00000000)
+d3d11on12core: wrapped resource release (hr=0x00000000)
+[ ok ] format 28 cycle 1: original D3D12 texture contains all 4096 red pixels; fence 3 completed
+d3d11on12core: wrapped resource acquisition (hr=0x00000000)
+d3d11on12core: wrapped resource release (hr=0x00000000)
+[ ok ] format 28 cycle 2: original D3D12 texture contains all 4096 red pixels; fence 6 completed
+d3d11on12core: wrapped resource acquisition (hr=0x00000000)
+d3d11on12core: wrapped resource release (hr=0x00000000)
+[ ok ] format 28 cycle 3: original D3D12 texture contains all 4096 red pixels; fence 9 completed
+d3d11on12core: leave driver wrapped resource creation (hr=0x00000000)
+d3d11on12core: wrapped resource acquisition (hr=0x00000000)
+d3d11on12core: wrapped resource release (hr=0x00000000)
+[ ok ] format 87 cycle 1: original D3D12 texture contains all 4096 red pixels; fence 3 completed
+d3d11on12core: wrapped resource acquisition (hr=0x00000000)
+d3d11on12core: wrapped resource release (hr=0x00000000)
+[ ok ] format 87 cycle 2: original D3D12 texture contains all 4096 red pixels; fence 6 completed
+d3d11on12core: wrapped resource acquisition (hr=0x00000000)
+d3d11on12core: wrapped resource release (hr=0x00000000)
+[ ok ] format 87 cycle 3: original D3D12 texture contains all 4096 red pixels; fence 9 completed
+[ ok ] RGBA and BGRA wrapped-resource ownership, caller readback and teardown completed

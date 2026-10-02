@@ -1,0 +1,58 @@
+{
+  "sync_requested": "none",
+  "scope": "D3D11On12 transfer workload; not PEAK FPS or physical residency",
+  "wine": "isolated WineCX GPTK 4.7.54 runtime with matching CI host",
+  "host": "macOS-27.2-arm64-arm-64bit",
+  "transfer_only": false,
+  "runtime_flags": {
+    "D3DM_WINE_UNIX_CALL": "1",
+    "D3DM_MTL4": "1",
+    "WINEMSYNC": "0",
+    "WINEESYNC": "0",
+    "WINEFSYNC": "0"
+  },
+  "samples": [
+    {
+      "trial": 0,
+      "mode": "legacy",
+      "exit_code": 0,
+      "log": "sampling-none-legacy.log",
+      "transfer_frames": 2,
+      "median_ms": 1.3679999999999999,
+      "p95_ms": 1.645,
+      "memory_telemetry": [
+        "d3d11on12 memory telemetry: profile=legacy reason=explicit-legacy physical_bytes=8589930496 pool_counters_available=0 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0"
+      ]
+    },
+    {
+      "trial": 0,
+      "mode": "balanced",
+      "exit_code": 0,
+      "log": "sampling-none-balanced.log",
+      "transfer_frames": 2,
+      "median_ms": 0.5145,
+      "p95_ms": 0.558,
+      "memory_telemetry": [
+        "d3d11on12 memory telemetry: profile=balanced reason=explicit-balanced physical_bytes=8589930496 pool_counters_available=1 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0",
+        "d3d11on12 pool telemetry: pool=upload retained_bytes=65536 peak_retained_bytes=65536 pending_bytes=0 completed_bytes=65536 allocations=1 reuses=1 trims=0",
+        "d3d11on12 pool telemetry: pool=readback retained_bytes=65536 peak_retained_bytes=65536 pending_bytes=0 completed_bytes=65536 allocations=1 reuses=0 trims=0",
+        "d3d11on12 pool telemetry: pool=decoder retained_bytes=0 peak_retained_bytes=0 pending_bytes=0 completed_bytes=0 allocations=0 reuses=0 trims=0"
+      ]
+    },
+    {
+      "trial": 0,
+      "mode": "direct",
+      "exit_code": 0,
+      "log": "sampling-none-direct.log",
+      "transfer_frames": 2,
+      "median_ms": 0.6725,
+      "p95_ms": 0.714,
+      "memory_telemetry": [
+        "d3d11on12 memory telemetry: profile=balanced reason=explicit-balanced physical_bytes=8589930496 pool_counters_available=1 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0",
+        "d3d11on12 pool telemetry: pool=upload retained_bytes=65536 peak_retained_bytes=65536 pending_bytes=0 completed_bytes=65536 allocations=1 reuses=1 trims=0",
+        "d3d11on12 pool telemetry: pool=readback retained_bytes=65536 peak_retained_bytes=65536 pending_bytes=0 completed_bytes=65536 allocations=1 reuses=0 trims=0",
+        "d3d11on12 pool telemetry: pool=decoder retained_bytes=0 peak_retained_bytes=0 pending_bytes=0 completed_bytes=0 allocations=0 reuses=0 trims=0"
+      ]
+    }
+  ]
+}

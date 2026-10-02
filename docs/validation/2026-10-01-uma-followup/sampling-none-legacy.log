@@ -1,0 +1,17 @@
+[info] starting UMA memory test
+[info] initializing DXGI adapter
+[info] DXGI adapter ready
+[info] architecture_hr=00000000 uma=0 coherent=0
+[info] direct_gpu_probe format=28 hr=00000000
+[info] direct_gpu_probe format=87 hr=00000000
+[upload] cycle=0 wall_ms=0.661 working_set_bytes=113000448 memory_available=1
+[frame] cycle=0 texture=0 wall_ms=17.950
+[frame] cycle=0 texture=1 wall_ms=1.574
+[sample] cycle=0 textures=2 wall_ms=21.323 working_set_bytes=115040256 memory_available=1
+[upload] cycle=1 wall_ms=0.313 working_set_bytes=115044352 memory_available=1
+[frame] cycle=1 texture=0 wall_ms=1.091
+[frame] cycle=1 texture=1 wall_ms=1.645
+[sample] cycle=1 textures=2 wall_ms=3.822 working_set_bytes=115044352 memory_available=1
+d3d11on12 memory telemetry: profile=legacy reason=explicit-legacy physical_bytes=8589930496 pool_counters_available=0 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0
+d3d11on12core census (device destroyed): flushes=3 buffers=0 textures=0 peak_textures=5 rtvs=0 peak_rtvs=1 orphaned_textures=0 peak_orphaned_textures=0 srvs=0 peak_srvs=1
+[ ok ] UMA initialization, shader sampling and readback
