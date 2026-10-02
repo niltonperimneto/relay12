@@ -1,0 +1,54 @@
+{
+  "sync": "msync",
+  "steam_processes": [
+    {
+      "seconds": 4.22,
+      "pid": 25405,
+      "kind": "steam",
+      "event": "observed_alive"
+    },
+    {
+      "seconds": 34.6,
+      "pid": 25507,
+      "kind": "steam",
+      "event": "observed_alive"
+    },
+    {
+      "seconds": 34.6,
+      "pid": 25405,
+      "kind": "steam",
+      "event": "no_longer_observed"
+    },
+    {
+      "seconds": 45.03,
+      "pid": 25532,
+      "kind": "steam_webhelper",
+      "event": "observed_alive"
+    },
+    {
+      "seconds": 65.63,
+      "pid": 25619,
+      "kind": "steam",
+      "event": "observed_alive"
+    },
+    {
+      "seconds": 69.87,
+      "pid": 25619,
+      "kind": "steam",
+      "event": "no_longer_observed"
+    }
+  ],
+  "handoff": {
+    "returncode": 0,
+    "timed_out": false,
+    "elapsed_seconds": 6.7
+  },
+  "fresh_logon_response_ok": false,
+  "fresh_peak_process_event": false,
+  "fresh_player_log": false,
+  "retained_visible_steam": true,
+  "steam_launcher_pid": 25405,
+  "steam_launcher_returncode": 42,
+  "fresh_game_started": false,
+  "steam_launcher_exit_interpretation": "replaced by client during startup; exit42 is not a PEAK crash"
+}

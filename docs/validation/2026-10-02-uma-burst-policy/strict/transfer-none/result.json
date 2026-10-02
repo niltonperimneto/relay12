@@ -1,0 +1,734 @@
+{
+  "sync_requested": "none",
+  "scope": "D3D11On12 transfer workload; not PEAK FPS or physical residency",
+  "wine": "isolated matching WineCX GPTK runtime",
+  "host": "macOS-27.2-arm64-arm-64bit",
+  "transfer_only": true,
+  "wineserver_session": "shared",
+  "prewarm_runs": 1,
+  "runtime_flags": {
+    "D3DM_WINE_UNIX_CALL": "1",
+    "D3DM_MTL4": "1",
+    "WINEMSYNC": "0",
+    "WINEESYNC": "0",
+    "WINEFSYNC": "0"
+  },
+  "samples": [
+    {
+      "trial": 0,
+      "mode": "legacy",
+      "exit_code": 0,
+      "log": "0-legacy.log",
+      "transfer_frames": 192,
+      "median_ms": 1.2534999999999998,
+      "p95_ms": 9.904,
+      "memory_telemetry": [
+        "d3d11on12 memory telemetry: profile=legacy reason=explicit-legacy physical_bytes=8589930496 pool_counters_available=0 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0 reported_uma=0 reported_coherent_uma=0 architecture_hr=0x00000000 force_coherent_uma_requested=0 forced_direct_upload=0 direct_enabled=0"
+      ],
+      "mean_ms": 2.133072916666667,
+      "min_ms": 0.933,
+      "max_ms": 24.208,
+      "upload_median_ms": 10.3085,
+      "upload_p95_ms": 17.545,
+      "upload_mean_ms": 11.407
+    },
+    {
+      "trial": 0,
+      "mode": "balanced",
+      "exit_code": 0,
+      "log": "0-balanced.log",
+      "transfer_frames": 192,
+      "median_ms": 1.7795,
+      "p95_ms": 11.473,
+      "memory_telemetry": [
+        "d3d11on12 memory telemetry: profile=balanced reason=explicit-balanced physical_bytes=8589930496 pool_counters_available=1 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0 reported_uma=0 reported_coherent_uma=0 architecture_hr=0x00000000 force_coherent_uma_requested=0 forced_direct_upload=0 direct_enabled=0",
+        "d3d11on12 pool telemetry: pool=upload retained_bytes=0 peak_retained_bytes=34603008 pending_bytes=0 completed_bytes=0 allocations=180 reuses=60 trims=180 soft_limit_bytes=33554432 burst_limit_bytes=134217728 grace_ms=0 effective_limit_bytes=33554432 burst_active=0",
+        "d3d11on12 pool telemetry: pool=readback retained_bytes=0 peak_retained_bytes=4325376 pending_bytes=0 completed_bytes=0 allocations=2 reuses=0 trims=2 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0",
+        "d3d11on12 pool telemetry: pool=decoder retained_bytes=0 peak_retained_bytes=0 pending_bytes=0 completed_bytes=0 allocations=0 reuses=0 trims=0 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0"
+      ],
+      "mean_ms": 2.8489114583333333,
+      "min_ms": 0.855,
+      "max_ms": 20.633,
+      "upload_median_ms": 38.48,
+      "upload_p95_ms": 42.971,
+      "upload_mean_ms": 35.982,
+      "pool_stats": {
+        "upload": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 34603008,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 180,
+          "reuses": 60,
+          "trims": 180
+        },
+        "readback": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 4325376,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 2,
+          "reuses": 0,
+          "trims": 2
+        },
+        "decoder": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 0,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 0,
+          "reuses": 0,
+          "trims": 0
+        }
+      }
+    },
+    {
+      "trial": 0,
+      "mode": "direct",
+      "exit_code": 0,
+      "log": "0-direct.log",
+      "transfer_frames": 192,
+      "median_ms": 0.9245000000000001,
+      "p95_ms": 8.021,
+      "memory_telemetry": [
+        "d3d11on12 memory telemetry: profile=balanced reason=explicit-balanced physical_bytes=8589930496 pool_counters_available=1 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0 reported_uma=0 reported_coherent_uma=0 architecture_hr=0x00000000 force_coherent_uma_requested=0 forced_direct_upload=0 direct_enabled=0",
+        "d3d11on12 pool telemetry: pool=upload retained_bytes=0 peak_retained_bytes=34603008 pending_bytes=0 completed_bytes=0 allocations=180 reuses=60 trims=180 soft_limit_bytes=33554432 burst_limit_bytes=134217728 grace_ms=0 effective_limit_bytes=33554432 burst_active=0",
+        "d3d11on12 pool telemetry: pool=readback retained_bytes=0 peak_retained_bytes=4325376 pending_bytes=0 completed_bytes=0 allocations=2 reuses=0 trims=2 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0",
+        "d3d11on12 pool telemetry: pool=decoder retained_bytes=0 peak_retained_bytes=0 pending_bytes=0 completed_bytes=0 allocations=0 reuses=0 trims=0 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0"
+      ],
+      "mean_ms": 1.601515625,
+      "min_ms": 0.77,
+      "max_ms": 15.343,
+      "upload_median_ms": 22.301000000000002,
+      "upload_p95_ms": 23.943,
+      "upload_mean_ms": 22.136,
+      "pool_stats": {
+        "upload": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 34603008,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 180,
+          "reuses": 60,
+          "trims": 180
+        },
+        "readback": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 4325376,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 2,
+          "reuses": 0,
+          "trims": 2
+        },
+        "decoder": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 0,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 0,
+          "reuses": 0,
+          "trims": 0
+        }
+      }
+    },
+    {
+      "trial": 1,
+      "mode": "legacy",
+      "exit_code": 0,
+      "log": "1-legacy.log",
+      "transfer_frames": 192,
+      "median_ms": 1.147,
+      "p95_ms": 8.742,
+      "memory_telemetry": [
+        "d3d11on12 memory telemetry: profile=legacy reason=explicit-legacy physical_bytes=8589930496 pool_counters_available=0 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0 reported_uma=0 reported_coherent_uma=0 architecture_hr=0x00000000 force_coherent_uma_requested=0 forced_direct_upload=0 direct_enabled=0"
+      ],
+      "mean_ms": 1.9824427083333334,
+      "min_ms": 0.817,
+      "max_ms": 12.356,
+      "upload_median_ms": 9.794,
+      "upload_p95_ms": 13.204,
+      "upload_mean_ms": 9.7165
+    },
+    {
+      "trial": 1,
+      "mode": "direct",
+      "exit_code": 0,
+      "log": "1-direct.log",
+      "transfer_frames": 192,
+      "median_ms": 0.9384999999999999,
+      "p95_ms": 7.297,
+      "memory_telemetry": [
+        "d3d11on12 memory telemetry: profile=balanced reason=explicit-balanced physical_bytes=8589930496 pool_counters_available=1 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0 reported_uma=0 reported_coherent_uma=0 architecture_hr=0x00000000 force_coherent_uma_requested=0 forced_direct_upload=0 direct_enabled=0",
+        "d3d11on12 pool telemetry: pool=upload retained_bytes=0 peak_retained_bytes=34603008 pending_bytes=0 completed_bytes=0 allocations=180 reuses=60 trims=180 soft_limit_bytes=33554432 burst_limit_bytes=134217728 grace_ms=0 effective_limit_bytes=33554432 burst_active=0",
+        "d3d11on12 pool telemetry: pool=readback retained_bytes=0 peak_retained_bytes=4325376 pending_bytes=0 completed_bytes=0 allocations=2 reuses=0 trims=2 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0",
+        "d3d11on12 pool telemetry: pool=decoder retained_bytes=0 peak_retained_bytes=0 pending_bytes=0 completed_bytes=0 allocations=0 reuses=0 trims=0 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0"
+      ],
+      "mean_ms": 1.7273489583333335,
+      "min_ms": 0.804,
+      "max_ms": 22.533,
+      "upload_median_ms": 23.063,
+      "upload_p95_ms": 27.33,
+      "upload_mean_ms": 23.872,
+      "pool_stats": {
+        "upload": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 34603008,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 180,
+          "reuses": 60,
+          "trims": 180
+        },
+        "readback": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 4325376,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 2,
+          "reuses": 0,
+          "trims": 2
+        },
+        "decoder": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 0,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 0,
+          "reuses": 0,
+          "trims": 0
+        }
+      }
+    },
+    {
+      "trial": 1,
+      "mode": "balanced",
+      "exit_code": 0,
+      "log": "1-balanced.log",
+      "transfer_frames": 192,
+      "median_ms": 1.0405,
+      "p95_ms": 10.579,
+      "memory_telemetry": [
+        "d3d11on12 memory telemetry: profile=balanced reason=explicit-balanced physical_bytes=8589930496 pool_counters_available=1 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0 reported_uma=0 reported_coherent_uma=0 architecture_hr=0x00000000 force_coherent_uma_requested=0 forced_direct_upload=0 direct_enabled=0",
+        "d3d11on12 pool telemetry: pool=upload retained_bytes=0 peak_retained_bytes=34603008 pending_bytes=0 completed_bytes=0 allocations=180 reuses=60 trims=180 soft_limit_bytes=33554432 burst_limit_bytes=134217728 grace_ms=0 effective_limit_bytes=33554432 burst_active=0",
+        "d3d11on12 pool telemetry: pool=readback retained_bytes=0 peak_retained_bytes=4325376 pending_bytes=0 completed_bytes=0 allocations=2 reuses=0 trims=2 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0",
+        "d3d11on12 pool telemetry: pool=decoder retained_bytes=0 peak_retained_bytes=0 pending_bytes=0 completed_bytes=0 allocations=0 reuses=0 trims=0 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0"
+      ],
+      "mean_ms": 2.0287916666666668,
+      "min_ms": 0.812,
+      "max_ms": 21.973,
+      "upload_median_ms": 23.375,
+      "upload_p95_ms": 39.707,
+      "upload_mean_ms": 27.366,
+      "pool_stats": {
+        "upload": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 34603008,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 180,
+          "reuses": 60,
+          "trims": 180
+        },
+        "readback": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 4325376,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 2,
+          "reuses": 0,
+          "trims": 2
+        },
+        "decoder": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 0,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 0,
+          "reuses": 0,
+          "trims": 0
+        }
+      }
+    },
+    {
+      "trial": 2,
+      "mode": "direct",
+      "exit_code": 0,
+      "log": "2-direct.log",
+      "transfer_frames": 192,
+      "median_ms": 0.918,
+      "p95_ms": 7.593,
+      "memory_telemetry": [
+        "d3d11on12 memory telemetry: profile=balanced reason=explicit-balanced physical_bytes=8589930496 pool_counters_available=1 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0 reported_uma=0 reported_coherent_uma=0 architecture_hr=0x00000000 force_coherent_uma_requested=0 forced_direct_upload=0 direct_enabled=0",
+        "d3d11on12 pool telemetry: pool=upload retained_bytes=0 peak_retained_bytes=34603008 pending_bytes=0 completed_bytes=0 allocations=180 reuses=60 trims=180 soft_limit_bytes=33554432 burst_limit_bytes=134217728 grace_ms=0 effective_limit_bytes=33554432 burst_active=0",
+        "d3d11on12 pool telemetry: pool=readback retained_bytes=0 peak_retained_bytes=4325376 pending_bytes=0 completed_bytes=0 allocations=2 reuses=0 trims=2 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0",
+        "d3d11on12 pool telemetry: pool=decoder retained_bytes=0 peak_retained_bytes=0 pending_bytes=0 completed_bytes=0 allocations=0 reuses=0 trims=0 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0"
+      ],
+      "mean_ms": 1.6011197916666666,
+      "min_ms": 0.791,
+      "max_ms": 22.43,
+      "upload_median_ms": 23.486,
+      "upload_p95_ms": 24.868,
+      "upload_mean_ms": 23.172,
+      "pool_stats": {
+        "upload": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 34603008,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 180,
+          "reuses": 60,
+          "trims": 180
+        },
+        "readback": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 4325376,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 2,
+          "reuses": 0,
+          "trims": 2
+        },
+        "decoder": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 0,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 0,
+          "reuses": 0,
+          "trims": 0
+        }
+      }
+    },
+    {
+      "trial": 2,
+      "mode": "legacy",
+      "exit_code": 0,
+      "log": "2-legacy.log",
+      "transfer_frames": 192,
+      "median_ms": 0.957,
+      "p95_ms": 4.601,
+      "memory_telemetry": [
+        "d3d11on12 memory telemetry: profile=legacy reason=explicit-legacy physical_bytes=8589930496 pool_counters_available=0 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0 reported_uma=0 reported_coherent_uma=0 architecture_hr=0x00000000 force_coherent_uma_requested=0 forced_direct_upload=0 direct_enabled=0"
+      ],
+      "mean_ms": 1.4775677083333334,
+      "min_ms": 0.854,
+      "max_ms": 14.494,
+      "upload_median_ms": 7.525499999999999,
+      "upload_p95_ms": 12.463,
+      "upload_mean_ms": 8.489749999999999
+    },
+    {
+      "trial": 2,
+      "mode": "balanced",
+      "exit_code": 0,
+      "log": "2-balanced.log",
+      "transfer_frames": 192,
+      "median_ms": 1.112,
+      "p95_ms": 8.763,
+      "memory_telemetry": [
+        "d3d11on12 memory telemetry: profile=balanced reason=explicit-balanced physical_bytes=8589930496 pool_counters_available=1 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0 reported_uma=0 reported_coherent_uma=0 architecture_hr=0x00000000 force_coherent_uma_requested=0 forced_direct_upload=0 direct_enabled=0",
+        "d3d11on12 pool telemetry: pool=upload retained_bytes=0 peak_retained_bytes=34603008 pending_bytes=0 completed_bytes=0 allocations=180 reuses=60 trims=180 soft_limit_bytes=33554432 burst_limit_bytes=134217728 grace_ms=0 effective_limit_bytes=33554432 burst_active=0",
+        "d3d11on12 pool telemetry: pool=readback retained_bytes=0 peak_retained_bytes=4325376 pending_bytes=0 completed_bytes=0 allocations=2 reuses=0 trims=2 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0",
+        "d3d11on12 pool telemetry: pool=decoder retained_bytes=0 peak_retained_bytes=0 pending_bytes=0 completed_bytes=0 allocations=0 reuses=0 trims=0 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0"
+      ],
+      "mean_ms": 2.0624010416666665,
+      "min_ms": 0.78,
+      "max_ms": 22.65,
+      "upload_median_ms": 22.4195,
+      "upload_p95_ms": 35.505,
+      "upload_mean_ms": 25.20775,
+      "pool_stats": {
+        "upload": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 34603008,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 180,
+          "reuses": 60,
+          "trims": 180
+        },
+        "readback": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 4325376,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 2,
+          "reuses": 0,
+          "trims": 2
+        },
+        "decoder": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 0,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 0,
+          "reuses": 0,
+          "trims": 0
+        }
+      }
+    },
+    {
+      "trial": 3,
+      "mode": "direct",
+      "exit_code": 0,
+      "log": "3-direct.log",
+      "transfer_frames": 192,
+      "median_ms": 0.937,
+      "p95_ms": 10.268,
+      "memory_telemetry": [
+        "d3d11on12 memory telemetry: profile=balanced reason=explicit-balanced physical_bytes=8589930496 pool_counters_available=1 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0 reported_uma=0 reported_coherent_uma=0 architecture_hr=0x00000000 force_coherent_uma_requested=0 forced_direct_upload=0 direct_enabled=0",
+        "d3d11on12 pool telemetry: pool=upload retained_bytes=0 peak_retained_bytes=34603008 pending_bytes=0 completed_bytes=0 allocations=180 reuses=60 trims=180 soft_limit_bytes=33554432 burst_limit_bytes=134217728 grace_ms=0 effective_limit_bytes=33554432 burst_active=0",
+        "d3d11on12 pool telemetry: pool=readback retained_bytes=0 peak_retained_bytes=4325376 pending_bytes=0 completed_bytes=0 allocations=2 reuses=0 trims=2 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0",
+        "d3d11on12 pool telemetry: pool=decoder retained_bytes=0 peak_retained_bytes=0 pending_bytes=0 completed_bytes=0 allocations=0 reuses=0 trims=0 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0"
+      ],
+      "mean_ms": 1.6606197916666667,
+      "min_ms": 0.814,
+      "max_ms": 16.128,
+      "upload_median_ms": 23.1065,
+      "upload_p95_ms": 23.872,
+      "upload_mean_ms": 22.830750000000002,
+      "pool_stats": {
+        "upload": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 34603008,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 180,
+          "reuses": 60,
+          "trims": 180
+        },
+        "readback": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 4325376,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 2,
+          "reuses": 0,
+          "trims": 2
+        },
+        "decoder": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 0,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 0,
+          "reuses": 0,
+          "trims": 0
+        }
+      }
+    },
+    {
+      "trial": 3,
+      "mode": "balanced",
+      "exit_code": 0,
+      "log": "3-balanced.log",
+      "transfer_frames": 192,
+      "median_ms": 0.942,
+      "p95_ms": 10.066,
+      "memory_telemetry": [
+        "d3d11on12 memory telemetry: profile=balanced reason=explicit-balanced physical_bytes=8589930496 pool_counters_available=1 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0 reported_uma=0 reported_coherent_uma=0 architecture_hr=0x00000000 force_coherent_uma_requested=0 forced_direct_upload=0 direct_enabled=0",
+        "d3d11on12 pool telemetry: pool=upload retained_bytes=0 peak_retained_bytes=34603008 pending_bytes=0 completed_bytes=0 allocations=180 reuses=60 trims=180 soft_limit_bytes=33554432 burst_limit_bytes=134217728 grace_ms=0 effective_limit_bytes=33554432 burst_active=0",
+        "d3d11on12 pool telemetry: pool=readback retained_bytes=0 peak_retained_bytes=4325376 pending_bytes=0 completed_bytes=0 allocations=2 reuses=0 trims=2 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0",
+        "d3d11on12 pool telemetry: pool=decoder retained_bytes=0 peak_retained_bytes=0 pending_bytes=0 completed_bytes=0 allocations=0 reuses=0 trims=0 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0"
+      ],
+      "mean_ms": 1.6257447916666667,
+      "min_ms": 0.763,
+      "max_ms": 13.611,
+      "upload_median_ms": 23.131,
+      "upload_p95_ms": 24.577,
+      "upload_mean_ms": 23.153750000000002,
+      "pool_stats": {
+        "upload": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 34603008,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 180,
+          "reuses": 60,
+          "trims": 180
+        },
+        "readback": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 4325376,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 2,
+          "reuses": 0,
+          "trims": 2
+        },
+        "decoder": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 0,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 0,
+          "reuses": 0,
+          "trims": 0
+        }
+      }
+    },
+    {
+      "trial": 3,
+      "mode": "legacy",
+      "exit_code": 0,
+      "log": "3-legacy.log",
+      "transfer_frames": 192,
+      "median_ms": 0.9455,
+      "p95_ms": 8.011,
+      "memory_telemetry": [
+        "d3d11on12 memory telemetry: profile=legacy reason=explicit-legacy physical_bytes=8589930496 pool_counters_available=0 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0 reported_uma=0 reported_coherent_uma=0 architecture_hr=0x00000000 force_coherent_uma_requested=0 forced_direct_upload=0 direct_enabled=0"
+      ],
+      "mean_ms": 1.5778958333333333,
+      "min_ms": 0.792,
+      "max_ms": 12.631,
+      "upload_median_ms": 7.144,
+      "upload_p95_ms": 12.094,
+      "upload_mean_ms": 8.24075
+    },
+    {
+      "trial": 4,
+      "mode": "balanced",
+      "exit_code": 0,
+      "log": "4-balanced.log",
+      "transfer_frames": 192,
+      "median_ms": 1.204,
+      "p95_ms": 10.052,
+      "memory_telemetry": [
+        "d3d11on12 memory telemetry: profile=balanced reason=explicit-balanced physical_bytes=8589930496 pool_counters_available=1 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0 reported_uma=0 reported_coherent_uma=0 architecture_hr=0x00000000 force_coherent_uma_requested=0 forced_direct_upload=0 direct_enabled=0",
+        "d3d11on12 pool telemetry: pool=upload retained_bytes=0 peak_retained_bytes=34603008 pending_bytes=0 completed_bytes=0 allocations=180 reuses=60 trims=180 soft_limit_bytes=33554432 burst_limit_bytes=134217728 grace_ms=0 effective_limit_bytes=33554432 burst_active=0",
+        "d3d11on12 pool telemetry: pool=readback retained_bytes=0 peak_retained_bytes=4325376 pending_bytes=0 completed_bytes=0 allocations=2 reuses=0 trims=2 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0",
+        "d3d11on12 pool telemetry: pool=decoder retained_bytes=0 peak_retained_bytes=0 pending_bytes=0 completed_bytes=0 allocations=0 reuses=0 trims=0 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0"
+      ],
+      "mean_ms": 2.226223958333333,
+      "min_ms": 0.901,
+      "max_ms": 24.675,
+      "upload_median_ms": 27.1445,
+      "upload_p95_ms": 41.514,
+      "upload_mean_ms": 30.0435,
+      "pool_stats": {
+        "upload": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 34603008,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 180,
+          "reuses": 60,
+          "trims": 180
+        },
+        "readback": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 4325376,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 2,
+          "reuses": 0,
+          "trims": 2
+        },
+        "decoder": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 0,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 0,
+          "reuses": 0,
+          "trims": 0
+        }
+      }
+    },
+    {
+      "trial": 4,
+      "mode": "direct",
+      "exit_code": 0,
+      "log": "4-direct.log",
+      "transfer_frames": 192,
+      "median_ms": 0.921,
+      "p95_ms": 7.973,
+      "memory_telemetry": [
+        "d3d11on12 memory telemetry: profile=balanced reason=explicit-balanced physical_bytes=8589930496 pool_counters_available=1 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0 reported_uma=0 reported_coherent_uma=0 architecture_hr=0x00000000 force_coherent_uma_requested=0 forced_direct_upload=0 direct_enabled=0",
+        "d3d11on12 pool telemetry: pool=upload retained_bytes=0 peak_retained_bytes=34603008 pending_bytes=0 completed_bytes=0 allocations=180 reuses=60 trims=180 soft_limit_bytes=33554432 burst_limit_bytes=134217728 grace_ms=0 effective_limit_bytes=33554432 burst_active=0",
+        "d3d11on12 pool telemetry: pool=readback retained_bytes=0 peak_retained_bytes=4325376 pending_bytes=0 completed_bytes=0 allocations=2 reuses=0 trims=2 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0",
+        "d3d11on12 pool telemetry: pool=decoder retained_bytes=0 peak_retained_bytes=0 pending_bytes=0 completed_bytes=0 allocations=0 reuses=0 trims=0 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0"
+      ],
+      "mean_ms": 1.5544635416666666,
+      "min_ms": 0.726,
+      "max_ms": 13.781,
+      "upload_median_ms": 23.997,
+      "upload_p95_ms": 24.616,
+      "upload_mean_ms": 23.56575,
+      "pool_stats": {
+        "upload": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 34603008,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 180,
+          "reuses": 60,
+          "trims": 180
+        },
+        "readback": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 4325376,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 2,
+          "reuses": 0,
+          "trims": 2
+        },
+        "decoder": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 0,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 0,
+          "reuses": 0,
+          "trims": 0
+        }
+      }
+    },
+    {
+      "trial": 4,
+      "mode": "legacy",
+      "exit_code": 0,
+      "log": "4-legacy.log",
+      "transfer_frames": 192,
+      "median_ms": 0.9265000000000001,
+      "p95_ms": 6.512,
+      "memory_telemetry": [
+        "d3d11on12 memory telemetry: profile=legacy reason=explicit-legacy physical_bytes=8589930496 pool_counters_available=0 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0 reported_uma=0 reported_coherent_uma=0 architecture_hr=0x00000000 force_coherent_uma_requested=0 forced_direct_upload=0 direct_enabled=0"
+      ],
+      "mean_ms": 1.573640625,
+      "min_ms": 0.803,
+      "max_ms": 22.101,
+      "upload_median_ms": 7.8149999999999995,
+      "upload_p95_ms": 12.986,
+      "upload_mean_ms": 8.84225
+    },
+    {
+      "trial": 5,
+      "mode": "balanced",
+      "exit_code": 0,
+      "log": "5-balanced.log",
+      "transfer_frames": 192,
+      "median_ms": 0.9355,
+      "p95_ms": 9.036,
+      "memory_telemetry": [
+        "d3d11on12 memory telemetry: profile=balanced reason=explicit-balanced physical_bytes=8589930496 pool_counters_available=1 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0 reported_uma=0 reported_coherent_uma=0 architecture_hr=0x00000000 force_coherent_uma_requested=0 forced_direct_upload=0 direct_enabled=0",
+        "d3d11on12 pool telemetry: pool=upload retained_bytes=0 peak_retained_bytes=34603008 pending_bytes=0 completed_bytes=0 allocations=180 reuses=60 trims=180 soft_limit_bytes=33554432 burst_limit_bytes=134217728 grace_ms=0 effective_limit_bytes=33554432 burst_active=0",
+        "d3d11on12 pool telemetry: pool=readback retained_bytes=0 peak_retained_bytes=4325376 pending_bytes=0 completed_bytes=0 allocations=2 reuses=0 trims=2 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0",
+        "d3d11on12 pool telemetry: pool=decoder retained_bytes=0 peak_retained_bytes=0 pending_bytes=0 completed_bytes=0 allocations=0 reuses=0 trims=0 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0"
+      ],
+      "mean_ms": 1.7267135416666666,
+      "min_ms": 0.807,
+      "max_ms": 15.573,
+      "upload_median_ms": 23.5845,
+      "upload_p95_ms": 24.844,
+      "upload_mean_ms": 23.54525,
+      "pool_stats": {
+        "upload": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 34603008,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 180,
+          "reuses": 60,
+          "trims": 180
+        },
+        "readback": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 4325376,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 2,
+          "reuses": 0,
+          "trims": 2
+        },
+        "decoder": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 0,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 0,
+          "reuses": 0,
+          "trims": 0
+        }
+      }
+    },
+    {
+      "trial": 5,
+      "mode": "legacy",
+      "exit_code": 0,
+      "log": "5-legacy.log",
+      "transfer_frames": 192,
+      "median_ms": 1.0630000000000002,
+      "p95_ms": 11.63,
+      "memory_telemetry": [
+        "d3d11on12 memory telemetry: profile=legacy reason=explicit-legacy physical_bytes=8589930496 pool_counters_available=0 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0 reported_uma=0 reported_coherent_uma=0 architecture_hr=0x00000000 force_coherent_uma_requested=0 forced_direct_upload=0 direct_enabled=0"
+      ],
+      "mean_ms": 2.1309375,
+      "min_ms": 0.797,
+      "max_ms": 25.148,
+      "upload_median_ms": 7.364,
+      "upload_p95_ms": 14.157,
+      "upload_mean_ms": 8.76975
+    },
+    {
+      "trial": 5,
+      "mode": "direct",
+      "exit_code": 0,
+      "log": "5-direct.log",
+      "transfer_frames": 192,
+      "median_ms": 1.0455,
+      "p95_ms": 9.659,
+      "memory_telemetry": [
+        "d3d11on12 memory telemetry: profile=balanced reason=explicit-balanced physical_bytes=8589930496 pool_counters_available=1 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0 reported_uma=0 reported_coherent_uma=0 architecture_hr=0x00000000 force_coherent_uma_requested=0 forced_direct_upload=0 direct_enabled=0",
+        "d3d11on12 pool telemetry: pool=upload retained_bytes=0 peak_retained_bytes=34603008 pending_bytes=0 completed_bytes=0 allocations=180 reuses=60 trims=180 soft_limit_bytes=33554432 burst_limit_bytes=134217728 grace_ms=0 effective_limit_bytes=33554432 burst_active=0",
+        "d3d11on12 pool telemetry: pool=readback retained_bytes=0 peak_retained_bytes=4325376 pending_bytes=0 completed_bytes=0 allocations=2 reuses=0 trims=2 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0",
+        "d3d11on12 pool telemetry: pool=decoder retained_bytes=0 peak_retained_bytes=0 pending_bytes=0 completed_bytes=0 allocations=0 reuses=0 trims=0 soft_limit_bytes=16777216 burst_limit_bytes=16777216 grace_ms=0 effective_limit_bytes=16777216 burst_active=0"
+      ],
+      "mean_ms": 2.0463125,
+      "min_ms": 0.759,
+      "max_ms": 27.464,
+      "upload_median_ms": 23.363500000000002,
+      "upload_p95_ms": 34.192,
+      "upload_mean_ms": 25.892,
+      "pool_stats": {
+        "upload": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 34603008,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 180,
+          "reuses": 60,
+          "trims": 180
+        },
+        "readback": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 4325376,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 2,
+          "reuses": 0,
+          "trims": 2
+        },
+        "decoder": {
+          "retained_bytes": 0,
+          "peak_retained_bytes": 0,
+          "pending_bytes": 0,
+          "completed_bytes": 0,
+          "allocations": 0,
+          "reuses": 0,
+          "trims": 0
+        }
+      }
+    }
+  ],
+  "pool_configuration": {
+    "upload_soft_mib": 32,
+    "upload_burst_mib": 128,
+    "upload_grace_ms": 0,
+    "readback_mib": 16,
+    "decoder_mib": 16,
+    "force_coherent_uma": 0
+  }
+}

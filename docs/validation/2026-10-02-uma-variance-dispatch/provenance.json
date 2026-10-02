@@ -1,0 +1,33 @@
+{
+  "artifact_revision": "a0d9776",
+  "runner_sha256": "de3507caeb512f0b2f4224ac2ae5dc890aeb8be212933f6cad32423f445f29e3",
+  "runner_state": "Includes existing uncommitted shared-session/prewarm/telemetry changes; Agent B did not modify them.",
+  "artifacts": {
+    "dxilconv.dll": "9683262e82c9ef7e11453ca19bafa2c01f58ca605f1ba1e451a9abd8e5e2fe63",
+    "d3d11on12host.dll": "b7c8fec1cc77b172876adde5c6dbb1e7cee83fde35c99b90eed700407fe0e949",
+    "d3d11on12.dll": "8048eab0312f5cf562f0fbd99be88113e7267e40037541690211224da37757a0",
+    "d3d11_e2e_uma.exe": "822f980a7ba4db594b8d55bbb24366b00ba3e95ade5ffaa64fa55cd9fa8360ba",
+    "d3d11on12core.dll": "d40ea61789d3f2ddc5a2857c17d23e429400ab202ea8aa321fb619a6ce61cbaf",
+    "peak_on12_probe.exe": "fc6fc9e0d5cc8970029dd0844b739e2f765d1e83b29b276b3227ee2c34848370",
+    "d3d11.dll": "92eac0f69084d5c53256dcc6e375d9fba52b68b2a13f75293bece9daa0f2bee7",
+    "d3d11_e2e_triangle.exe": "04d7a1207fe1d3ad1d0a706ff9a8d6c0d3dcc4312048a24dc94dc278e44373de",
+    "d3d11_e2e_wrapped.exe": "f91066150839b97cedc0a55305a1a490385a3e5d3aa207fd5b0d6071cfe2a9cb"
+  },
+  "flags": {
+    "ForceCoherentUMA": "0",
+    "D3DM_WINE_UNIX_CALL": "1",
+    "D3DM_MTL4": "1",
+    "CX_ACTIVE_GRAPHICS_BACKEND": "d3dmetal",
+    "WINEDEBUG": "-all"
+  },
+  "options": {
+    "transfer_only": true,
+    "trials": 6,
+    "prewarm_runs": 1,
+    "wineserver_session": "shared",
+    "timeout": 120
+  },
+  "gpu_concurrency": "No A/C/PEAK GPU work or heavy builds during measured window; isolated prefix stopped afterwards.",
+  "prewarm_validation": "Both logs contain final GPU-copy/readback success. Runner does not enforce successful prewarm itself.",
+  "msync_validation": "One MSYNC bootstrap/up-and-running marker in prewarm log with shared server; none in standard logs."
+}

@@ -1,0 +1,33 @@
+{
+  "d3d11.dll": {
+    "present": true,
+    "sha256": "b4175651af4d3e8699bdcc57851c6694a6038f914a826cbc91727d87482ff576",
+    "matches_e2b_artifact": true
+  },
+  "d3d11on12core.dll": {
+    "present": true,
+    "sha256": "544c15f13b3998080cd896d06a0152030b87ee6596e59a328536fda616660301",
+    "matches_e2b_artifact": true
+  },
+  "d3d11on12host.dll": {
+    "present": true,
+    "sha256": "be2876646cac13be67f4017b6c5bd4c1667024158a7b98f5efb00e1371468c66",
+    "matches_e2b_artifact": true
+  },
+  "d3d11on12.dll": {
+    "present": true,
+    "sha256": "dddbf50840ac382d8473aca99b05986d655c827baa15e974d76b57f55654b58d",
+    "matches_e2b_artifact": true
+  },
+  "dxilconv.dll": {
+    "present": true,
+    "sha256": "9683262e82c9ef7e11453ca19bafa2c01f58ca605f1ba1e451a9abd8e5e2fe63",
+    "matches_e2b_artifact": true
+  },
+  "installed_builtin_host": {
+    "sha256": "be2876646cac13be67f4017b6c5bd4c1667024158a7b98f5efb00e1371468c66",
+    "matches_staged_host": true
+  },
+  "marker_present": true,
+  "fake_steam_appid_present": false
+}

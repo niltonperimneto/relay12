@@ -1,0 +1,35 @@
+{
+  "artifacts": {
+    "d3d11.dll": "d38e2c02b6da594997afb7b4babf38b82015fdb4e2b0a404d64d36de3a460ea6",
+    "d3d11on12.dll": "079c6c8b22cf9180841bc09ea03788773acfd1477733e9a8b76a75ba0453c465",
+    "d3d11on12core.dll": "710f35c97c94f3c72a561f9e86a55d939e7143e78f8c7e3f5fdf3cccf2c9ba71",
+    "d3d11on12host.dll": "73457f16dcd370e40caa9f313c7305ccd8a3f970f8dd47e3f1b56a74d15ad02f",
+    "d3d11_e2e_uma.exe": "5b025d3f7fd564b1e959772e69f3cade36c9ee392241f1501ebacb2191a423fa",
+    "dxilconv.dll": "9683262e82c9ef7e11453ca19bafa2c01f58ca605f1ba1e451a9abd8e5e2fe63"
+  },
+  "installed_host_sha256": "73457f16dcd370e40caa9f313c7305ccd8a3f970f8dd47e3f1b56a74d15ad02f",
+  "wine64_sha256": "f87f100a7309ad15631eba6f1498fb6440936b248b18fe85ac5726f641304139",
+  "libd3dshared_sha256": "1582e7ceef7f495df4bebf7f06a49aef130233f8a2e9a8971e35affafeb76ec0",
+  "revision": "971b374c2409ba00b90d637283bc14cb04674b21",
+  "ci_run": "https://github.com/niltonperimneto/relay12/actions/runs/36960774365",
+  "ci_lanes": "semaphore and ring passed; measured semaphore artifact",
+  "runner_sha256": "de3507caeb512f0b2f4224ac2ae5dc890aeb8be212933f6cad32423f445f29e3",
+  "runner_state": "Existing uncommitted changes preserved; Agent B made no runner/test edits.",
+  "gpu_window": "Exclusive, no concurrent PEAK/GPU work/heavy builds; all prefixes stopped after runs.",
+  "hardware": "Apple A18 Pro / 8 GiB / macOS 27.2",
+  "runtime": "WineCX GPTK4.7.54 / D3DMetal4.0b2",
+  "trials_per_policy_sync_config": 6,
+  "measured_frames_per_policy_sync_config": 1152,
+  "force_coherent_uma": 0,
+  "prewarm_runs": 1,
+  "wineserver_session": "shared",
+  "transfer_only": true,
+  "timeout_seconds": 120,
+  "runtime_flags": {
+    "D3DM_WINE_UNIX_CALL": "1",
+    "D3DM_MTL4": "1",
+    "CX_ACTIVE_GRAPHICS_BACKEND": "d3dmetal",
+    "WINEDEBUG": "-all"
+  },
+  "prewarm_result": "Four prewarm final success markers manually validated."
+}

@@ -1,0 +1,22 @@
+[
+  {
+    "timestamp_local": "2026-10-01 00:02:01",
+    "source": "connection_log.txt",
+    "event": "Steam logon response OK"
+  },
+  {
+    "timestamp_local": "2026-10-01 00:30:37",
+    "source": "connection_log.txt",
+    "event": "Steam logon response OK"
+  },
+  {
+    "timestamp_local": "2026-10-01 00:02:14",
+    "source": "gameprocess_log.txt",
+    "event": "PEAK process event"
+  },
+  {
+    "timestamp_local": "2026-10-01 21:56:59",
+    "source": "bootstrap_log.txt",
+    "event": "Steam bootstrap PEAK app launch request"
+  }
+]
