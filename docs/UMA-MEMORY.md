@@ -14,14 +14,39 @@ Missing UMA/memory information and invalid settings select legacy. Explicit
 balanced is available for controlled tests on other devices. Selection is per
 device; it does not depend on model names or an OS-version string.
 
-Balanced upload/readback/decoder caches retain at most 32/16/16 MiB of completed,
-reusable allocations. Accounting uses D3D12 resource allocation sizes, not source
-pixel bytes. Unfinished allocations remain owned until their fence completes,
-even when they exceed the cache limit. Existing retirement and retrieval paths
-trim completed entries, oldest return first, without an added GPU wait. Pool
-metadata allocation failure transfers ownership to fence-aware deferred deletion.
-Legacy uses the original pool implementation. No submission threshold changes
-are part of this policy.
+Balanced completed-upload caches have a 32 MiB soft limit and a 128 MiB
+burst limit. Successful allocation, return, or reuse extends a 2,000 ms grace
+period. Once grace expires, the next pool operation reclaims completed entries
+to the soft limit; there is no timer thread. Readback and decoder caches retain
+at most 16 MiB each. Accounting uses D3D12 resource allocation sizes, not source
+pixel bytes. This admits the measured 99 MiB upload burst without repeatedly
+creating staging buffers, at the cost of temporarily retaining more memory.
+
+Settings are read per device for explicit `balanced`:
+
+| Environment variable | Default | Maximum |
+| --- | ---: | ---: |
+| `D3D11ON12_COMPAT_UploadCacheMiB` | 32 | 1024 |
+| `D3D11ON12_COMPAT_UploadBurstCacheMiB` | 128 | 1024 |
+| `D3D11ON12_COMPAT_UploadBurstGraceMs` | 2000 | 60000 |
+| `D3D11ON12_COMPAT_ReadbackCacheMiB` | 16 | 1024 |
+| `D3D11ON12_COMPAT_DecoderCacheMiB` | 16 | 1024 |
+
+Only decimal digits are accepted. Invalid or oversized values retain the default
+and produce a diagnostic. Zero is allowed: zero grace restores the strict soft
+cap; zero soft and burst limits disable completed retention. Burst limits below
+the soft limit normalize to the soft limit. Telemetry records the actual limits,
+grace and effective cap alongside allocation/reuse counters.
+
+Unfinished allocations remain owned until their fence completes, even when they
+exceed either limit. Existing retirement and retrieval paths trim completed
+entries, oldest return first, without an added GPU wait. Allocation pressure
+cancels burst grace and reclaims completed excess to the soft limit before the
+existing OOM fallback. Teardown releases completed entries; neither path releases
+pending GPU references. Metadata allocation failure transfers ownership to
+fence-aware deferred deletion. Legacy uses the original pool implementation. No
+submission threshold changes or automatic profile promotion are part of this
+policy.
 
 `D3D11ON12_COMPAT_UMADirectInitialUpload=1` independently enables an experimental
 initial-upload path on cache-coherent UMA. It accepts only owned, single-mip,
