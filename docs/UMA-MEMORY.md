@@ -124,3 +124,8 @@ record passing RGBA8/BGRA8 sampling and wrapped-resource GPU checks under standa
 synchronization and MSYNC. Direct upload remains capability-gated. The final PEAK
 retest with matching host artifacts awaits Steam sign-in; gameplay performance
 and physical-memory savings remain unqualified.
+
+[2026-10-02 transfer timing results](validation/2026-10-02-uma-performance/README.md)
+compare five trials per policy under both sync modes. They show no consistent
+gain, and the previous build cannot complete the same workload, so they do not
+establish a before/after performance change.
