@@ -65,7 +65,8 @@ resource calls and qualifies neither wrapping nor the updated frontend.
 The final matched-runtime PEAK launch stopped before game startup because
 Steam was signed out; it produced no Player.log. A visible Steam client remains
 available in the isolated test copy for sign-in. Authentication is required
-before repeating that launch through Steam.
+before repeating that launch through Steam. A subsequent launch request to the
+visible client timed out after 120 seconds without a Player.log or PEAK process.
 
 Remaining qualification: retest PEAK with the matching runtime after sign-in,
 exercise its wrapped path if actually used, then run matched gameplay and
