@@ -1,0 +1,99 @@
+{
+  "artifact_revision": "971b374c2409ba00b90d637283bc14cb04674b21",
+  "sync": "msync",
+  "explicit_profile": "balanced",
+  "host_matches_staged_artifact": true,
+  "marked_test_prefix": true,
+  "steam_appid_file_present": false,
+  "staged_sha256": {
+    "d3d11.dll": "d38e2c02b6da594997afb7b4babf38b82015fdb4e2b0a404d64d36de3a460ea6",
+    "d3d11on12.dll": "079c6c8b22cf9180841bc09ea03788773acfd1477733e9a8b76a75ba0453c465",
+    "d3d11on12core.dll": "710f35c97c94f3c72a561f9e86a55d939e7143e78f8c7e3f5fdf3cccf2c9ba71",
+    "d3d11on12host.dll": "73457f16dcd370e40caa9f313c7305ccd8a3f970f8dd47e3f1b56a74d15ad02f",
+    "dxilconv.dll": "9683262e82c9ef7e11453ca19bafa2c01f58ca605f1ba1e451a9abd8e5e2fe63"
+  },
+  "api_probe_states": [
+    {
+      "phase": "client_absent",
+      "steam_running": false,
+      "init_flat_result": 2
+    },
+    {
+      "phase": "client_starting",
+      "steam_running": true,
+      "init_flat_result": 1,
+      "safe_error": "ConnectToGlobalUser failed"
+    },
+    {
+      "phase": "client_ready",
+      "steam_running": true,
+      "init_flat_result": 0
+    }
+  ],
+  "fresh_login_ok": true,
+  "steam_launch_exit": 0,
+  "observed_native_pid": 29675,
+  "windows_pid": 1516,
+  "visible_game_window": true,
+  "window_bounds": {
+    "x": 4,
+    "y": 30,
+    "width": 1408,
+    "height": 757
+  },
+  "visual_state": "rendering main menu",
+  "d3d12_selected": true,
+  "steam_init_failure_in_fresh_game_log": false,
+  "device_removal": false,
+  "unhandled_crash": false,
+  "relay12_stages": [
+    {
+      "stage": "validate caller device and queue",
+      "hresult": "0x00000000",
+      "succeeded": true
+    },
+    {
+      "stage": "load runtime host",
+      "hresult": "0x00000000",
+      "succeeded": true
+    },
+    {
+      "stage": "enter runtime host creation",
+      "hresult": "0x00000000",
+      "succeeded": true
+    },
+    {
+      "stage": "enter driver OpenAdapter",
+      "hresult": "0x00000000",
+      "succeeded": true
+    },
+    {
+      "stage": "leave driver OpenAdapter",
+      "hresult": "0x00000000",
+      "succeeded": true
+    },
+    {
+      "stage": "enter driver CreateDevice",
+      "hresult": "0x00000000",
+      "succeeded": true
+    },
+    {
+      "stage": "leave driver CreateDevice",
+      "hresult": "0x087a0004",
+      "succeeded": true
+    },
+    {
+      "stage": "leave runtime host creation",
+      "hresult": "0x00000000",
+      "succeeded": true
+    }
+  ],
+  "wrapped_stages": 0,
+  "unsupported_ops": [],
+  "metal_hud_enabled": false,
+  "gameplay_qualified": false,
+  "fps_comparison_qualified": false,
+  "input_automation": "Wine foreground checks rejected input; native targeted click did not leave menu; HID click withheld because foreground was not PEAK",
+  "existing_test_steam_and_peak_left_running": true,
+  "private_logs_published": false
+}
