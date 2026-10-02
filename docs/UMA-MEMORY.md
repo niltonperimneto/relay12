@@ -37,6 +37,59 @@ off by default because CPU visibility can reduce later GPU sampling efficiency.
 The baseline already uses GetCustomHeapProperties for upload/readback resources;
 a CUSTOM heap alone is not evidence of fewer copies.
 
+## Experimental coherency admission override
+
+`D3D11ON12_COMPAT_ForceCoherentUMA=1` permits a controlled test of the direct
+initial-upload path when the backend's architecture report is conservative.
+It requires `D3D11ON12_COMPAT_UMADirectInitialUpload=1` as well, a successful
+ARCHITECTURE1 query, and a single-node device using node mask 1. Only the exact
+value `1` enables either flag. Unsetting the force flag restores capability
+gating on the next device creation.
+
+The override bypasses only admission to the existing constrained RGBA8/BGRA8
+initial-upload candidate. It preserves `m_architecture` and all application
+CheckFeatureSupport results. In particular it does not force Resource.cpp's
+staging Map, rename, or copy decisions, alter automatic memory-profile selection,
+or remove fences. CUSTOM/WRITE_BACK/L0 creation, Map and WriteToSubresource must
+still succeed. Unsupported operations fall back; allocation failures and device
+loss retain their error handling. A startup diagnostic names the override, and
+teardown telemetry records the raw architecture flags, query HRESULT, force
+request, forced admission and direct attempts/successes separately.
+
+For an isolated runtime containing the matching patched host and driver:
+
+```sh
+D3D11ON12_COMPAT_ForceCoherentUMA=1 \
+  python3 scripts/run-uma-memory.py --wine /path/to/Wine/bin/wine64 \
+  --artifacts /path/to/first-frame --prefix /path/to/test-prefix \
+  --output /path/to/forced-results --sync msync --trials 5
+```
+
+The runner supplies the direct flag only for its direct policy. Legacy and
+balanced therefore also check that the force flag alone does not activate direct
+uploads. Require valid shader pixels and nonzero direct-success telemetry to
+qualify this experiment. Until that evidence is recorded, forced admission is
+not automatic coherency or performance qualification.
+
+The tested Wine D3D12 shim creates devices through `d3dmt.dll` and forwards
+ARCHITECTURE/ARCHITECTURE1 queries without modifying their results. The probe's
+`--capabilities-only --raw-backend` mode calls that backend export in a fresh
+process, avoiding the shim's device-vtable wrapper, and reports the module owning
+CheckFeatureSupport. `--uma-only --raw-backend` additionally validates custom
+texture heap properties and every GPU-copied byte. DXGI initialization still
+precedes device creation because the Wine bridge requires it; DXGI does not
+receive the architecture-output structures. The measured backend reports
+UMA=false as well as CacheCoherentUMA=false. This differs from a UMA=true,
+non-coherent report. D3DMetal's closed implementation does not reveal whether its
+false fields are deliberate emulation policy or a stub.
+
+Microsoft defines coherent UMA through driver-visible heap/cache behavior;
+Apple's shared Metal storage still requires CPU/GPU access ordering. Neither the
+physical unified memory nor successful raw custom-heap creation alone proves
+the direct On12 path is valid. References:
+[D3D12 ARCHITECTURE1](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ns-d3d12-d3d12_feature_data_architecture1),
+[Metal shared storage](https://developer.apple.com/documentation/metal/mtlstoragemode/shared).
+
 ## Validation
 
 `relay_memory_pool_test.cpp` checks profile selection, completed versus pending
