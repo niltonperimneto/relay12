@@ -52,7 +52,8 @@
   "peak_matched_runtime": {
     "started": false,
     "qualified": false,
-    "reason": "Steam signed out in the isolated runtime; no Player.log"
+    "reason": "Steam signed out in the isolated runtime; no Player.log",
+    "live_client_retry": "Steam -applaunch timed out after 120 seconds; no Player.log or PEAK process observed"
   },
   "performance_qualified": false,
   "scope": "Correctness and integration follow-up; not gameplay FPS or physical-memory savings"
