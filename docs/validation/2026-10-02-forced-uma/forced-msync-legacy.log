@@ -1,0 +1,19 @@
+msync: up and running.
+perf: UMA custom initialization format=28 width=257 height=9 source_pitch=1040 hr=0x00000000
+perf: UMA custom texture heap hr=0x00000000 type=4 page=3 pool=1
+perf: UMA GPU bytes format=28 readback_pitch=1280 active_bytes=9252 mismatches=0
+perf: UMA custom initialization format=87 width=257 height=9 source_pitch=1040 hr=0x00000000
+perf: UMA custom texture heap hr=0x00000000 type=4 page=3 pool=1
+perf: UMA GPU bytes format=87 readback_pitch=1280 active_bytes=9252 mismatches=0
+d3d11on12 experimental coherency override: requested=1 active=0 reported_uma=0 reported_coherent_uma=0 architecture_hr=0x00000000
+[upload] cycle=0 wall_ms=1.202 working_set_bytes=86056960 memory_available=1
+[frame] cycle=0 texture=0 wall_ms=36.944
+[frame] cycle=0 texture=1 wall_ms=14.019
+[sample] cycle=0 textures=2 wall_ms=54.718 working_set_bytes=88686592 memory_available=1
+[upload] cycle=1 wall_ms=0.199 working_set_bytes=88698880 memory_available=1
+[frame] cycle=1 texture=0 wall_ms=1.039
+[frame] cycle=1 texture=1 wall_ms=0.525
+[sample] cycle=1 textures=2 wall_ms=2.131 working_set_bytes=88702976 memory_available=1
+d3d11on12 memory telemetry: profile=legacy reason=explicit-legacy physical_bytes=8589930496 pool_counters_available=0 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0 reported_uma=0 reported_coherent_uma=0 architecture_hr=0x00000000 force_coherent_uma_requested=1 forced_direct_upload=0 direct_enabled=0
+d3d11on12core census (device destroyed): flushes=3 buffers=0 textures=0 peak_textures=5 rtvs=0 peak_rtvs=1 orphaned_textures=0 peak_orphaned_textures=0 srvs=0 peak_srvs=1
+[ ok ] UMA initialization, shader sampling and readback
