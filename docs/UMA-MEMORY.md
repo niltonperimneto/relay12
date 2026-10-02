@@ -123,6 +123,26 @@ MSYNC. The force-only, absent and malformed-value controls retain capability
 gating. Automatic profile promotion and gameplay/performance qualification remain
 disabled or pending; these results qualify the scoped experimental path only.
 
+## Burst-policy hardware result
+
+[2026-10-02 matched policy tests](validation/2026-10-02-uma-burst-policy/README.md)
+with the compiled `971b374` semaphore artifact measure balanced upload-burst
+medians of 5.845 ms with MSYNC and 6.623 ms with standard synchronization,
+compared with legacy 5.946/6.596 ms. Same-build zero-grace controls reproduce
+22.593/24.184 ms. All 72 measured runs and four prewarm runs pass byte-exact
+GPU checks. Balanced now uses 48 allocations and 192 reuses instead of
+180 allocations and 60 reuses. The temporary completed cache peaks near
+99 MiB; final retained/pending bytes are zero. These results meet the scoped
+approximately 8 ms upload target; they do not establish physical-memory savings,
+PEAK FPS, or automatic-profile qualification.
+
+The [PEAK direct startup trace](validation/2026-10-02-peak-direct-diagnostic/README.md)
+uses the earlier matching `e2b99d2` bundle. It reaches D3D12 initialization and
+reports `SteamAPI_Init failed` with repeated Steamworks warnings. No loader,
+unhandled-crash, device-removal or MSYNC failure marker appears. A native thread
+sample times out, so the exact main-thread wait remains unproven. Authenticated
+Steam launch and gameplay measurement remain pending.
+
 ## Validation
 
 `relay_memory_pool_test.cpp` checks profile selection, completed versus pending
