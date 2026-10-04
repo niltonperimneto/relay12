@@ -64,14 +64,16 @@ class Arguments(unittest.TestCase):
         self.assertEqual(env["RELAY12_TRACE_CREATION"], "1")
         self.assertEqual(env["RELAY12_EXPERIMENTAL_FRAME"], "1")
         self.assertEqual(env["MTL_HUD_LOG_ENABLED"], "1")
+        self.assertIn("d3d11=n,b;", env["WINEDLLOVERRIDES"])
         self.assertIn("d3d11on12core", env["WINEDLLOVERRIDES"])
-        self.assertEqual(env["WINEDEBUG"], "-all,warn+d3d11")
+        self.assertEqual(env["WINEDEBUG"], "-all,warn+d3d11,+relay,+d3d12")
 
     def test_inherited_winedebug_cannot_silence_the_inventory(self):
-        # CI exports WINEDEBUG=-all; the run must still carry warn+d3d11 last.
-        for inherited, expected in (("-all", "-all,warn+d3d11"),
-                                    ("+seh,-d3d11", "+seh,-d3d11,warn+d3d11"),
-                                    ("", "warn+d3d11")):
+        # CI exports WINEDEBUG=-all; the run must still carry diagnostics last.
+        for inherited, expected in (
+                ("-all", "-all,warn+d3d11,+relay,+d3d12"),
+                ("+seh,-d3d11", "+seh,-d3d11,warn+d3d11,+relay,+d3d12"),
+                ("", "warn+d3d11,+relay,+d3d12")):
             with self.subTest(inherited=inherited):
                 self.assertEqual(self.environment(WINEDEBUG=inherited)["WINEDEBUG"], expected)
 
