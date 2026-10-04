@@ -12,7 +12,7 @@ This document outlines the testing architecture and hardening strategies require
 ## 1. Structural Determinism: Multi-Source Golden Layouts
 Developers can easily misread documentation, miscount padding bytes, or mix up legacy fields when recalling Windows internals.
 * **Dual-Source Validation:** Continue enforcing the rule that every struct must be independently verified against both MSDN and the WDK documentation mirrors.
-* **AST-Driven CI Gates:** We use `scripts/gen_ddi_layout.py` combined with Python-based static analysis to parse the generated C/C++ AST. Ensure that every struct defined strictly maps to the JSON golden template. If a developer introduces an extra `Reserved` field, the AST diff will immediately block the PR.
+* **Independent Layout Model:** `scripts/gen_ddi_layout.py` is a second model of the clean-room DDI groups, written from the same public specifications as `relay12-d3d11/ddi/wine_d3d11ddi.h` but deriving each offset by walking member lists under the Win64 natural-alignment rules. `--check` (run in CI) requires every field the model knows to carry a `WINE_DDI_ASSERT_FIELD` at the modelled offset, rejects assertions naming a field the model does not know, and requires the declared union arm sets to agree on every offset and size. `--emit` prints declarations and assertion blocks for authoring a new group. Neither mode reads a WDK header, and nothing is generated at build time: the header stays the reviewed source. `tests/d3d11ddilayout.c` then proves, in C and C++ under Wine, that the `WINE_DDI_ASSERT_*` macros agree with the run-time layout of a reference structure and that each promoted slot is callable.
 * **Calling Convention Guards:** It is simple to mix up `__stdcall`, `__cdecl`, and `__fastcall`. The test suite wraps invoked function pointers in a macro (`CHECK_STACK`) that asserts the `%rsp` (stack pointer) is identical before and after the call, ensuring stack integrity is not compromised by mismatched conventions.
 
 ## 1a. Behavioural Determinism: The Frame Harness
@@ -25,7 +25,6 @@ Real driver interactions start with the adapter and device, requiring strict arg
 * **`tests/d3d11on12openadapter.c` & `tests/d3d11on12coretest.c`:** These suites validate the DDI adapter entry point (`WineD3D11On12OpenAdapterV1`), explicitly checking that malformed calls (e.g., null out-structures, size mismatching version handshakes, or invalid interface combinations) are rejected and fail-closed *before* reaching the actual D3D11On12 driver module. This proves defensive design.
 * **`tests/d3d11on12openadapter.c`, Texture2D section:** the owned Texture2D lifecycle. The mock driver is resource-kind aware and validates the *whole* mip array across every array slice rather than its first entry, because the core derives that array itself: a stub checking one level would pass on a core that got every later mip wrong. The suite covers a zero-`MipLevels` request resolving to the full chain, format and bind-flag forwarding, initial subresource data, initial data carrying a null pointer (refused before the DDI is touched), double destruction, five rejected-argument cases, and a texture left alive to prove device teardown destroys it and leaves the caller's handle inert.
 * **Vertex/pixel shader creation:** the current mock leaves the immediate-device DDI creation slots null, matching the pinned driver. The adapter lifecycle suite verifies creation through the non-COM device sub-object, binding, and destruction.
-* **Six-stage shader lifecycle, not currently built:** `tests/d3d11on12shaderlifecycle.c` and the mock's `ID3D11On12DDIDevice` vtable live on the `ddi-device-lifecycle` branch. That branch's PR (#7) was closed when PR #8 consolidated the tree, so it is preserved deliberately and must not be deleted as stale — it is the only copy of this work until the port lands. They pin *which* driver entry creates a shader -- the pinned driver leaves all six `pfnCreate*Shader` table slots null on the immediate device and publishes creation only through the sub-object -- and they assert per-stage private-block sizing, bytecode pass-by-address, cross-stage bind refusal, and destruction-through-the-driver at teardown. They return when the six-stage implementation is ported onto the ordinal-export mechanism; see `docs/DDI-REMAINING-ROADMAP.md`.
 * **What these do not claim:** no shader compiles. The mock records the container it was shown and does not parse DXBC, so this proves ownership, routing and lifetime — not that any real bytecode would be accepted.
 
 ## 1c. Portability Debt as a Tested Input
@@ -38,15 +37,29 @@ MinGW expected-failure compile that must reach exactly the currently recorded
 `atlbase.h` boundary. See `docs/D3D11ON12.md` §Policy for the rule that each
 negative milestone becomes a positive compile gate when its blocker is removed.
 
+## 1d. Compile-Time and Compatibility Contracts
+
+Several tests prove a property by failing to compile, or pin a compatibility
+shim whose mistakes would otherwise be silent. All run in `validate-d3d11on12`.
+
+* **Promoted-slot negative tests, `tests/d3d11ddi*negative.c`:** each must fail to compile, in C and C++. `d3d11ddiplaceholdernegative.c` proves an unpromoted device slot rejects arguments. The promoted companions -- `d3d11ddipromotednegative.c` (command lists), `d3d11ddideferredpromotednegative.c`, `d3d11ddiresourcepromotednegative.c`, `d3d11ddiviewpromotednegative.c`, `d3d11ddishaderpromotednegative.c`, `d3d11ddistatepromotednegative.c` and `d3d11ddidrawpromotednegative.c` -- prove each promoted group rejects a call its specified signature does not admit, which no offset assertion can see.
+* **`tests/d3d11ddipadding.c`:** compiles every clean-room DDI structure under `-Wpadded -Werror`, so implicit padding a host would leave uninitialized fails the build.
+* **`tests/d3d11ddinegotiate.c`:** edge cases of DDI version negotiation against `relay12-d3d11/wine_d3d11ddi_negotiate.h`. The pinned driver overwrites the caller's count before reading it, so every case runs with a canary word past the end of the buffer.
+* **`tests/d3d11shimstatus.c`:** loads the router in a prefix with neither `d3d11mt.dll` nor `d3d11on12core.dll` and checks that every entry point answers with a documented D3D11 code, with the cause readable from `WineD3D11ShimGetStatus`.
+* **`compat/` contract tests, `tests/relay_*_test.cpp`:** `relay_com_ptr_test.cpp` (ownership), `relay_hresult_error_test.cpp` (HRESULT mapping), `relay_tracelogging_test.cpp` (the ETW no-op macros stay inert), `relay_member_detect_test.cpp` (the `__if_exists` replacement), `relay_d3d12_struct_return_test.cpp` (both struct-return ABI shapes) and `relay_batch_ring_test.cpp`. Each runs natively and as a PE under Wine.
+* **`compat/` negative tests, `tests/relay_*_negative.cpp`:** `relay_ownership_negative.cpp` and `relay_hresult_error_negative.cpp` must fail at run time (exposing a live owner as an output slot; an exception escaping the HRESULT-only boundary), and `relay_tracelogging_negative.cpp` must fail to compile.
+* **`tests/dtl_dependency_probe.cpp`:** a `-fsyntax-only` milestone for the pinned D3D12TranslationLayer include edge.
+* **`tests/d3d11on12_load_probe.c`:** in `d3d11on12-ewdk.yml`, loads the built `d3d11on12.dll` and requires `OpenAdapter_D3D11On12` to resolve.
+
 ## 2. Memory & Boundary Security: Sanitizers & Padding Traps
 Manual C/C++ memory management frequently introduces vulnerabilities, and failing to account for implicit compiler padding leads to "dirty memory" leaking over the ABI boundary.
 * **Dirty Memory Initialization:** All test models must allocate memory using a `malloc_dirty()` helper that primes heap space with `0xCC` or `0xAA` values. If a struct initialization drops fields, the padding trap will catch the uninitialized bytes.
 * **UBSAN & ASAN Porting:** While `mingw-w64` PE binaries resist standard sanitizers, the internal algorithms (e.g., handle tables, state trackers) must be decoupled from Windows APIs. These internal components can be compiled as a standard ELF binary on Linux/macOS strictly for offline CI testing with AddressSanitizer (`-fsanitize=address`) and UndefinedBehaviorSanitizer (`-fsanitize=undefined`).
 
-## 3. Edge-Case Coverage: Fuzzing the DDI Boundary
+## 3. Edge-Case Coverage: Explicit Negative Cases
 It is common during development to focus on the "happy path" and forget to validate null pointers, zero-sized resources, or maliciously malformed command lists.
-* **Structured Fuzzing (libFuzzer/AFL++):** A fuzzer target in `tests/fuzz_ddi.cpp` constructs malformed `D3D10DDIARG_CREATEDEVICE`, invalid shaders, and corrupted command lists, feeding them into the DDI entry points to catch unhandled crashes.
-* **State Machine Fuzzing:** We fuzz the lifecycle of driver handles (e.g., calling `pfnDestroyCommandList` twice, or calling `pfnCommandListExecute` on an abandoned list) to ensure robust state-tracking defenses are in place.
+* **No fuzzer exists.** Edge cases are covered by named negative cases instead, each asserting a specific rejection: the adapter and core suites in §1b, the frame harness's fault injection in §1a, and the compile-time contracts in §1d.
+* **Handle lifecycle misuse:** double destruction, use after destruction, and resources left alive at device teardown are exercised by `tests/d3d11on12openadapter.c` and `tests/d3d11on12deferred.c`, against the idempotent-destroy contract in `AGENTS.md` §2.7.
 
 ## 4. Concurrency & Thread-Safety Testing
 
@@ -321,6 +334,9 @@ and `ARCHITECTURE1` plus `CUSTOM` heap creation that decide UMA staging (items 1
 and 3 of [`PERFORMANCE-RESEARCH-ROADMAP.md`](PERFORMANCE-RESEARCH-ROADMAP.md)).
 
 ### Synchronization-mode runs
+
+The investigation behind these rules is archived in
+[`validation/2026-09-27-msync/`](validation/2026-09-27-msync/README.md).
 
 `run-peak-smoke.py --sync none|esync|msync` selects exactly one mode;
 `none` is the default. The runner sets all three Wine sync variables explicitly,

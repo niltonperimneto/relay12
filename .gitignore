@@ -5,9 +5,21 @@
 # Xcode
 xcuserdata/
 *.xcuserstate
-Files.xcworkspace/
+*.xcworkspace/
+
+# Python
+__pycache__/
+*.pyc
+
+# Build and patch leftovers
+*.o
+*.orig
+*.rej
 
 # Temporary / Scratch
 .tmp-dxmt/
 .agents_conversations_backup/
 backtrace.txt
+
+# Local agent settings
+.claude/settings.local.json
