@@ -18,14 +18,14 @@ Developers can easily misread documentation, miscount padding bytes, or mix up l
 ## 1a. Behavioural Determinism: The Frame Harness
 Layout and per-slot callability are necessary and not sufficient. Every driver handle in this DDI is one wrapped pointer, so a frame that bound the vertex buffer where it meant to bind the render target would call the right slots, in the right order, with arguments of the right types — and only the identity of a pointer would be wrong. No layout assertion and no per-slot call can see that.
 * **`tests/d3d11ddi_triangle.c`:** drives the promoted device function table through the MVP frame — create, bind, clear, draw, copy to staging, map, verify, unmap, tear down — with recording stubs, then asserts the recorded call sequence against a written-out expected order and checks that each binding received the handle the matching creation produced. The clear stub fills a backing image, draw replaces its centre texel, and readback requires the centre to carry the drawn red and a corner the cleared blue, matching the application-level test. Objects get distinct driver private blocks, allocated by the test the way the runtime allocates them, which is what makes the identity checks discriminating rather than vacuous. Compiled in C and C++ and run under Wine, like the layout harness.
-* **What it does not claim:** recording stubs do not prove GPU rendering. `tests/d3d11on12frame.c` additionally drives the real core against a mock driver, including fault injection, mapping validation, retained views, and teardown with outstanding maps. `tests/d3d11on12frontend.c` loads the compiled Wine host to check bound-object lifetime, cycle-free device destruction, and safe rejection of unsupported operations. Real GPU acceptance uses `tests/e2e_d3d11_triangle.cpp`; see [FIRST-FRAME-VALIDATION.md](FIRST-FRAME-VALIDATION.md).
+* **What it does not claim:** recording stubs do not prove GPU rendering. `tests/d3d11on12frame.c` additionally drives the real core against a mock driver, including fault injection, mapping validation, retained views, and teardown with outstanding maps. `tests/d3d11on12frontend.c` loads the compiled Wine host to check bound-object lifetime, cycle-free device destruction, and safe rejection of unsupported operations. Real GPU acceptance uses `tests/e2e_d3d11_triangle.cpp`; see [validation/2026-09-23-first-frame/README.md](validation/2026-09-23-first-frame/README.md).
 
 ## 1b. Fail-Closed Driver Initialization Tests
 Real driver interactions start with the adapter and device, requiring strict argument handling before the boundary to the translation layer is even entered.
 * **`tests/d3d11on12openadapter.c` & `tests/d3d11on12coretest.c`:** These suites validate the DDI adapter entry point (`WineD3D11On12OpenAdapterV1`), explicitly checking that malformed calls (e.g., null out-structures, size mismatching version handshakes, or invalid interface combinations) are rejected and fail-closed *before* reaching the actual D3D11On12 driver module. This proves defensive design.
 * **`tests/d3d11on12openadapter.c`, Texture2D section:** the owned Texture2D lifecycle. The mock driver is resource-kind aware and validates the *whole* mip array across every array slice rather than its first entry, because the core derives that array itself: a stub checking one level would pass on a core that got every later mip wrong. The suite covers a zero-`MipLevels` request resolving to the full chain, format and bind-flag forwarding, initial subresource data, initial data carrying a null pointer (refused before the DDI is touched), double destruction, five rejected-argument cases, and a texture left alive to prove device teardown destroys it and leaves the caller's handle inert.
 * **Vertex/pixel shader creation:** the current mock leaves the immediate-device DDI creation slots null, matching the pinned driver. The adapter lifecycle suite verifies creation through the non-COM device sub-object, binding, and destruction.
-* **Six-stage shader lifecycle, not currently built:** `tests/d3d11on12shaderlifecycle.c` and the mock's `ID3D11On12DDIDevice` vtable live on the `ddi-device-lifecycle` branch. That branch's PR (#7) was closed when PR #8 consolidated the tree, so it is preserved deliberately and must not be deleted as stale — it is the only copy of this work until the port lands. They pin *which* driver entry creates a shader -- the pinned driver leaves all six `pfnCreate*Shader` table slots null on the immediate device and publishes creation only through the sub-object -- and they assert per-stage private-block sizing, bytecode pass-by-address, cross-stage bind refusal, and destruction-through-the-driver at teardown. They return when the six-stage implementation is ported onto the ordinal-export mechanism; see `docs/DDI-REMAINING-ROADMAP.md`.
+* **Six-stage shader lifecycle, not currently built:** `tests/d3d11on12shaderlifecycle.c` and the mock's `ID3D11On12DDIDevice` vtable live on the `ddi-device-lifecycle` branch. That branch's PR (#7) was closed when PR #8 consolidated the tree, so it is preserved deliberately and must not be deleted as stale — it is the only copy of this work until the port lands. They pin *which* driver entry creates a shader -- the pinned driver leaves all six `pfnCreate*Shader` table slots null on the immediate device and publishes creation only through the sub-object -- and they assert per-stage private-block sizing, bytecode pass-by-address, cross-stage bind refusal, and destruction-through-the-driver at teardown. They return when the six-stage implementation is ported onto the ordinal-export mechanism; see `docs/ROADMAP.md`.
 * **What these do not claim:** no shader compiles. The mock records the container it was shown and does not parse DXBC, so this proves ownership, routing and lifetime — not that any real bytecode would be accepted.
 
 ## 1c. Portability Debt as a Tested Input
@@ -208,13 +208,13 @@ against the native mock driver.
 `tests/e2e_d3d11_wrapped.cpp` uses the original D3D12 texture and D3D12 readback
 to verify three acquire/clear/release cycles per RGBA/BGRA format. Run it with
 `scripts/run-d3dmetal-frame.py --test wrapped`; see
-[WRAPPED-RESOURCE-VALIDATION.md](WRAPPED-RESOURCE-VALIDATION.md). It does not
+[validation/2026-09-24-wrapped-resources/README.md](validation/2026-09-24-wrapped-resources/README.md). It does not
 exercise DXGI surfaces, Direct2D, or presentation.
 
 ## Performance measurement
 
 Performance claims need numbers, and the numbers come from three places. The
-plan they serve is [`PERFORMANCE-RESEARCH-ROADMAP.md`](PERFORMANCE-RESEARCH-ROADMAP.md).
+plan they serve is [`ROADMAP.md`](ROADMAP.md).
 
 **DDI telemetry.** Set `RELAY12_TELEMETRY=1` in the application's environment.
 The core then times the driver's draw and flush slots and, when the device is
@@ -306,6 +306,12 @@ whose frame count must rise across reports.
 with `-applaunch`, and returns the verdict. It refuses any prefix without a
 `.relay12-peak-prefix` marker, so it cannot upgrade a player's bottle;
 `tests/test_run_peak_smoke.py` covers that refusal without Wine.
+Before launch it audits the app-local Relay12 DLL set, records the exact
+`WINEDLLOVERRIDES` and `WINEDEBUG` values in `launch.json`, and enables
+`+relay,+d3d12` diagnostics. After launch it discovers Unity's
+`AppData/LocalLow/*/*/Player.log` in the prefix and copies a newly modified
+log into the output directory; a missing log produces `startup-failure.json`
+instead of being mistaken for a rendering result.
 
 `tests/peak_on12_probe.cpp` is a hardware check, not a CI one. It repeats
 Unity's `D3D11On12CreateDevice` call, lists every interface the objects answer,
@@ -318,7 +324,7 @@ private data set through `ID3D11Device` reads back through it. The CI half of
 The probe also prints `perf:` lines, which are recorded and never judged: the
 shader-cache and pipeline-library support that decide the persistent PSO cache,
 and `ARCHITECTURE1` plus `CUSTOM` heap creation that decide UMA staging (items 1
-and 3 of [`PERFORMANCE-RESEARCH-ROADMAP.md`](PERFORMANCE-RESEARCH-ROADMAP.md)).
+and 3 of [`ROADMAP.md`](ROADMAP.md)).
 
 ### Synchronization-mode runs
 

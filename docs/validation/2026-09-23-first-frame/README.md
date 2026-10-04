@@ -96,7 +96,7 @@ observations for broader workloads and longer runs.
 
 The offscreen first-frame gate is complete. Retain the experimental opt-in and
 continue with the wrapped-resource milestone described in
-[WRAPPED-RESOURCE-VALIDATION.md](WRAPPED-RESOURCE-VALIDATION.md), whose first
+[../2026-09-24-wrapped-resources/README.md](../2026-09-24-wrapped-resources/README.md), whose first
 RGBA/BGRA ownership slice now passes local hardware readback. The existing conformance probe needs BGRA
 creation support and pixel/state verification for that milestone. Presentation,
 application-level D3D12/On12 smoke testing (such as PEAK), and a hardware soak remain unqualified; the mock

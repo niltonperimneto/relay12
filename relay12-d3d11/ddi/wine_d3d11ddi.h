@@ -168,7 +168,7 @@
  * block and layout assertions:
  *
  *   - shader, state, query, and command structures, which are what gate the
- *     remaining device slots; docs/DDI-REMAINING-ROADMAP.md maps each group
+ *     remaining device slots; docs/ROADMAP.md maps each group
  *     to the slot families it unblocks;
  *   - the literal DDI version numbers, which the public specification elides;
  *   - DXGI DDI interoperability structures.

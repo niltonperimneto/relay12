@@ -4,7 +4,7 @@
 [![Submodules: MIT](https://img.shields.io/badge/Submodules-MIT-yellow.svg)](THIRD_PARTY_NOTICES.md)
 [![Standard: WDDM 2.6 / 2.7](https://img.shields.io/badge/Standard-WDDM%202.6%20%2F%202.7-green.svg)](docs/CLEANROOM-DDI.md)
 [![Toolchain: MinGW-w64 / MSVC](https://img.shields.io/badge/Toolchain-MinGW--w64%20%7C%20MSVC-informational.svg)](docs/D3D11ON12.md)
-[![Status: Active Development](https://img.shields.io/badge/Status-Active%20Development-orange.svg)](docs/DDI-REMAINING-ROADMAP.md)
+[![Status: Active Development](https://img.shields.io/badge/Status-Active%20Development-orange.svg)](docs/ROADMAP.md)
 
 `relay12` provides the host environment, validation boundary, and clean-room driver infrastructure required to execute Microsoft's open-source Direct3D 11On12 User-Mode Driver (`D3D11On12`) in Wine-based and compatible graphics environments (including macOS Apple Silicon via Apple D3DMetal/GPTK, Linux via VKD3D-Proton, and native Windows).
 
@@ -365,24 +365,26 @@ python3 -m unittest discover -s tests -p "test_*.py"
 
 ## Implementation Roadmap
 
-For complete milestone tracking and task breakdowns, refer to [`docs/DDI-REMAINING-ROADMAP.md`](docs/DDI-REMAINING-ROADMAP.md) and [`docs/D3D11ON12.md`](docs/D3D11ON12.md):
+For complete architectural scope, completed milestones, and active Phase 2 priorities, refer to [`docs/ROADMAP.md`](docs/ROADMAP.md):
 
-- [x] **Phase 1: Safe Routing & PE Boundary** — Drop-in `d3d11shim.dll` with fail-closed semantics, ordinal routing, and diagnostic query support.
-- [x] **Phase 2: Core Validation & Clean-Room DDI Host** — Direct queue validation, two-tier COM identity, and full clean-room WDDM 2.6/2.7 table definitions.
-- [ ] **Phase 3: DDI Table Function Hardening** — Promoting genuine function signatures across the 178 `DEVICEFUNCS` slots (command lists, buffers, textures, shader compilation).
-- [ ] **Phase 4: Full D3D11On12 Device Instantiation & Presentation** — Complete end-to-end device creation and rendering interoperability on D3DMetal and VKD3D-Proton.
+- [x] **Phase 0: Safe Routing, PE Boundary & Clean-Room DDI Host** — Drop-in `d3d11shim.dll` with fail-closed semantics, ordinal routing, `/Zp8` clean-room `wine_d3d11ddi.h` headers, and strict interface acquisition.
+- [x] **Phase 1: Resource Interop, UMA Telemetry & Game Startup** — Wrapped D3D12 resources (patches 0013–0026), first frame validation, UMA staging burst retention (`D3D11ON12_COMPAT_UploadBurstCacheMiB`), and live Steam-ready PEAK startup under MSYNC.
+- [ ] **Phase 2: Active Priorities (TODOs)**:
+  - **[P0] Device & Hybrid Swapchain Presentation Integration**: Full D3D11On12 device creation and swapchain present in hybrid engines (Unity 6).
+  - **[P1] Automatic UMA Profile Qualification**: Dynamic detection and auto-promotion of Apple Silicon memory tiers ($\le 8$ GiB vs 16+ GiB).
+  - **[P2] Progressive DDI Signature Promotion**: Progressive population of remaining `D3DWDDM2_6DDI_DEVICEFUNCS` slots on demand.
+  - **[P2] Advanced Shader Translation & Stream-Output**: Author clean-room argument structs and emulate stream-output buffers.
 
 ---
 
 ## Further Reading
 
+- **[docs/ROADMAP.md](docs/ROADMAP.md):** Authoritative project roadmap, active Phase 2 priorities (TODOs), and scope boundaries.
 - **[docs/D3D11ON12.md](docs/D3D11ON12.md):** Complete system architecture, component boundaries, failure modes, policy, and rollout checklist.
+- **[docs/UMA-MEMORY.md](docs/UMA-MEMORY.md):** UMA staging pool management, memory profiles (legacy, balanced, aggressive), and empirical telemetry.
 - **[docs/CLEANROOM-DDI.md](docs/CLEANROOM-DDI.md):** Clean-room WDDM DDI authoring guidelines, version negotiation proof, and implementation worklist.
 - **[docs/TESTS.md](docs/TESTS.md):** Testing architecture, concurrency testing, and mock/hardware test suites.
-- **[docs/DDI-REMAINING-ROADMAP.md](docs/DDI-REMAINING-ROADMAP.md):** Structured roadmap for upcoming ABI hardening and placeholder eradication.
-- **[docs/RELAY12-IMPLEMENTATION-PLAN.md](docs/RELAY12-IMPLEMENTATION-PLAN.md):** Step-by-step milestone execution and verification plan.
-- **[docs/FIRST-FRAME-VALIDATION.md](docs/FIRST-FRAME-VALIDATION.md):** First-frame rendering acceptance evidence and reproduction steps.
-- **[docs/WRAPPED-RESOURCE-VALIDATION.md](docs/WRAPPED-RESOURCE-VALIDATION.md):** Wrapped Texture2D resource validation evidence.
+- **[docs/validation/README.md](docs/validation/README.md):** Historical validation archive indexing first-frame rendering, wrapped resources, and empirical investigations.
 - **[AGENTS.md](AGENTS.md):** Architecture invariants, safety rules, and guidelines for automated coding agents.
 - **[SKILLS.md](SKILLS.md):** Step-by-step developer runbook for layout generation, compilation, and test execution.
 

@@ -37,7 +37,7 @@ the bounded host lifetime stress does not establish concurrent GPU submission.
 ## Reproduction and acceptance
 
 Build and stage the artifacts as described in
-[FIRST-FRAME-VALIDATION.md](FIRST-FRAME-VALIDATION.md), adding
+[../2026-09-23-first-frame/README.md](../2026-09-23-first-frame/README.md), adding
 `d3d11_e2e_wrapped.exe` from the branch workflow, then run:
 
 ```sh
