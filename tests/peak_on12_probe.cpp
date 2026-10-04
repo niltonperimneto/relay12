@@ -19,7 +19,7 @@
 // print [ok]/[fail] and a final RESULT line, and set the exit status.
 //
 // Before any of that it reports, as "perf:" lines, the D3DMetal capabilities
-// that decide two items of docs/PERFORMANCE-RESEARCH-ROADMAP.md.  They are
+// that decide two items of docs/ROADMAP.md.  They are
 // facts to record, not checks, and never change the verdict:
 //
 //   * persistent PSO cache -- D3D12_FEATURE_SHADER_CACHE, and whether
