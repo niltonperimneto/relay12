@@ -107,9 +107,9 @@ links: they break for every other checkout and on GitHub's web view.
 | Directory | Responsibilities |
 | :--- | :--- |
 | [`relay12-d3d11/`](relay12-d3d11) | Implementation: `d3d11shim.cpp`/`.h`, `d3d11on12core.cpp`/`.h`, `wine_d3d11_diag.h`, `wine_d3d11ddi_negotiate.h`, `ddi/wine_d3d11ddi.h`, and the `.def` export contracts. |
-| [`scripts/`](scripts) | Eleven `check_*.py` gates plus `gen_ddi_layout.py`; the `prepare-*.sh` scripts that materialize the patched third-party trees and the SDK overlay; `package-d3d11on12-source.sh`. See §5 for which run with no arguments. |
+| [`scripts/`](scripts) | Fourteen `check_*.py` gates plus `gen_ddi_layout.py` and `inventory_dtl_portability.py`; the `prepare-*.sh` scripts that materialize the patched third-party trees and the SDK overlay; `package-d3d11on12-source.sh` and `build-wine-d3d11-host.sh`; the `run-*.py` hardware and PEAK smoke runners and `summarize_overhead.py`. See §5 for which run with no arguments. |
 | [`tests/`](tests) | ~50 files: the Python gate suite (`test_ci_gates.py`), the DDI layout and negotiation tests, the mock driver (`d3d11on12mockdriver.c`) and the lifecycle suite that drives it (`d3d11on12openadapter.c`), per-group promoted-slot negative tests, `compat/` unit tests, and probes. [`docs/TESTS.md`](docs/TESTS.md) is the inventory and the rationale. |
-| [`docs/`](docs) | [`D3D11ON12.md`](docs/D3D11ON12.md) (design, readiness, milestones — source of truth for what is done), [`CLEANROOM-DDI.md`](docs/CLEANROOM-DDI.md) (DDI authoring roadmap), [`TESTS.md`](docs/TESTS.md) (testing strategy and concurrency), [`DDI-REMAINING-ROADMAP.md`](docs/DDI-REMAINING-ROADMAP.md), [`RELAY12-IMPLEMENTATION-PLAN.md`](docs/RELAY12-IMPLEMENTATION-PLAN.md), [`FIRST-FRAME-VALIDATION.md`](docs/FIRST-FRAME-VALIDATION.md), [`WRAPPED-RESOURCE-VALIDATION.md`](docs/WRAPPED-RESOURCE-VALIDATION.md). |
+| [`docs/`](docs) | [`D3D11ON12.md`](docs/D3D11ON12.md) (design, readiness, milestones — source of truth for what is done), [`CLEANROOM-DDI.md`](docs/CLEANROOM-DDI.md) (DDI authoring roadmap), [`TESTS.md`](docs/TESTS.md) (test inventory, strategy and concurrency), [`DDI-REMAINING-ROADMAP.md`](docs/DDI-REMAINING-ROADMAP.md) (remaining DDI groups), [`PERFORMANCE-RESEARCH-ROADMAP.md`](docs/PERFORMANCE-RESEARCH-ROADMAP.md) (performance plan), [`RELAY12-IMPLEMENTATION-PLAN.md`](docs/RELAY12-IMPLEMENTATION-PLAN.md) (Wine patch milestones), [`FIRST-FRAME-VALIDATION.md`](docs/FIRST-FRAME-VALIDATION.md), [`WRAPPED-RESOURCE-VALIDATION.md`](docs/WRAPPED-RESOURCE-VALIDATION.md), [`dtl-portability-baseline.json`](docs/dtl-portability-baseline.json) (golden record for `inventory_dtl_portability.py`), and [`validation/`](docs/validation) (dated validation evidence, including the MSYNC investigation). |
 | [`third_party/`](third_party) | Pinned submodules (MIT): `D3D11On12`, `D3D12TranslationLayer`, `DirectX-Headers`. Never edited in place — see §2.5. |
 | [`patches/`](patches) | The reviewable portability series. `patches/d3d11on12/` and `patches/dtl/` are applied to the pinned submodules by `scripts/prepare-*.sh`; `patches/*.patch` at the top level are the Wine frontend patches. |
 
@@ -266,7 +266,8 @@ The consequence for how you work:
 
 ### 5.3 Repository Location and Pushing
 
-`relay12` is a **standalone repository** at `/Users/niltonperimneto/relay12`.
+`relay12` is a **standalone repository**; run every command below from the root
+of your own checkout.
 It is no longer nested inside the Whisky checkout and is no longer referenced
 by Whisky as a submodule — see `chore(repo): decouple winecx, winecx-gptk, and
 relay12 into standalone repositories` on the Whisky side.

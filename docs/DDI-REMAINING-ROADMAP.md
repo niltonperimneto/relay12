@@ -232,33 +232,16 @@ only because the DestroyCommandList page states the two members may take one
 implementation.
 
 **3.3. WDDM Interface Translation**
-* **Status:** Ongoing — `vs` and `ps` cross the Wine/Relay12 boundary; the
-  six-stage implementation is written but not yet on this branch's ABI.
+* **Status:** Ongoing — `vs` and `ps` lifecycle and binding implemented.
 * **Done here:** `vs` and `ps` creation, destruction, and immediate-context
   binding cross the boundary with typed lifetime validation, published as
   ordinal exports 12 to 16 and consumed by Wine patch 0014.
-* **Written, and waiting on a port:** the `ddi-device-lifecycle` branch
-  carries a single stage-parameterised `WineD3D11On12CreateShaderV1` covering
-  all six stages, with `tests/d3d11on12shaderlifecycle.c` driving it against
-  the mock driver. It reaches the host through the interface table rather
-  than through ordinal exports, and the two mechanisms claimed the same table
-  offsets and capability bits, so it could not come across in the
-  consolidation merge. Porting it onto the ordinal-export mechanism is the
-  action, and it subsumes the one below.
 * **Action:** Complete `hs`, `ds`, geometry, compute, and shader-interface
-  binding, preferably by porting the six-stage work rather than reimplementing
-  it stage by stage.
+  binding on the ordinal-export mechanism.
 
-The findings that shaped that implementation are recorded below and remain
-true regardless of which mechanism publishes it.
+The findings below shaped the `vs`/`ps` implementation and hold for the
+remaining stages.
 
-* **Status:** Ongoing — `vs` and `ps` lifecycle and binding implemented
-* **Done:** the host now owns vertex and pixel shaders end to end.
-  `WineD3D11On12CreateShaderV1`, `WineD3D11On12DestroyShaderV1` and
-  `WineD3D11On12SetShaderV1` are published through the interface table at ABI
-  v4 behind `WINE_D3D11ON12_CAP_SHADER_LIFECYCLE`, and
-  `tests/d3d11on12shaderlifecycle.c` drives them against a mock driver that
-  reproduces the pinned driver's slot population exactly.
 * **The finding that shaped it, and which contradicts §3.1's framing:** no DDI
   table slot creates a shader. The pinned driver's `FillContextDDIs` fills
   `pfnCalcPrivateShaderSize`, `pfnDestroyShader`, `pfnVsSetShader` and
@@ -276,9 +259,7 @@ true regardless of which mechanism publishes it.
 * **Bytecode lifetime, resolved by reading the driver rather than guessing:**
   the caller's container is not retained. `CreateUnderlyingShader` copies it
   into the shader object's own buffer inside the call. The host passes the
-  caller's pointer through and keeps no copy; the test pins this by asserting
-  the driver saw the caller's own address and then overwriting that buffer
-  before binding and destroying.
+  caller's pointer through and keeps no copy.
 * **Ownership, not just creation:** each shader's private block is tracked on
   the device that made it, so closing a lifecycle whose shaders the caller
   abandoned destroys them through the driver first rather than leaking a block

@@ -11,7 +11,7 @@ combining all remaining callbacks into one large change.
 
 ## Current implementation status
 
-Status as of 2026-09-23. This table distinguishes code present in the working
+Status as of 2026-10-03, covering Wine patches through 0025. This table distinguishes code present in the working
 tree from functionality proven on the real D3DMetal path.
 
 | Milestone | Working-tree status | Completion evidence still required |
@@ -24,9 +24,13 @@ tree from functionality proven on the real D3DMetal path.
 | Copy, map, unmap, and readback | Implemented by patch 0018 | Mock byte-exact readback and failure tests pass |
 | D3D11 device/context publication | Implemented by patches 0019–0023 behind `RELAY12_EXPERIMENTAL_FRAME=1` | Compiled frontend tests and three real GPU create/render/teardown cycles passed; publication remains opt-in |
 | Real D3DMetal triangle | Passed on 2026-09-23 at commit `7c554bb` | Three byte-exact readbacks, caller-queue fence completion, and device teardowns on Apple A18 Pro; evidence in FIRST-FRAME-VALIDATION.md |
+| Wrapped Texture2D ownership | Implemented by patch 0024 and core exports 28–29 (single-mip, single-slice first slice) | Mock and Wine frontend tests pass; see WRAPPED-RESOURCE-VALIDATION.md |
+| `IDXGIDevice` on standalone devices | Implemented by patch 0025 | Answers `IDXGIDevice`/`IDXGIObject` from the device; `IDXGIDevice1` and later stay refused |
+| Deferred contexts, command lists, pipeline state | Core exports 30–41 only; no Wine patch consumes them yet | Mock-driver lifecycle suites pass; frontend routing is still to do |
 
-The branch contains the complete experimental first-frame slice through patch
-0023. The full workflow for commit `7c554bb` and its three-iteration, byte-exact
+The tree contains the complete experimental first-frame slice through patch
+0023, plus wrapped-resource ownership (0024) and standalone `IDXGIDevice`
+(0025). The full workflow for commit `7c554bb` and its three-iteration, byte-exact
 D3DMetal hardware run passed. See
 [FIRST-FRAME-VALIDATION.md](FIRST-FRAME-VALIDATION.md) for the log, artifact
 hashes, runtime, and limits. Wrapped-resource interoperability and broader

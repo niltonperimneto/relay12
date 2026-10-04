@@ -585,9 +585,7 @@ declaration nothing yet needs.
   its own `unique_ptr<BYTE[]>` before doing anything with it, on both the
   DXIL-conversion and the direct paths, and the shader object owns that copy
   for its lifetime. The host passes the caller's pointer straight through and
-  keeps nothing; `tests/d3d11on12shaderlifecycle.c` asserts the driver was
-  shown the caller's own address and then overwrites the buffer before
-  binding, so a host that started retaining it would fail there.
+  keeps nothing.
 
 ### Active open questions
 
