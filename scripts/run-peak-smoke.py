@@ -33,6 +33,8 @@ APP_ID = "3527290"
 STEAM = r"C:\Program Files (x86)\Steam\steam.exe"
 MARKER = ".relay12-peak-prefix"
 CHECK = Path(__file__).resolve().parent / "check_peak_smoke_log.py"
+GAME_FILES = ("PEAK.exe", "d3d11.dll", "d3d11on12core.dll",
+              "d3d11on12host.dll", "d3d11on12.dll")
 
 
 def windows_path(path):
@@ -52,12 +54,33 @@ def run_environment(runtime, prefix, sync="none"):
                 WINELOADER=str(runtime / "bin/wine64"),
                 WINEMSYNC="1" if sync == "msync" else "0",
                 WINEESYNC="1" if sync == "esync" else "0", WINEFSYNC="0",
-                WINEDEBUG=f"{debug},warn+d3d11" if debug else "warn+d3d11",
+                WINEDEBUG=f"{debug},warn+d3d11,+relay,+d3d12"
+                if debug else "warn+d3d11,+relay,+d3d12",
                 RELAY12_EXPERIMENTAL_FRAME="1", RELAY12_TRACE_CREATION="1",
                 MTL_HUD_ENABLED="1", MTL_HUD_LOG_ENABLED="1",
                 CX_APPLEGPTK_LIBD3DSHARED_PATH=str(runtime / "lib/external/libd3dshared.dylib"),
-                WINEDLLOVERRIDES="d3d11,d3d11on12,d3d11on12core,dxilconv=n;"
+                WINEDLLOVERRIDES="d3d11=n,b;d3d11on12,d3d11on12core,dxilconv=n;"
                 "d3d11on12host,d3d12,dxgi=b;mscoree,mshtml=")
+
+
+def player_log_candidates(prefix):
+    """Return Unity's standard prefix-side logs, newest first."""
+    users = prefix / "drive_c/users"
+    if not users.is_dir():
+        return []
+    candidates = []
+    for path in users.glob("*/AppData/LocalLow/*/*/Player.log"):
+        if path.is_file():
+            candidates.append(path)
+    return sorted(candidates, key=lambda path: path.stat().st_mtime_ns, reverse=True)
+
+
+def stage_manifest(game):
+    """Record the app-local files required to keep Wine on the Relay12 path."""
+    return {
+        name: {"path": str(game / name), "present": (game / name).is_file()}
+        for name in GAME_FILES
+    }
 
 
 def stop_server(wine, env, log):
@@ -102,9 +125,10 @@ def main(argv=None):
     game = prefix / "drive_c/Program Files (x86)/Steam/steamapps/common/PEAK"
     if not (prefix / "drive_c/Program Files (x86)/Steam/steam.exe").is_file():
         parser.error(f"no Steam install in {prefix}")
-    for name in ("PEAK.exe", "d3d11.dll", "d3d11on12core.dll", "d3d11on12host.dll", "d3d11on12.dll"):
-        if not (game / name).is_file():
-            parser.error(f"missing {game / name}")
+    manifest = stage_manifest(game)
+    for name, entry in manifest.items():
+        if not entry["present"]:
+            parser.error(f"missing {game / name}; stage the Relay12 bundle beside PEAK.exe")
     runtime = wine.parent.parent
     if (not wine.is_file() or not (wine.parent / "wineserver").is_file()
             or not (runtime / "lib/external/libd3dshared.dylib").is_file()):
@@ -117,14 +141,19 @@ def main(argv=None):
     out.mkdir(parents=True, exist_ok=True)
     player_log, wine_log = out / "Player.log", out / "wine.log"
     player_log.unlink(missing_ok=True)
+    initial_player_logs = {
+        path: path.stat().st_mtime_ns for path in player_log_candidates(prefix)
+    }
     # A real Steam launch: without this file the game must get its app id from Steam.
     (game / "steam_appid.txt").unlink(missing_ok=True)
     env = run_environment(runtime, prefix, args.sync)
     env["WINELOADER"] = str(wine)
     (out / "launch.json").write_text(json.dumps({
         "wine": str(wine), "prefix": str(prefix), "sync": args.sync,
+        "game": str(game), "staged_files": manifest,
         "environment": {key: env[key] for key in
-                        ("WINESERVER", "WINELOADER", "WINEMSYNC", "WINEESYNC", "WINEFSYNC")},
+                        ("WINESERVER", "WINELOADER", "WINEMSYNC", "WINEESYNC",
+                         "WINEFSYNC", "WINEDEBUG", "WINEDLLOVERRIDES")},
     }, indent=2) + "\n")
 
     with open(wine_log, "w") as log:
@@ -143,8 +172,26 @@ def main(argv=None):
             stop_server(wine, env, log)
             steam.wait(timeout=30)
 
+    prefix_logs = [
+        path for path in player_log_candidates(prefix)
+        if path not in initial_player_logs
+        or path.stat().st_mtime_ns > initial_player_logs[path]
+    ]
+    if not player_log.is_file() and prefix_logs:
+        # Unity normally writes here, not to Steam's stdout. Preserve the
+        # discovered log under the runner's stable name for the judge.
+        player_log.write_bytes(prefix_logs[0].read_bytes())
+        (out / "player-log-source.txt").write_text(str(prefix_logs[0]) + "\n")
     if not player_log.is_file():
-        print(f"PEAK wrote no log to {player_log}: it did not start", file=sys.stderr)
+        (out / "startup-failure.json").write_text(json.dumps({
+            "reason": "no Unity Player.log found",
+            "standard_log_search_root": str(prefix / "drive_c/users"),
+            "candidates": [str(path) for path in prefix_logs],
+            "staged_files": manifest,
+            "wine_log": str(wine_log),
+        }, indent=2) + "\n")
+        print(f"PEAK wrote no Unity Player.log; inspect {wine_log} and "
+              f"{out / 'startup-failure.json'}", file=sys.stderr)
         return 1
     return subprocess.run([sys.executable, str(CHECK), "--player-log", str(player_log),
                            "--wine-log", str(wine_log), "--json", str(out / "result.json")],
