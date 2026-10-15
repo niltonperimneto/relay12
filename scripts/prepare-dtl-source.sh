@@ -4,7 +4,7 @@
 set -eu
 
 source_dir=${1:-third_party/D3D12TranslationLayer}
-repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+repository_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 expected_revision=b68ebbc6dab4195f7d4819ea78f2a60c985b853a
 
 # MSYNC and PEAK measurements regress with the experimental address-wait ring.
