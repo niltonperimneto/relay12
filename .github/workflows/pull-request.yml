@@ -2,17 +2,27 @@ name: pull request validation
 
 on:
   pull_request:
+    paths-ignore: &docs
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
   workflow_dispatch:
   push:
     branches:
       - main
+    paths-ignore: *docs
 
 permissions:
   contents: read
 
+concurrency:
+  group: pr-validation-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   validate-d3d11on12:
     runs-on: ubuntu-26.04
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -31,12 +41,13 @@ jobs:
         with:
           submodules: recursive
 
+      # One pinned toolchain for every step; restored from the Actions cache
+      # instead of being downloaded again by each step.
+      - uses: ./.github/actions/setup-llvm-mingw
+
       - name: Verify dependency licenses and revisions
         run: |
           set -euo pipefail
-          wget -q https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          tar -xf llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          echo "$PWD/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64/bin" >> $GITHUB_PATH
           test -f LICENSE
           test -f THIRD_PARTY_NOTICES.md
           test -f third_party/D3D11On12/LICENSE
@@ -56,9 +67,6 @@ jobs:
       - name: Prepare the pinned D3D11On12 MinGW port series
         run: |
           set -euo pipefail
-          wget -q https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          tar -xf llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          echo "$PWD/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64/bin" >> $GITHUB_PATH
           worktree="$RUNNER_TEMP/d3d11on12-port-source"
           git clone --quiet --no-hardlinks third_party/D3D11On12 "$worktree"
           scripts/prepare-d3d11on12-source.sh "$worktree"
@@ -79,9 +87,6 @@ jobs:
       - name: Measure the pinned D3D12TranslationLayer portability baseline
         run: |
           set -euo pipefail
-          wget -q https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          tar -xf llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          echo "$PWD/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64/bin" >> $GITHUB_PATH
           worktree="$RUNNER_TEMP/dtl-port-source"
           git clone --quiet --no-hardlinks third_party/D3D12TranslationLayer "$worktree"
           scripts/prepare-dtl-source.sh "$worktree"
@@ -152,9 +157,6 @@ jobs:
       - name: Test the gates
         run: |
           set -euo pipefail
-          wget -q https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          tar -xf llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          echo "$PWD/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64/bin" >> $GITHUB_PATH
           # First, because it needs no toolchain and takes a second: a gate
           # whose pattern has stopped matching fails silently, staying green
           # while it withholds the signal it exists for.  These give every
@@ -167,9 +169,6 @@ jobs:
       - name: Install MinGW-w64 GCC and Wine
         run: |
           set -euo pipefail
-          wget -q https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          tar -xf llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          echo "$PWD/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64/bin" >> $GITHUB_PATH
           sudo apt-get update
           sudo apt-get install --yes \
             cmake curl unzip wine bison flex
@@ -181,13 +180,10 @@ jobs:
 
       - name: Verify Wine patches
         env:
-          WINECX_REPO: https://github.com/dappermint/winecx.git
+          WINECX_REPO: https://github.com/niltonperimneto/winecx.git
           WINECX_COMMIT: 7dbc5b5322a6ef3fb04bdc643c64b188fd641149
         run: |
           set -euo pipefail
-          wget -q https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          tar -xf llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          echo "$PWD/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64/bin" >> $GITHUB_PATH
           git clone --filter=blob:none "$WINECX_REPO" winecx
           git -C winecx checkout --detach "$WINECX_COMMIT"
           for patch in "$PWD"/patches/*.patch; do
@@ -228,9 +224,6 @@ jobs:
       - name: Compile the D3D12TranslationLayer dependency edge
         run: |
           set -euo pipefail
-          wget -q https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          tar -xf llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          echo "$PWD/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64/bin" >> $GITHUB_PATH
           x86_64-w64-mingw32-g++ -std=c++17 -Wall -Wextra -Werror \
             -static-libgcc -static-libstdc++ \
             -Icompat tests/relay_com_ptr_test.cpp \
@@ -283,9 +276,6 @@ jobs:
       - name: Build every D3D12TranslationLayer translation unit
         run: |
           set -euo pipefail
-          wget -q https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          tar -xf llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          echo "$PWD/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64/bin" >> $GITHUB_PATH
           worktree="$RUNNER_TEMP/dtl-port-source"
           overlay="$RUNNER_TEMP/windows-sdk-overlay"
           build="$RUNNER_TEMP/dtl-build"
@@ -339,9 +329,6 @@ jobs:
       - name: Link D3D11On12 against the portable translation layer
         run: |
           set -euo pipefail
-          wget -q https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          tar -xf llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          echo "$PWD/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64/bin" >> $GITHUB_PATH
           driver="$RUNNER_TEMP/d3d11on12-port-source"
           dtl="$RUNNER_TEMP/dtl-port-source"
           overlay="$RUNNER_TEMP/windows-sdk-overlay"
@@ -375,9 +362,6 @@ jobs:
       - name: Compile D3D11-on-12 conformance probe
         run: |
           set -euo pipefail
-          wget -q https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          tar -xf llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          echo "$PWD/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64/bin" >> $GITHUB_PATH
           x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -Werror \
             -o d3d11on12probe.exe tests/d3d11on12probe.c \
             -ld3d11 -ld3d12 -ldxgi -ldxguid -luuid
@@ -387,9 +371,6 @@ jobs:
       - name: Compile and audit D3D11 router
         run: |
           set -euo pipefail
-          wget -q https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          tar -xf llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          echo "$PWD/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64/bin" >> $GITHUB_PATH
           x86_64-w64-mingw32-g++ -shared -std=c++17 -O2 \
             -Wall -Wextra -Werror -fno-exceptions -fno-rtti \
             -fno-threadsafe-statics -fno-use-cxa-atexit \
@@ -419,32 +400,7 @@ jobs:
       - name: Audit interface acquisition
         run: |
           set -euo pipefail
-          wget -q https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          tar -xf llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          echo "$PWD/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64/bin" >> $GITHUB_PATH
-          python3 - <<'PY'
-          import pathlib
-          import re
-
-          # A QueryInterface or GetDevice that reports S_OK with a null
-          # out-pointer breaks the COM contract, and the D3DMetal payload does
-          # it.  strictResult is the single place that rule lives; a call that
-          # checks only the HRESULT is how a queue belonging to another device
-          # got accepted.  Keep the funnel mandatory rather than remembered.
-          acquisition = re.compile(r"->(QueryInterface|GetDevice)\s*\(")
-          errors = []
-          for path in sorted(pathlib.Path("relay12-d3d11").rglob("*.cpp")):
-              for number, line in enumerate(path.read_text().splitlines(), 1):
-                  if not acquisition.search(line):
-                      continue
-                  if "strictResult(" in line:
-                      continue
-                  errors.append(f"{path}:{number}: an interface acquisition "
-                                "must pass its holder through strictResult()")
-          if errors:
-              raise SystemExit("\n".join(errors))
-          print("interface acquisition audit: ok")
-          PY
+          python3 scripts/check_interface_acquisition.py
           # A D3D11 device is used concurrently by design, and neither module
           # is a Wine builtin, so neither gets Wine's locking for free.  A
           # race added at namespace scope here would not fail a test; it would
@@ -464,9 +420,6 @@ jobs:
       - name: Run D3D11-on-12 core validation tests
         run: |
           set -euo pipefail
-          wget -q https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          tar -xf llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          echo "$PWD/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64/bin" >> $GITHUB_PATH
           for source in d3d11on12core wine_d3d11_diag; do
             x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Werror \
               -fno-exceptions -fno-rtti -fno-threadsafe-statics \
@@ -579,9 +532,6 @@ jobs:
       - name: Run the D3D11-on-12 concurrency stress
         run: |
           set -euo pipefail
-          wget -q https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          tar -xf llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          echo "$PWD/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64/bin" >> $GITHUB_PATH
           x86_64-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
             -Irelay12-d3d11 -c -o ddi_thread_stress.o \
             tests/ddi_thread_stress.c
@@ -638,9 +588,6 @@ jobs:
       - name: Run the D3D11 router fail-closed tests
         run: |
           set -euo pipefail
-          wget -q https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          tar -xf llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          echo "$PWD/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64/bin" >> $GITHUB_PATH
           x86_64-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
             -Irelay12-d3d11 -o d3d11shimstatus.exe tests/d3d11shimstatus.c
           # Its own directory, holding the router and nothing else: no
@@ -658,9 +605,6 @@ jobs:
       - name: Validate the clean-room DDI declarations and negotiation
         run: |
           set -euo pipefail
-          wget -q https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          tar -xf llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          echo "$PWD/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64/bin" >> $GITHUB_PATH
           # The Wine D3D11 frontend is C and the host will be C++, so the DDI
           # declarations must be valid and identical in both languages.
           # -static so both binaries run in a bare prefix with no toolchain
@@ -812,9 +756,6 @@ jobs:
       - name: Verify reproducible source package
         run: |
           set -euo pipefail
-          wget -q https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          tar -xf llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-          echo "$PWD/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64/bin" >> $GITHUB_PATH
           sh scripts/package-d3d11on12-source.sh source-one.tar.gz
           sh scripts/package-d3d11on12-source.sh source-two.tar.gz
           cmp source-one.tar.gz source-two.tar.gz

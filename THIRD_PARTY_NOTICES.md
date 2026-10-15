@@ -5,7 +5,7 @@ own licenses and copyright notices.
 
 | Component | Revision | License | Upstream |
 | --- | --- | --- | --- |
-| WineCX | `7dbc5b5322a6ef3fb04bdc643c64b188fd641149` | LGPL-2.1-or-later | https://github.com/dappermint/winecx |
+| WineCX | `7dbc5b5322a6ef3fb04bdc643c64b188fd641149` | LGPL-2.1-or-later | https://github.com/niltonperimneto/winecx |
 | D3D11On12 | `5d8898b43d817e0fd0f58ed87ef645c0cf6fac27` | MIT | https://github.com/microsoft/D3D11On12 |
 | D3D12TranslationLayer | `b68ebbc6dab4195f7d4819ea78f2a60c985b853a` | MIT | https://github.com/microsoft/D3D12TranslationLayer |
 | DirectX-Headers | `9e393d6d8a3b30dcc6f2806ef604ec16a27b0d7e` (`v1.619.1`) | MIT | https://github.com/microsoft/DirectX-Headers |
