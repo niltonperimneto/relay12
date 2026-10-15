@@ -802,3 +802,101 @@ jobs:
             d3d11on12-source.tar.gz
           if-no-files-found: error
           retention-days: 14
+
+  # A validated main build becomes the runtime-<sha7> release winecx-gptk
+  # pins, and the hub is told so it can open a pin bump.
+  publish-runtime:
+    needs: validate-d3d11on12
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      DXILCONV_TAG: dxilconv-416fab6b
+      WINECX_COMMIT: 7dbc5b5322a6ef3fb04bdc643c64b188fd641149
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: first-frame-${{ github.sha }}
+          path: first-frame
+      - name: Assemble runtime-${{ github.sha }}
+        id: assemble
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="runtime-${GITHUB_SHA:0:7}"
+          root="relay12-$tag"
+          mkdir -p "$root/x86_64-windows" "$root/licenses"
+          cp first-frame/{d3d11on12core,d3d11on12,d3d11on12host}.dll "$root/x86_64-windows/"
+          gh release download "$DXILCONV_TAG" -R "$GITHUB_REPOSITORY" -D dxilconv
+          (cd dxilconv && sha256sum -c dxilconv.dll.sha256)
+          cp dxilconv/dxilconv.dll "$root/x86_64-windows/"
+          cp LICENSE "$root/licenses/Relay12-GPL-3.0.txt"
+          cp third_party/D3D11On12/LICENSE "$root/licenses/D3D11On12-MIT.txt"
+          cp third_party/D3D12TranslationLayer/LICENSE "$root/licenses/D3D12TranslationLayer-MIT.txt"
+          cp dxilconv/LICENSE.TXT "$root/licenses/DirectXShaderCompiler-LICENSE.txt"
+          curl -fsSL -o "$root/licenses/Wine-LGPL-2.1.txt" \
+            "https://raw.githubusercontent.com/niltonperimneto/winecx/$WINECX_COMMIT/COPYING.LIB"
+          d3d11on12=$(git -C third_party/D3D11On12 rev-parse HEAD)
+          dtl=$(git -C third_party/D3D12TranslationLayer rev-parse HEAD)
+          cat > "$root/SOURCE.txt" <<SOURCE
+          Relay12 runtime modules, built by niltonperimneto/relay12 CI from commit
+          $GITHUB_SHA (main).
+
+          x86_64-windows/d3d11on12core.dll   relay12-d3d11/ at ${GITHUB_SHA:0:7}. GPL-3.0-only.
+          x86_64-windows/d3d11on12.dll       microsoft/D3D11On12 $d3d11on12
+                                             with microsoft/D3D12TranslationLayer
+                                             $dtl, both with
+                                             relay12's patches/d3d11on12 and patches/dtl at ${GITHUB_SHA:0:7}. MIT.
+          x86_64-windows/d3d11on12host.dll   Wine's dlls/d3d11 built as a separate module from
+                                             niltonperimneto/winecx $WINECX_COMMIT
+                                             with relay12's top-level patches/*.patch at ${GITHUB_SHA:0:7}. LGPL-2.1+.
+          x86_64-windows/dxilconv.dll        microsoft/DirectXShaderCompiler, release $DXILCONV_TAG
+                                             built by relay12's build-dxilconv.yml.
+
+          Source for every module is https://github.com/niltonperimneto/relay12 at the
+          commit above; its README and scripts/ describe how each is built.
+          SOURCE
+          # Reproducible archive: fixed order, owner and mtime.
+          tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='@0' \
+            -czf "$root.tar.gz" "$root"
+          sha=$(sha256sum "$root.tar.gz" | cut -d' ' -f1)
+          echo "$sha  $root.tar.gz" > "$root.tar.gz.sha256"
+          {
+            echo "tag=$tag"
+            echo "sha256=$sha"
+            echo "archive=$root.tar.gz"
+          } >> "$GITHUB_OUTPUT"
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.assemble.outputs.tag }}
+          ARCHIVE: ${{ steps.assemble.outputs.archive }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ARCHIVE" "$ARCHIVE.sha256" --clobber
+          else
+            gh release create "$TAG" "$ARCHIVE" "$ARCHIVE.sha256" --target "$GITHUB_SHA" \
+              --title "Relay12 runtime $TAG" --notes-file "${ARCHIVE%.tar.gz}/SOURCE.txt"
+          fi
+      - name: Notify winecx-gptk
+        env:
+          GH_TOKEN: ${{ secrets.HUB_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::HUB_DISPATCH_TOKEN is not set; winecx-gptk was not notified"
+            exit 0
+          fi
+          gh api repos/niltonperimneto/winecx-gptk/dispatches \
+            -f event_type=component-updated \
+            -F "client_payload[component]=relay12" \
+            -F "client_payload[repo]=$GITHUB_REPOSITORY" \
+            -F "client_payload[sha]=$GITHUB_SHA" \
+            -F "client_payload[release_tag]=${{ steps.assemble.outputs.tag }}" \
+            -F "client_payload[sha256]=${{ steps.assemble.outputs.sha256 }}"
