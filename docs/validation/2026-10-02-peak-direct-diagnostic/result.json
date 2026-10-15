@@ -1,0 +1,75 @@
+{
+  "diagnostic_direct_launch": true,
+  "steam_authenticated_gameplay_qualified": false,
+  "app_id": 3527290,
+  "sync": "msync",
+  "seconds_observed": 24.3,
+  "peak_processes": [
+    {
+      "seconds": 1.1,
+      "pid": 27961,
+      "event": "observed_alive"
+    }
+  ],
+  "sample_collected": false,
+  "targeted_trace": "-all,+loaddll,+seh,+process,warn+d3d11,err+all",
+  "staged_host_matches_runtime": true,
+  "artifact_revision": "e2b99d224f9524ebed78f8850ae674940c5a5012",
+  "appid_restored": true,
+  "launch_pid": 27961,
+  "process_returncode": null,
+  "fresh_player_log": true,
+  "agent_stopped_after_observation": true,
+  "natural_exit_observed": false,
+  "sample_result": "OS sample timed out after15s; process cleanup completed in finally",
+  "steam_api_init_failed": true,
+  "steamworks_not_initialized_count": 1265,
+  "d3d12_initialization_log_present": true,
+  "player_log_bytes": 941442,
+  "trace_counts": {
+    "module_import_failure": 0,
+    "unhandled_exception": 0,
+    "exception_dispatch": 161,
+    "device_removed": 0,
+    "msync_failure": 0
+  },
+  "exception_codes": {
+    "406d1388": 7,
+    "40010006": 11,
+    "4001000a": 1
+  },
+  "graphics_module_loads": [
+    {
+      "name": "d3d11.dll",
+      "type": "native"
+    },
+    {
+      "name": "dxgi.dll",
+      "type": "builtin"
+    },
+    {
+      "name": "unityplayer.dll",
+      "type": "native"
+    },
+    {
+      "name": "d3d12.dll",
+      "type": "builtin"
+    },
+    {
+      "name": "d3d11on12core.dll",
+      "type": "native"
+    },
+    {
+      "name": "d3d11on12host.dll",
+      "type": "builtin"
+    },
+    {
+      "name": "d3d11on12.dll",
+      "type": "native"
+    },
+    {
+      "name": "steam_api64.dll",
+      "type": "native"
+    }
+  ]
+}

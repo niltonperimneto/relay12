@@ -19,7 +19,7 @@
 // print [ok]/[fail] and a final RESULT line, and set the exit status.
 //
 // Before any of that it reports, as "perf:" lines, the D3DMetal capabilities
-// that decide two items of docs/PERFORMANCE-RESEARCH-ROADMAP.md.  They are
+// that decide two items of docs/ROADMAP.md.  They are
 // facts to record, not checks, and never change the verdict:
 //
 //   * persistent PSO cache -- D3D12_FEATURE_SHADER_CACHE, and whether
@@ -37,6 +37,9 @@
 #include <d3d11on12.h>
 #include <dxgi1_6.h>
 #include <cstdio>
+#include <cstring>
+#include "uma_gpu_probe.hpp"
+#include "../compat/relay_d3d12_struct_return.hpp"
 
 typedef HRESULT(WINAPI *CreateDevice12Fn)(IUnknown *, D3D_FEATURE_LEVEL, REFIID, void **);
 typedef HRESULT(WINAPI *On12CreateDeviceFn)(IUnknown *, UINT, const D3D_FEATURE_LEVEL *, UINT,
@@ -115,12 +118,49 @@ static void reportPsoCache(ID3D12Device *device)
 
 static void reportUma(ID3D12Device *device)
 {
+    // Slot 13 is ID3D12Device::CheckFeatureSupport. Report its owner without
+    // changing the vtable, so raw-backend and normal-entry probes can be compared.
+    void *query = (*reinterpret_cast<void ***>(device))[13];
+    HMODULE queryModule = nullptr;
+    char modulePath[MAX_PATH] = {};
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCSTR>(query), &queryModule))
+        GetModuleFileNameA(queryModule, modulePath, sizeof(modulePath));
+    const char *moduleName = std::strrchr(modulePath, '\\');
+    std::printf("perf: architecture_query_module=%s\n", moduleName ? moduleName + 1 : modulePath);
+    MEMORYSTATUSEX memory = {};
+    memory.dwLength = sizeof(memory);
+    const BOOL hasMemory = GlobalMemoryStatusEx(&memory);
+    const auto uploadProperties = RelayD3D12CustomHeapProperties(device, 1, D3D12_HEAP_TYPE_UPLOAD);
+    const auto readbackProperties = RelayD3D12CustomHeapProperties(device, 1, D3D12_HEAP_TYPE_READBACK);
+    std::printf("perf: physical_bytes=%llu memory_query=%d upload_page=%u readback_page=%u\n",
+        static_cast<unsigned long long>(memory.ullTotalPhys), hasMemory,
+        unsigned(uploadProperties.CPUPageProperty), unsigned(readbackProperties.CPUPageProperty));
+    std::printf("perf: heap_upload type=%u pool=%u creation_mask=%u visible_mask=%u heap_readback type=%u pool=%u\n",
+        unsigned(uploadProperties.Type), unsigned(uploadProperties.MemoryPoolPreference),
+        uploadProperties.CreationNodeMask, uploadProperties.VisibleNodeMask,
+        unsigned(readbackProperties.Type), unsigned(readbackProperties.MemoryPoolPreference));
+    const UINT nodes = device->GetNodeCount();
+    std::printf("perf: node_count=%u\n", nodes);
+    D3D12_FEATURE_DATA_ARCHITECTURE legacy = {};
+    legacy.TileBasedRenderer = legacy.UMA = legacy.CacheCoherentUMA = -1;
+    const HRESULT legacyHr = device->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE, &legacy, sizeof(legacy));
+    std::printf("perf: ARCHITECTURE hr=0x%08lx UMA=%d CacheCoherentUMA=%d TileBasedRenderer=%d\n",
+        hresult(legacyHr), legacy.UMA, legacy.CacheCoherentUMA, legacy.TileBasedRenderer);
+    // Poison output members so S_OK with untouched storage is visible. NodeIndex
+    // is the caller's input; the valid node index for this single-node probe is 0.
     D3D12_FEATURE_DATA_ARCHITECTURE1 architecture = {};
+    architecture.TileBasedRenderer = architecture.UMA = architecture.CacheCoherentUMA = architecture.IsolatedMMU = -1;
     HRESULT hr = device->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE1, &architecture,
             sizeof(architecture));
-    std::printf("perf: ARCHITECTURE1 hr=0x%08lx UMA=%d CacheCoherentUMA=%d TileBasedRenderer=%d\n",
+    std::printf("perf: ARCHITECTURE1 hr=0x%08lx UMA=%d CacheCoherentUMA=%d TileBasedRenderer=%d IsolatedMMU=%d\n",
             hresult(hr), architecture.UMA, architecture.CacheCoherentUMA,
-            architecture.TileBasedRenderer);
+            architecture.TileBasedRenderer, architecture.IsolatedMMU);
+    char force[2] = {}, direct[2] = {};
+    const bool forceRequested = GetEnvironmentVariableA("D3D11ON12_COMPAT_ForceCoherentUMA", force, sizeof(force)) == 1 && force[0] == '1';
+    const bool directRequested = GetEnvironmentVariableA("D3D11ON12_COMPAT_UMADirectInitialUpload", direct, sizeof(direct)) == 1 && direct[0] == '1';
+    std::printf("perf: force_coherent_uma_requested=%u direct_upload_requested=%u (driver reports above are unmodified)\n",
+        forceRequested ? 1u : 0u, directRequested ? 1u : 0u);
 
     // What DTL would ask for a CPU-read/write staging resource on a
     // cache-coherent UMA device, in place of a READBACK heap and a copy.
@@ -128,6 +168,7 @@ static void reportUma(ID3D12Device *device)
     heap.Type = D3D12_HEAP_TYPE_CUSTOM;
     heap.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
     heap.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
+    heap.CreationNodeMask = heap.VisibleNodeMask = 1;
 
     D3D12_RESOURCE_DESC buffer = {};
     buffer.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
@@ -187,34 +228,64 @@ static bool adapterHasLuid(IDXGIAdapter *adapter, const LUID &luid)
             && desc.AdapterLuid.HighPart == luid.HighPart;
 }
 
-int main()
+int main(int argc, char **argv)
 {
-    HMODULE d3d12 = LoadLibraryW(L"d3d12.dll");
-    HMODULE d3d11 = LoadLibraryW(L"d3d11.dll");
-    if (!d3d12 || !d3d11)
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    bool capabilitiesOnly = false, umaOnly = false, rawBackend = false;
+    for (int i = 1; i < argc; ++i)
+    {
+        if (!std::strcmp(argv[i], "--capabilities-only")) capabilitiesOnly = true;
+        else if (!std::strcmp(argv[i], "--uma-only")) umaOnly = true;
+        else if (!std::strcmp(argv[i], "--raw-backend")) rawBackend = true;
+        else return 2;
+    }
+    if ((capabilitiesOnly && umaOnly) || (rawBackend && !capabilitiesOnly && !umaOnly)) return 2;
+    // Use a fresh process for each entry point. The ordinary shim wraps the
+    // device vtable; creating a raw device afterwards could return that same
+    // already-wrapped singleton. d3dmt.dll is the tested shim's real target.
+    HMODULE d3d12 = LoadLibraryW(rawBackend ? L"d3dmt.dll" : L"d3d12.dll");
+    HMODULE d3d11 = capabilitiesOnly || umaOnly ? nullptr : LoadLibraryW(L"d3d11.dll");
+    if (!d3d12 || (!capabilitiesOnly && !umaOnly && !d3d11))
     {
         std::printf("load failed: d3d12=%p d3d11=%p\n", (void *)d3d12, (void *)d3d11);
         return 2;
     }
     auto createDevice12 = reinterpret_cast<CreateDevice12Fn>(
             reinterpret_cast<void *>(GetProcAddress(d3d12, "D3D12CreateDevice")));
-    auto on12CreateDevice = reinterpret_cast<On12CreateDeviceFn>(
-            reinterpret_cast<void *>(GetProcAddress(d3d11, "D3D11On12CreateDevice")));
-    if (!createDevice12 || !on12CreateDevice)
+    auto on12CreateDevice = d3d11 ? reinterpret_cast<On12CreateDeviceFn>(
+            reinterpret_cast<void *>(GetProcAddress(d3d11, "D3D11On12CreateDevice"))) : nullptr;
+    if (!createDevice12 || (!capabilitiesOnly && !umaOnly && !on12CreateDevice))
     {
         std::printf("missing export\n");
         return 2;
     }
 
+    // Match normal application startup: D3DMetal's Wine bridge requires DXGI
+    // initialization before a direct D3D12CreateDevice call on this runtime.
+    using InitFactoryFn = HRESULT(WINAPI*)(REFIID, void**);
+    HMODULE initDxgi = LoadLibraryW(L"dxgi.dll");
+    auto initFactory = initDxgi ? reinterpret_cast<InitFactoryFn>(
+        reinterpret_cast<void*>(GetProcAddress(initDxgi, "CreateDXGIFactory1"))) : nullptr;
+    IDXGIFactory1* initialFactory = nullptr;
+    IDXGIAdapter1* initialAdapter = nullptr;
+    if (!initFactory || FAILED(initFactory(IID_IDXGIFactory1, reinterpret_cast<void**>(&initialFactory))) || !initialFactory)
+        return 1;
+    const HRESULT adapterHr = initialFactory->EnumAdapters1(0, &initialAdapter);
+    initialFactory->Release();
+    if (FAILED(adapterHr) || !initialAdapter) return 1;
+
     ID3D12Device *device12 = nullptr;
-    HRESULT hr = createDevice12(nullptr, D3D_FEATURE_LEVEL_11_0, IID_ID3D12Device,
+    HRESULT hr = createDevice12(initialAdapter, D3D_FEATURE_LEVEL_11_0, IID_ID3D12Device,
             reinterpret_cast<void **>(&device12));
+    initialAdapter->Release();
     std::printf("D3D12CreateDevice hr=0x%08lx\n", static_cast<unsigned long>(hr));
     if (FAILED(hr) || !device12)
         return 1;
 
-    reportPsoCache(device12);
+    std::printf("perf: device_creation_entry=%s\n", rawBackend ? "d3dmt.dll (shim bypass)" : "d3d12.dll");
+    if (!capabilitiesOnly && !umaOnly) reportPsoCache(device12);
     reportUma(device12);
+    if (capabilitiesOnly) { device12->Release(); return 0; }
 
     // The adapter an IDXGIDevice on this device must report is the one whose
     // LUID the D3D12 device carries.
@@ -223,7 +294,7 @@ int main()
     auto createFactory1 = dxgi ? reinterpret_cast<CreateFactory1Fn>(
             reinterpret_cast<void *>(GetProcAddress(dxgi, "CreateDXGIFactory1"))) : nullptr;
     IDXGIFactory4 *factory = nullptr;
-    if (createFactory1 && SUCCEEDED(createFactory1(IID_IDXGIFactory4,
+    if (!umaOnly && createFactory1 && SUCCEEDED(createFactory1(IID_IDXGIFactory4,
             reinterpret_cast<void **>(&factory))) && factory)
     {
         LUID luid = device12->GetAdapterLuid();
@@ -239,7 +310,7 @@ int main()
             adapter->Release();
         factory->Release();
     }
-    else
+    else if (!umaOnly)
         std::printf("IDXGIFactory4 unavailable\n");
 
     D3D12_COMMAND_QUEUE_DESC queueDesc = {};
@@ -250,6 +321,15 @@ int main()
     std::printf("CreateCommandQueue hr=0x%08lx\n", static_cast<unsigned long>(hr));
     if (FAILED(hr) || !queue)
         return 1;
+
+    for (DXGI_FORMAT format : {DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM})
+    {
+        const HRESULT gpuHr = uma_probe::check(device12, queue, format);
+        std::printf("perf: UMA GPU visibility format=%u hr=0x%08lx result=%s\n", unsigned(format),
+            static_cast<unsigned long>(gpuHr), gpuHr == S_OK ? "pass" : gpuHr == S_FALSE ? "unsupported" : "fail");
+        if (FAILED(gpuHr) || (umaOnly && gpuHr != S_OK)) return 1;
+    }
+    if (umaOnly) { queue->Release(); device12->Release(); return 0; }
 
     ID3D11Device *device11 = nullptr;
     ID3D11DeviceContext *context11 = nullptr;

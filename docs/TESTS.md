@@ -254,7 +254,7 @@ objects, every 1024 flushes and once more at destruction, taken before the
 teardown frees what is left:
 
 ```
-d3d11on12core census (periodic|device destroyed): flushes=… buffers=… textures=… peak_textures=… rtvs=… peak_rtvs=… orphaned_textures=… peak_orphaned_textures=…
+d3d11on12core census (periodic|device destroyed): flushes=… buffers=… textures=… peak_textures=… rtvs=… peak_rtvs=… orphaned_textures=… peak_orphaned_textures=… srvs=… peak_srvs=…
 ```
 
 The counts are kept whether or not telemetry is on; only the report is gated.
@@ -405,3 +405,18 @@ c++ -std=c++17 -O1 -g -pthread -fsanitize=thread -Icompat \
     tests/relay_batch_ring_test.cpp -o /tmp/relay_batch_ring_tsan
 /tmp/relay_batch_ring_tsan
 ```
+
+
+### UMA memory validation
+
+See [UMA memory management](UMA-MEMORY.md) for the bounded-pool unit tests,
+GPU-visible initial-upload probes, shader sampling/readback test, and isolated
+legacy/balanced/direct benchmark runner. The GPU tests compile in CI but need
+the real Wine/GPTK stack to run.
+
+`tests/d3d11on12srv.c` checks SRV creation error propagation, failed-output
+clearing, mip validation, cross-device/stale handles, atomic binding validation,
+resource retention and idempotent destruction. The public frontend lifetime test
+also covers SRV getters after public release, RTV/SRV hazard unbinding in both
+directions, and ClearState cleanup. Real shader sampling remains the GPU UMA
+harness's responsibility.

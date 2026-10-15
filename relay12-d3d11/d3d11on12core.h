@@ -413,3 +413,21 @@ WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12SetDepthStencilStateV1(
         WineD3D11On12AdapterDevice *, WineD3D11On12PipelineState *, UINT) WINE_D3D11ON12_NOEXCEPT;
 WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12SetRasterizerStateV1(
         WineD3D11On12AdapterDevice *, WineD3D11On12PipelineState *) WINE_D3D11ON12_NOEXCEPT;
+
+/* Pixel Texture2D SRVs, appended exports; existing ABI layouts stay unchanged. */
+typedef struct WineD3D11On12ShaderResourceView
+{
+    UINT size;
+    UINT reserved;
+    void *hDrvView;
+    void *runtimeState;
+} WineD3D11On12ShaderResourceView;
+WINE_D3D11ON12_ASSERT(sizeof(WineD3D11On12ShaderResourceView) == 24);
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12CreateShaderResourceViewV1(
+        WineD3D11On12AdapterDevice *, WineD3D11On12Texture2D *,
+        const D3D11_SHADER_RESOURCE_VIEW_DESC *, WineD3D11On12ShaderResourceView *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12DestroyShaderResourceViewV1(
+        WineD3D11On12ShaderResourceView *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12SetPixelShaderResourcesV1(
+        WineD3D11On12AdapterDevice *, UINT, UINT,
+        WineD3D11On12ShaderResourceView *const *) WINE_D3D11ON12_NOEXCEPT;

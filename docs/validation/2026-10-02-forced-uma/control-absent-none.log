@@ -1,0 +1,20 @@
+perf: UMA custom initialization format=28 width=257 height=9 source_pitch=1040 hr=0x00000000
+perf: UMA custom texture heap hr=0x00000000 type=4 page=3 pool=1
+perf: UMA GPU bytes format=28 readback_pitch=1280 active_bytes=9252 mismatches=0
+perf: UMA custom initialization format=87 width=257 height=9 source_pitch=1040 hr=0x00000000
+perf: UMA custom texture heap hr=0x00000000 type=4 page=3 pool=1
+perf: UMA GPU bytes format=87 readback_pitch=1280 active_bytes=9252 mismatches=0
+[upload] cycle=0 wall_ms=0.976 working_set_bytes=103677952 memory_available=1
+[frame] cycle=0 texture=0 wall_ms=34.253
+[frame] cycle=0 texture=1 wall_ms=15.797
+[sample] cycle=0 textures=2 wall_ms=52.462 working_set_bytes=105881600 memory_available=1
+[upload] cycle=1 wall_ms=0.173 working_set_bytes=105881600 memory_available=1
+[frame] cycle=1 texture=0 wall_ms=0.579
+[frame] cycle=1 texture=1 wall_ms=0.387
+[sample] cycle=1 textures=2 wall_ms=1.449 working_set_bytes=105881600 memory_available=1
+d3d11on12 memory telemetry: profile=balanced reason=explicit-balanced physical_bytes=8589930496 pool_counters_available=1 direct_attempts=0 direct_success=0 direct_fallbacks=0 avoided_staging_bytes=0 reported_uma=0 reported_coherent_uma=0 architecture_hr=0x00000000 force_coherent_uma_requested=0 forced_direct_upload=0 direct_enabled=0
+d3d11on12 pool telemetry: pool=upload retained_bytes=65536 peak_retained_bytes=65536 pending_bytes=0 completed_bytes=65536 allocations=1 reuses=1 trims=0
+d3d11on12 pool telemetry: pool=readback retained_bytes=65536 peak_retained_bytes=65536 pending_bytes=0 completed_bytes=65536 allocations=1 reuses=0 trims=0
+d3d11on12 pool telemetry: pool=decoder retained_bytes=0 peak_retained_bytes=0 pending_bytes=0 completed_bytes=0 allocations=0 reuses=0 trims=0
+d3d11on12core census (device destroyed): flushes=3 buffers=0 textures=0 peak_textures=5 rtvs=0 peak_rtvs=1 orphaned_textures=0 peak_orphaned_textures=0 srvs=0 peak_srvs=1
+[ ok ] UMA initialization, shader sampling and readback

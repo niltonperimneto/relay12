@@ -1,0 +1,8 @@
+d3d11on12core: validate caller device and queue (hr=0x00000000)
+d3d11on12core: load runtime host (hr=0x00000000)
+d3d11on12core: enter runtime host creation (hr=0x00000000)
+d3d11on12core: enter driver OpenAdapter (hr=0x00000000)
+d3d11on12core: leave driver OpenAdapter (hr=0x00000000)
+d3d11on12core: enter driver CreateDevice (hr=0x00000000)
+d3d11on12core: leave driver CreateDevice (hr=0x087a0004)
+d3d11on12core: leave runtime host creation (hr=0x00000000)

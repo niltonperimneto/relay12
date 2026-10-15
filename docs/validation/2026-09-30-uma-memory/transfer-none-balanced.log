@@ -1,0 +1,8 @@
+[info] starting UMA memory test
+[info] initializing DXGI adapter
+[info] DXGI adapter ready
+[info] architecture_hr=00000000 uma=0 coherent=0
+[info] direct_gpu_probe format=28 hr=00000000
+[info] direct_gpu_probe format=87 hr=00000000
+[fail] context->Map(readback, 0, D3D11_MAP_READ, 0, &mapped) hr=887a0004
+[fail] UMA initialization, GPU copy and readback

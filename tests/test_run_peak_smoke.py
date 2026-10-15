@@ -64,14 +64,16 @@ class Arguments(unittest.TestCase):
         self.assertEqual(env["RELAY12_TRACE_CREATION"], "1")
         self.assertEqual(env["RELAY12_EXPERIMENTAL_FRAME"], "1")
         self.assertEqual(env["MTL_HUD_LOG_ENABLED"], "1")
+        self.assertIn("d3d11=n,b;", env["WINEDLLOVERRIDES"])
         self.assertIn("d3d11on12core", env["WINEDLLOVERRIDES"])
-        self.assertEqual(env["WINEDEBUG"], "-all,warn+d3d11")
+        self.assertEqual(env["WINEDEBUG"], "-all,warn+d3d11,+relay,+d3d12")
 
     def test_inherited_winedebug_cannot_silence_the_inventory(self):
-        # CI exports WINEDEBUG=-all; the run must still carry warn+d3d11 last.
-        for inherited, expected in (("-all", "-all,warn+d3d11"),
-                                    ("+seh,-d3d11", "+seh,-d3d11,warn+d3d11"),
-                                    ("", "warn+d3d11")):
+        # CI exports WINEDEBUG=-all; the run must still carry diagnostics last.
+        for inherited, expected in (
+                ("-all", "-all,warn+d3d11,+relay,+d3d12"),
+                ("+seh,-d3d11", "+seh,-d3d11,warn+d3d11,+relay,+d3d12"),
+                ("", "warn+d3d11,+relay,+d3d12")):
             with self.subTest(inherited=inherited):
                 self.assertEqual(self.environment(WINEDEBUG=inherited)["WINEDEBUG"], expected)
 
@@ -88,6 +90,16 @@ class Synchronization(unittest.TestCase):
                 self.assertEqual(env["WINEFSYNC"], "0")
                 self.assertEqual(env["WINESERVER"], "/runtime/bin/wineserver")
                 self.assertEqual(env["WINELOADER"], "/runtime/bin/wine64")
+
+    def test_no_active_server_still_requires_successful_wait(self):
+        absent = runner.subprocess.CalledProcessError(1, "wineserver -k")
+        with mock.patch.object(runner.subprocess, "run", side_effect=[absent, None]) as run:
+            runner.stop_server(pathlib.Path("/runtime/bin/wine64"), {}, None)
+        self.assertEqual(run.call_count, 2)
+        failed = runner.subprocess.CalledProcessError(1, "wineserver -w")
+        with mock.patch.object(runner.subprocess, "run", side_effect=[absent, failed]):
+            with self.assertRaises(runner.subprocess.CalledProcessError):
+                runner.stop_server(pathlib.Path("/runtime/bin/wine64"), {}, None)
 
     def test_server_shutdown_waits_and_does_not_ignore_failure(self):
         env = {"WINEPREFIX": "/test-prefix"}
