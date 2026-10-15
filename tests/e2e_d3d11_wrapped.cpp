@@ -7,6 +7,7 @@
 #include <d3d11.h>
 #include <d3d11on12.h>
 #include <d3d12.h>
+#include <dxgi1_4.h>
 #include <cstdio>
 #include <cstring>
 #include "../compat/relay_d3d12_struct_return.hpp"
@@ -64,7 +65,11 @@ bool run(DXGI_FORMAT format)
     Ref<ID3D11RenderTargetView> view;
     Event event;
     CHECK(event.handle);
-    HR(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_ID3D12Device, device.out()));
+    Ref<IDXGIFactory1> factory;
+    Ref<IDXGIAdapter1> adapter;
+    HR(CreateDXGIFactory1(IID_IDXGIFactory1, factory.out()));
+    HR(factory->EnumAdapters1(0, &adapter.p));
+    HR(D3D12CreateDevice(adapter.p, D3D_FEATURE_LEVEL_11_0, IID_ID3D12Device, device.out()));
     D3D12_COMMAND_QUEUE_DESC q = {};
     q.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
     HR(device->CreateCommandQueue(&q, IID_ID3D12CommandQueue, queue.out()));

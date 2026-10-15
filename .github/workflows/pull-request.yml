@@ -93,6 +93,9 @@ jobs:
           c++ -std=c++17 -O2 -Wall -Wextra -Werror -pthread \
             -Icompat tests/relay_batch_ring_test.cpp -o "$RUNNER_TEMP/relay_batch_ring_test"
           timeout 90 "$RUNNER_TEMP/relay_batch_ring_test"
+          c++ -std=c++17 -O2 -Wall -Wextra -Werror -pthread \
+            -Icompat tests/relay_memory_pool_test.cpp -o "$RUNNER_TEMP/relay_memory_pool_test"
+          timeout 90 "$RUNNER_TEMP/relay_memory_pool_test"
           git -C "$worktree" -c core.whitespace=cr-at-eol diff --check
           # A bypassed struct-returning call fails the MinGW build anyway;
           # this names the call and its wrapper instead of surfacing as a
@@ -250,6 +253,12 @@ jobs:
             -static -Icompat tests/relay_batch_ring_test.cpp -lsynchronization \
             -o "$RUNNER_TEMP/relay_batch_ring_test.exe"
           timeout 90 wine "$RUNNER_TEMP/relay_batch_ring_test.exe"
+          x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Werror \
+            -static -Icompat tests/relay_memory_pool_test.cpp -o "$RUNNER_TEMP/relay_memory_pool_test.exe"
+          timeout 90 wine "$RUNNER_TEMP/relay_memory_pool_test.exe"
+          x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Werror \
+            -static -Icompat tests/relay_uma_upload_test.cpp -luuid -o "$RUNNER_TEMP/relay_uma_upload_test.exe"
+          timeout 90 wine "$RUNNER_TEMP/relay_uma_upload_test.exe"
           x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Werror \
             -static -Icompat tests/relay_batch_submission_bench.cpp -lsynchronization \
             -o "$RUNNER_TEMP/relay_batch_submission_bench.exe"
@@ -461,6 +470,11 @@ jobs:
             -Irelay12-d3d11 -o d3d11on12frame.exe tests/d3d11on12frame.c \
             d3d11on12core.o wine_d3d11_diag.o -ld3d12 -ldxgi -ldxguid -luuid
           WINEDLLOVERRIDES=d3d11on12=n wine d3d11on12frame.exe
+          x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -Werror -Irelay12-d3d11 \
+            -c tests/d3d11on12srv.c -o d3d11on12srv.o
+          x86_64-w64-mingw32-g++ -o d3d11on12srv.exe d3d11on12srv.o \
+            d3d11on12core.o wine_d3d11_diag.o -ld3d12 -ldxgi -ldxguid -luuid
+          WINEDLLOVERRIDES=d3d11on12=n wine d3d11on12srv.exe
           x86_64-w64-mingw32-clang -std=gnu11 -O2 -Wall -Wextra -Werror \
             -Irelay12-d3d11 -o d3d11on12wrapped.exe tests/d3d11on12wrapped.c \
             d3d11on12core.o wine_d3d11_diag.o -ld3d12 -ldxgi -ldxguid -luuid
@@ -512,12 +526,12 @@ jobs:
             tests/e2e_d3d11_triangle.cpp -ld3d12 -ld3dcompiler -luuid
           x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
             -fno-exceptions -fno-rtti -o d3d11_e2e_wrapped.exe \
-            tests/e2e_d3d11_wrapped.cpp -ld3d12 -luuid
+            tests/e2e_d3d11_wrapped.cpp -ld3d12 -ldxgi -luuid
           # Compiled only: it needs a real D3D12 under the full D3D11On12
           # stack, which this lane does not have.
           x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
             -fno-exceptions -fno-rtti -o d3d11_e2e_overhead.exe \
-            tests/e2e_d3d11_overhead.cpp -ld3d12 -ld3d11 -luuid
+            tests/e2e_d3d11_overhead.cpp -ld3d12 -ld3d11 -ldxgi -ld3dcompiler -luuid
           # Compiled only, for the same reason as the overhead benchmark: it
           # holds pipeline creation on a real ID3D12Device to prove
           # D3D11ON12_COMPAT_NonBlockingPSOs skips draws, never dispatches.
@@ -526,8 +540,11 @@ jobs:
             tests/e2e_d3d11_async_pso.cpp -ld3d12 -ld3d11 -ld3dcompiler -luuid
           # Compiled only: a hardware probe, run through Whisky on D3DMetal.
           x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
-            -fno-exceptions -fno-rtti -o peak_on12_probe.exe \
+            -static -fno-exceptions -fno-rtti -o peak_on12_probe.exe \
             tests/peak_on12_probe.cpp -luuid
+          x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
+            -static -fno-exceptions -fno-rtti -o d3d11_e2e_uma.exe \
+            tests/e2e_uma_memory.cpp -ld3d12 -ldxgi -ld3dcompiler -lpsapi -luuid
 
       - name: Run the D3D11-on-12 concurrency stress
         run: |
@@ -771,7 +788,7 @@ jobs:
         run: |
           mkdir -p artifacts/first-frame
           cp d3d11shim.dll artifacts/first-frame/d3d11.dll
-          cp d3d11on12core.dll d3d11on12host.dll d3d11_e2e_triangle.exe d3d11_e2e_wrapped.exe artifacts/first-frame/
+          cp d3d11on12core.dll d3d11on12host.dll d3d11_e2e_triangle.exe d3d11_e2e_wrapped.exe d3d11_e2e_uma.exe peak_on12_probe.exe artifacts/first-frame/
           cp "$RUNNER_TEMP/d3d11on12-build/src/d3d11on12.dll" artifacts/first-frame/
 
       - name: Upload first-frame runtime

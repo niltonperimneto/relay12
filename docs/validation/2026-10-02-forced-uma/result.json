@@ -1,0 +1,189 @@
+{
+  "date_utc": "2026-10-02",
+  "hardware": "Apple A18 Pro / 8 GiB / macOS 27.2",
+  "runtime": "isolated WineCX GPTK 4.7.54 / Wine 11.17 / D3DMetal 4.0b2",
+  "patch_commit": "a0d97765a803028c85bfd8603d03dd730f8f2f2a",
+  "probe_sha256": "c1a209276590b02548ed96cdc2fe76beed129974261f7c856e2602b078e114f0",
+  "probe_compiler": "llvm-mingw 20240619 ucrt clang++",
+  "architecture": {
+    "shim": {
+      "UMA": false,
+      "CacheCoherentUMA": false,
+      "query_module": "d3d12.dll"
+    },
+    "backend": {
+      "UMA": false,
+      "CacheCoherentUMA": false,
+      "query_module": "d3dmt.dll"
+    },
+    "legacy_bridge_backend": {
+      "UMA": false,
+      "CacheCoherentUMA": false,
+      "query_module": "d3dmt.dll"
+    },
+    "query_hresult": "S_OK",
+    "poison_outputs_overwritten": true
+  },
+  "raw_custom_gpu": {
+    "shim": {
+      "RGBA8": "pass",
+      "BGRA8": "pass"
+    },
+    "backend": {
+      "RGBA8": "pass",
+      "BGRA8": "pass"
+    },
+    "source_pitch": 1040,
+    "readback_pitch": 1280,
+    "active_bytes_per_format": 9252,
+    "mismatches": 0,
+    "actual_heap": "CUSTOM / WRITE_BACK / L0"
+  },
+  "direct_on12_force_validation": {
+    "msync": {
+      "legacy": {
+        "pixels": "byte-exact RGBA8/BGRA8 shader sampling and readback",
+        "telemetry": {
+          "profile": "legacy",
+          "reason": "explicit-legacy",
+          "physical_bytes": "8589930496",
+          "pool_counters_available": "0",
+          "direct_attempts": "0",
+          "direct_success": "0",
+          "direct_fallbacks": "0",
+          "avoided_staging_bytes": "0",
+          "reported_uma": "0",
+          "reported_coherent_uma": "0",
+          "architecture_hr": "0x00000000",
+          "force_coherent_uma_requested": "1",
+          "forced_direct_upload": "0",
+          "direct_enabled": "0"
+        },
+        "pass": true
+      },
+      "balanced": {
+        "pixels": "byte-exact RGBA8/BGRA8 shader sampling and readback",
+        "telemetry": {
+          "profile": "balanced",
+          "reason": "explicit-balanced",
+          "physical_bytes": "8589930496",
+          "pool_counters_available": "1",
+          "direct_attempts": "0",
+          "direct_success": "0",
+          "direct_fallbacks": "0",
+          "avoided_staging_bytes": "0",
+          "reported_uma": "0",
+          "reported_coherent_uma": "0",
+          "architecture_hr": "0x00000000",
+          "force_coherent_uma_requested": "1",
+          "forced_direct_upload": "0",
+          "direct_enabled": "0"
+        },
+        "pass": true
+      },
+      "direct": {
+        "pixels": "byte-exact RGBA8/BGRA8 shader sampling and readback",
+        "telemetry": {
+          "profile": "balanced",
+          "reason": "explicit-balanced",
+          "physical_bytes": "8589930496",
+          "pool_counters_available": "1",
+          "direct_attempts": "4",
+          "direct_success": "4",
+          "direct_fallbacks": "0",
+          "avoided_staging_bytes": "45072",
+          "reported_uma": "0",
+          "reported_coherent_uma": "0",
+          "architecture_hr": "0x00000000",
+          "force_coherent_uma_requested": "1",
+          "forced_direct_upload": "1",
+          "direct_enabled": "1"
+        },
+        "pass": true
+      }
+    },
+    "none": {
+      "legacy": {
+        "pixels": "byte-exact RGBA8/BGRA8 shader sampling and readback",
+        "telemetry": {
+          "profile": "legacy",
+          "reason": "explicit-legacy",
+          "physical_bytes": "8589930496",
+          "pool_counters_available": "0",
+          "direct_attempts": "0",
+          "direct_success": "0",
+          "direct_fallbacks": "0",
+          "avoided_staging_bytes": "0",
+          "reported_uma": "0",
+          "reported_coherent_uma": "0",
+          "architecture_hr": "0x00000000",
+          "force_coherent_uma_requested": "1",
+          "forced_direct_upload": "0",
+          "direct_enabled": "0"
+        },
+        "pass": true
+      },
+      "balanced": {
+        "pixels": "byte-exact RGBA8/BGRA8 shader sampling and readback",
+        "telemetry": {
+          "profile": "balanced",
+          "reason": "explicit-balanced",
+          "physical_bytes": "8589930496",
+          "pool_counters_available": "1",
+          "direct_attempts": "0",
+          "direct_success": "0",
+          "direct_fallbacks": "0",
+          "avoided_staging_bytes": "0",
+          "reported_uma": "0",
+          "reported_coherent_uma": "0",
+          "architecture_hr": "0x00000000",
+          "force_coherent_uma_requested": "1",
+          "forced_direct_upload": "0",
+          "direct_enabled": "0"
+        },
+        "pass": true
+      },
+      "direct": {
+        "pixels": "byte-exact RGBA8/BGRA8 shader sampling and readback",
+        "telemetry": {
+          "profile": "balanced",
+          "reason": "explicit-balanced",
+          "physical_bytes": "8589930496",
+          "pool_counters_available": "1",
+          "direct_attempts": "4",
+          "direct_success": "4",
+          "direct_fallbacks": "0",
+          "avoided_staging_bytes": "45072",
+          "reported_uma": "0",
+          "reported_coherent_uma": "0",
+          "architecture_hr": "0x00000000",
+          "force_coherent_uma_requested": "1",
+          "forced_direct_upload": "1",
+          "direct_enabled": "1"
+        },
+        "pass": true
+      }
+    }
+  },
+  "ci": {
+    "run": "https://github.com/niltonperimneto/relay12/actions/runs/36956903658",
+    "compiled_commit": "a0d97765a803028c85bfd8603d03dd730f8f2f2a",
+    "semaphore": "pass",
+    "ring": "pass"
+  },
+  "artifact_sha256": {
+    "d3d11on12host.dll": "b7c8fec1cc77b172876adde5c6dbb1e7cee83fde35c99b90eed700407fe0e949",
+    "d3d11on12.dll": "8048eab0312f5cf562f0fbd99be88113e7267e40037541690211224da37757a0",
+    "d3d11_e2e_uma.exe": "822f980a7ba4db594b8d55bbb24366b00ba3e95ade5ffaa64fa55cd9fa8360ba",
+    "d3d11on12core.dll": "d40ea61789d3f2ddc5a2857c17d23e429400ab202ea8aa321fb619a6ce61cbaf",
+    "peak_on12_probe.exe": "fc6fc9e0d5cc8970029dd0844b739e2f765d1e83b29b276b3227ee2c34848370",
+    "d3d11.dll": "92eac0f69084d5c53256dcc6e375d9fba52b68b2a13f75293bece9daa0f2bee7",
+    "d3d11_e2e_triangle.exe": "04d7a1207fe1d3ad1d0a706ff9a8d6c0d3dcc4312048a24dc94dc278e44373de",
+    "d3d11_e2e_wrapped.exe": "f91066150839b97cedc0a55305a1a490385a3e5d3aa207fd5b0d6071cfe2a9cb"
+  },
+  "installed_host_sha256": "b7c8fec1cc77b172876adde5c6dbb1e7cee83fde35c99b90eed700407fe0e949",
+  "controls": "six cases pass; see controls.json",
+  "performance_qualified": false,
+  "peak_qualified": false,
+  "automatic_balanced_activation": false
+}

@@ -1,0 +1,21 @@
+D3D12CreateDevice hr=0x00000000
+perf: device_creation_entry=d3dmt.dll (shim bypass)
+perf: architecture_query_module=d3dmt.dll
+perf: physical_bytes=8589930496 memory_query=1 upload_page=2 readback_page=3
+perf: heap_upload type=4 pool=1 creation_mask=1 visible_mask=1 heap_readback type=4 pool=1
+perf: node_count=1
+perf: ARCHITECTURE hr=0x00000000 UMA=0 CacheCoherentUMA=0 TileBasedRenderer=0
+perf: ARCHITECTURE1 hr=0x00000000 UMA=0 CacheCoherentUMA=0 TileBasedRenderer=0 IsolatedMMU=0
+perf: force_coherent_uma_requested=0 direct_upload_requested=0 (driver reports above are unmodified)
+perf: CUSTOM WRITE_BACK/L0 buffer hr=0x00000000
+perf: CUSTOM WRITE_BACK/L0 buffer Map hr=0x00000000 cpu_round_trip=yes
+perf: CUSTOM WRITE_BACK/L0 texture hr=0x00000000
+CreateCommandQueue hr=0x00000000
+perf: UMA custom initialization format=28 width=257 height=9 source_pitch=1040 hr=0x00000000
+perf: UMA custom texture heap hr=0x00000000 type=4 page=3 pool=1
+perf: UMA GPU bytes format=28 readback_pitch=1280 active_bytes=9252 mismatches=0
+perf: UMA GPU visibility format=28 hr=0x00000000 result=pass
+perf: UMA custom initialization format=87 width=257 height=9 source_pitch=1040 hr=0x00000000
+perf: UMA custom texture heap hr=0x00000000 type=4 page=3 pool=1
+perf: UMA GPU bytes format=87 readback_pitch=1280 active_bytes=9252 mismatches=0
+perf: UMA GPU visibility format=87 hr=0x00000000 result=pass
