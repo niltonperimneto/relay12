@@ -7,19 +7,9 @@ on:
 permissions:
   contents: read
 
+# The lane needs a self-hosted Windows X64 runner labelled relay12-ewdk; it
+# stays skipped until RELAY12_EWDK_CI_ENABLED=true is set on the repository.
 jobs:
-  availability:
-    runs-on: ubuntu-26.04
-    steps:
-      - name: Report integration-lane availability
-        run: |
-          if [ '${{ vars.RELAY12_EWDK_CI_ENABLED }}' = 'true' ]; then
-            echo 'The self-hosted Windows/EWDK integration lane is enabled.'
-          else
-            echo 'The integration lane is disabled. Set RELAY12_EWDK_CI_ENABLED=true'
-            echo 'after registering a Windows X64 runner labelled relay12-ewdk.'
-          fi
-
   build-linked-driver:
     if: vars.RELAY12_EWDK_CI_ENABLED == 'true'
     runs-on: [self-hosted, Windows, X64, relay12-ewdk]

@@ -1,0 +1,35 @@
+name: Set up llvm-mingw
+description: Restore the pinned llvm-mingw toolchain from the cache, or download it once, and put it on PATH.
+inputs:
+  version:
+    description: llvm-mingw release tag
+    default: '20240619'
+  sha256:
+    description: SHA-256 of the release tarball
+    default: 27d33157cc252c29ad6f777a96a0d94176fea1b534ff09b5071485def143b90e
+runs:
+  using: composite
+  steps:
+    - id: paths
+      shell: bash
+      run: |
+        name="llvm-mingw-${{ inputs.version }}-ucrt-ubuntu-20.04-x86_64"
+        echo "name=$name" >> "$GITHUB_OUTPUT"
+        echo "dir=$RUNNER_TEMP/$name" >> "$GITHUB_OUTPUT"
+    - id: cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.paths.outputs.dir }}
+        key: ${{ steps.paths.outputs.name }}
+    - if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        name="${{ steps.paths.outputs.name }}"
+        curl -fsSL --retry 3 -o "$RUNNER_TEMP/$name.tar.xz" \
+          "https://github.com/mstorsjo/llvm-mingw/releases/download/${{ inputs.version }}/$name.tar.xz"
+        echo "${{ inputs.sha256 }}  $RUNNER_TEMP/$name.tar.xz" | sha256sum -c -
+        tar -xf "$RUNNER_TEMP/$name.tar.xz" -C "$RUNNER_TEMP"
+        rm "$RUNNER_TEMP/$name.tar.xz"
+    - shell: bash
+      run: echo "${{ steps.paths.outputs.dir }}/bin" >> "$GITHUB_PATH"
