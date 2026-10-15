@@ -11,6 +11,9 @@ on:
 permissions:
   contents: read
 
+env:
+  DXC_COMMIT: 416fab6b5c4ba956a320d9131102304da995edfc
+
 jobs:
   build-converter:
     runs-on: windows-2022
@@ -44,3 +47,32 @@ jobs:
           path: converter/
           if-no-files-found: error
           retention-days: 14
+
+  # A release outlives the 14-day artifact; publish-runtime in
+  # pull-request.yml takes dxilconv.dll from it on every main build.
+  release:
+    needs: build-converter
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dxilconv-416fab6b-x64
+          path: converter
+      - name: Publish dxilconv-${{ env.DXC_COMMIT }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="dxilconv-${DXC_COMMIT:0:8}"
+          (cd converter && sha256sum dxilconv.dll > dxilconv.dll.sha256)
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" converter/* --clobber
+          else
+            gh release create "$tag" converter/* --title "dxilconv $tag" \
+              --notes "microsoft/DirectXShaderCompiler $DXC_COMMIT (v1.8.2407), built by build-dxilconv.yml."
+          fi
