@@ -4,7 +4,7 @@
 set -eu
 
 source_dir=${1:-third_party/D3D11On12}
-repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+repository_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 expected_revision=5d8898b43d817e0fd0f58ed87ef645c0cf6fac27
 
 test -d "$source_dir"
