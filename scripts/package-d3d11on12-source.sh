@@ -7,7 +7,7 @@ if [ "$#" -ne 1 ]; then
     exit 2
 fi
 
-repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+repo=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 output=$1
 work=$(mktemp -d "${TMPDIR:-/tmp}/d3d11on12-source.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM

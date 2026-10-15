@@ -3,9 +3,9 @@
 # Compile both frontends from an already patched, pinned Wine tree. Keeping
 # this separate from patch application makes the same gate usable on a Mac.
 set -eu
-source_dir=$(CDPATH= cd -- "${1:?usage: build-wine-d3d11-host.sh WINE_TREE BUILD_DIR}" && pwd)
+source_dir=$(CDPATH='' cd -- "${1:?usage: build-wine-d3d11-host.sh WINE_TREE BUILD_DIR}" && pwd)
 mkdir -p "${2:?missing build directory}"
-build_dir=$(CDPATH= cd -- "$2" && pwd)
+build_dir=$(CDPATH='' cd -- "$2" && pwd)
 cd "$build_dir"
 # Wine's compile-only configure probes also pass linker options to Clang.
 # Ignore that driver-only warning while retaining -Werror for source warnings.
