@@ -517,6 +517,13 @@ jobs:
           set -euo pipefail
           cp "$RUNNER_TEMP/wine-host-build/dlls/d3d11on12host/x86_64-windows/d3d11on12host.dll" .
           x86_64-w64-mingw32-clang -std=gnu11 -O2 -Wall -Wextra -Werror \
+            -Irelay12-d3d11 -o d3d11on12lazy.exe tests/d3d11on12lazy.c \
+            -ldxguid -luuid
+          WINEDLLOVERRIDES='d3d11on12,d3d11on12core=n;d3d11on12host=b;mscoree,mshtml=' \
+            timeout 60s wine d3d11on12lazy.exe
+          WINEDLLOVERRIDES='d3d11on12=;d3d11on12core=n;d3d11on12host=b;mscoree,mshtml=' \
+            timeout 60s wine d3d11on12lazy.exe missing
+          x86_64-w64-mingw32-clang -std=gnu11 -O2 -Wall -Wextra -Werror \
             -Irelay12-d3d11 -o d3d11on12frontend.exe tests/d3d11on12frontend.c \
             -ld3dcompiler -ldxguid -luuid
           WINEDLLOVERRIDES='d3d11on12,d3d11on12core=n;d3d11on12host=b;mscoree,mshtml=' \
@@ -809,6 +816,7 @@ jobs:
             d3d11on12frame.exe
             d3d11on12wrapped.exe
             d3d11on12frontend.exe
+            d3d11on12lazy.exe
             d3d11shimstatus.exe
             d3d11ddilayout.exe
             d3d11ddi_triangle.exe

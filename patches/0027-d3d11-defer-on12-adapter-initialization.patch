@@ -1,0 +1,581 @@
+Subject: d3d11: defer On12 driver allocation until backend work is requested
+
+Unity's D3D12 path can create an On12 frontend only to identify its DXGI
+adapter. Opening DTL at that point reserves heaps for a device that never
+submits D3D11 work. Preserve the frontend and controlling identity, validate
+caller inputs through an allocation-free core export, and open the adapter
+once on first backend use. Keep initialization failures terminal and visible
+through GetDeviceRemovedReason. Empty ClearState and unused teardown have no
+driver state to reset. Ordinary WineD3D paths retain their dispatch.
+
+Requires WineD3D11On12ValidateDeviceV1 (ordinal 45). Applies after patches
+0001-0026 to WineCX 7dbc5b5322a6ef3fb04bdc643c64b188fd641149.
+
+diff --git a/dlls/d3d11/d3d11_main.c b/dlls/d3d11/d3d11_main.c
+index 038e3fa2..811713b6 100644
+--- a/dlls/d3d11/d3d11_main.c
++++ b/dlls/d3d11/d3d11_main.c
+@@ -504,6 +504,11 @@ typedef HRESULT (WINAPI *wine_d3d11on12_get_interface_fn)(UINT, UINT,
+ struct d3d11_on12_backend
+ {
+     HMODULE core_module;
++    INIT_ONCE initialization;
++    LONG initialization_hr;
++    wine_d3d11on12_open_adapter_fn open_adapter;
++    IUnknown *queue;
++    UINT node_mask;
+     struct wine_d3d11on12_core_interface core;
+     struct wine_d3d11on12_adapter_device adapter;
+     ID3D12Device *device12;
+@@ -545,6 +550,52 @@ struct d3d11_on12_backend
+     wine_d3d11on12_set_shader_fn set_pixel_shader;
+ };
+
++/* INIT_ONCE publishes a terminal result even on failure: a void context
++ * method cannot report allocation failure, and subsequent calls must neither
++ * retry allocation nor dispatch through a partially initialized adapter. */
++static BOOL CALLBACK d3d11_on12_initialize_backend(INIT_ONCE *once, void *param, void **context)
++{
++    struct d3d11_on12_backend *backend = param;
++    IUnknown *queues[] = {backend->queue};
++    HRESULT hr;
++
++    (void)once;
++    (void)context;
++    backend->adapter.size = sizeof(backend->adapter);
++    hr = backend->open_adapter((IUnknown *)backend->device12, queues, 1,
++            backend->node_mask, &backend->adapter);
++    if (SUCCEEDED(hr))
++        hr = backend->check_frame_support(&backend->adapter);
++    if (FAILED(hr))
++    {
++        if (backend->adapter.runtime_state)
++            backend->core.close_adapter_device(&backend->adapter);
++        WARN("Deferred D3D11On12 adapter initialization failed, hr %#lx.\n", hr);
++    }
++    InterlockedExchange(&backend->initialization_hr, hr);
++    return TRUE;
++}
++
++static HRESULT d3d11_on12_initialization_result(struct d3d11_on12_backend *backend)
++{
++    return InterlockedCompareExchange(&backend->initialization_hr, 0, 0);
++}
++
++static HRESULT d3d11_on12_ensure_backend(struct d3d11_on12_backend *backend)
++{
++    HRESULT hr = d3d11_on12_initialization_result(backend);
++    if (FAILED(hr))
++        return hr;
++    if (!InitOnceExecuteOnce(&backend->initialization, d3d11_on12_initialize_backend,
++            backend, NULL))
++        InterlockedExchange(&backend->initialization_hr, E_FAIL);
++    return d3d11_on12_initialization_result(backend);
++}
++
++#define D3D11_ON12_CALL(backend, call) \
++    (SUCCEEDED(d3d11_on12_ensure_backend(backend)) ? (call) : \
++    d3d11_on12_initialization_result(backend))
++
+ static void d3d11_on12_backend_destroy(struct d3d_device *device)
+ {
+     struct d3d11_on12_backend *backend = device->backend_private;
+@@ -553,6 +604,8 @@ static void d3d11_on12_backend_destroy(struct d3d_device *device)
+         return;
+     if (backend->adapter.runtime_state && backend->core.close_adapter_device)
+         backend->core.close_adapter_device(&backend->adapter);
++    if (backend->queue)
++        IUnknown_Release(backend->queue);
+     if (backend->device12)
+         ID3D12Device_Release(backend->device12);
+     if (backend->core_module)
+@@ -576,7 +629,8 @@ static UINT d3d11_on12_backend_get_creation_flags(struct d3d_device *device)
+ static HRESULT d3d11_on12_backend_get_removed_reason(struct d3d_device *device)
+ {
+     struct d3d11_on12_backend *backend = device->backend_private;
+-    return ID3D12Device_GetDeviceRemovedReason(backend->device12);
++    HRESULT hr = d3d11_on12_initialization_result(backend);
++    return FAILED(hr) ? hr : ID3D12Device_GetDeviceRemovedReason(backend->device12);
+ }
+
+ static void d3d11_on12_backend_flush(struct d3d11_device_context *context)
+@@ -588,8 +642,8 @@ static void d3d11_on12_backend_flush(struct d3d11_device_context *context)
+     /* D3DWDDM2_0DDI_CONTEXTTYPE_ALL is zero.  A D3D11 immediate-context
+      * Flush has no narrower command-list type, and must submit every batch
+      * accumulated by the mapping layer. */
+-    hr = backend->core.flush_adapter_device(&backend->adapter, 0, 0,
+-            &submitted);
++    hr = D3D11_ON12_CALL(backend, backend->core.flush_adapter_device(&backend->adapter, 0, 0,
++            &submitted));
+     if (FAILED(hr))
+         WARN("D3D11On12 DDI flush failed, hr %#lx.\n", hr);
+ }
+@@ -598,8 +652,8 @@ static void d3d11_on12_backend_draw(struct d3d11_device_context *context,
+         UINT vertex_count, UINT start_vertex_location)
+ {
+     struct d3d11_on12_backend *backend = context->device->backend_private;
+-    HRESULT hr = backend->core.draw_adapter_device(&backend->adapter,
+-            vertex_count, start_vertex_location);
++    HRESULT hr = D3D11_ON12_CALL(backend, backend->core.draw_adapter_device(&backend->adapter,
++            vertex_count, start_vertex_location));
+
+     if (FAILED(hr))
+         WARN("D3D11On12 DDI draw failed, hr %#lx.\n", hr);
+@@ -610,8 +664,8 @@ static void d3d11_on12_backend_dispatch_draw(
+         UINT count1, UINT start0, INT base_vertex, UINT start_instance)
+ {
+     struct d3d11_on12_backend *backend = context->device->backend_private;
+-    HRESULT hr = backend->core.dispatch_draw(&backend->adapter, kind, count0,
+-            count1, start0, base_vertex, start_instance);
++    HRESULT hr = D3D11_ON12_CALL(backend, backend->core.dispatch_draw(&backend->adapter, kind, count0,
++            count1, start0, base_vertex, start_instance));
+     if (FAILED(hr))
+         WARN("D3D11On12 extended DDI draw failed, hr %#lx.\n", hr);
+ }
+@@ -646,8 +700,8 @@ static void d3d11_on12_backend_set_primitive_topology(
+         D3D11_PRIMITIVE_TOPOLOGY topology)
+ {
+     struct d3d11_on12_backend *backend = context->device->backend_private;
+-    HRESULT hr = backend->core.set_primitive_topology(&backend->adapter,
+-            topology);
++    HRESULT hr = D3D11_ON12_CALL(backend, backend->core.set_primitive_topology(&backend->adapter,
++            topology));
+     if (FAILED(hr))
+         WARN("D3D11On12 IA topology dispatch failed, hr %#lx.\n", hr);
+ }
+@@ -711,8 +765,8 @@ static HRESULT d3d11_on12_backend_create_buffer(struct d3d_device *device,
+ {
+     struct d3d11_on12_backend *backend = device->backend_private;
+     HRESULT hr;
+-    hr = backend->create_buffer(&backend->adapter, desc, data,
+-            (struct wine_d3d11on12_buffer *)&buffer->backend_buffer);
++    hr = D3D11_ON12_CALL(backend, backend->create_buffer(&backend->adapter, desc, data,
++            (struct wine_d3d11on12_buffer *)&buffer->backend_buffer));
+     if (SUCCEEDED(hr))
+     {
+         buffer->backend_child.refs = 1;
+@@ -726,8 +780,8 @@ static void d3d11_on12_backend_destroy_buffer(struct d3d_device *device,
+         struct d3d_buffer *buffer)
+ {
+     struct d3d11_on12_backend *backend = device->backend_private;
+-    HRESULT hr = backend->destroy_buffer(
+-            (struct wine_d3d11on12_buffer *)&buffer->backend_buffer);
++    HRESULT hr = D3D11_ON12_CALL(backend, backend->destroy_buffer(
++            (struct wine_d3d11on12_buffer *)&buffer->backend_buffer));
+     if (FAILED(hr))
+         WARN("D3D11On12 buffer destruction failed, hr %#lx.\n", hr);
+ }
+@@ -738,8 +792,8 @@ static HRESULT d3d11_on12_backend_create_texture2d(struct d3d_device *device,
+ {
+     struct d3d11_on12_backend *backend = device->backend_private;
+     HRESULT hr;
+-    hr = backend->create_texture2d(&backend->adapter, desc, data,
+-            (struct wine_d3d11on12_texture2d *)&texture->backend_texture);
++    hr = D3D11_ON12_CALL(backend, backend->create_texture2d(&backend->adapter, desc, data,
++            (struct wine_d3d11on12_texture2d *)&texture->backend_texture));
+     if (SUCCEEDED(hr))
+     {
+         texture->backend_child.refs = 1;
+@@ -758,8 +812,8 @@ static void d3d11_on12_backend_destroy_texture2d(struct d3d_device *device,
+         struct d3d_texture2d *texture)
+ {
+     struct d3d11_on12_backend *backend = device->backend_private;
+-    HRESULT hr = backend->destroy_texture2d(
+-            (struct wine_d3d11on12_texture2d *)&texture->backend_texture);
++    HRESULT hr = D3D11_ON12_CALL(backend, backend->destroy_texture2d(
++            (struct wine_d3d11on12_texture2d *)&texture->backend_texture));
+     if (FAILED(hr))
+         WARN("D3D11On12 texture destruction failed, hr %#lx.\n", hr);
+ }
+@@ -784,8 +838,8 @@ static void d3d11_on12_backend_set_vertex_buffers(
+                 ? (struct wine_d3d11on12_buffer *)&buffer->backend_buffer
+                 : NULL;
+     }
+-    hr = backend->set_vertex_buffers(&backend->adapter, start_slot,
+-            buffer_count, handles, strides, offsets);
++    hr = D3D11_ON12_CALL(backend, backend->set_vertex_buffers(&backend->adapter, start_slot,
++            buffer_count, handles, strides, offsets));
+     if (FAILED(hr))
+         WARN("D3D11On12 vertex-buffer binding failed, hr %#lx.\n", hr);
+     if (SUCCEEDED(hr))
+@@ -802,9 +856,9 @@ static void d3d11_on12_backend_set_index_buffer(
+ {
+     struct d3d11_on12_backend *backend = context->device->backend_private;
+     struct d3d_buffer *buffer_impl = unsafe_impl_from_ID3D11Buffer(buffer);
+-    HRESULT hr = backend->set_index_buffer(&backend->adapter,
++    HRESULT hr = D3D11_ON12_CALL(backend, backend->set_index_buffer(&backend->adapter,
+             buffer_impl ? (struct wine_d3d11on12_buffer *)
+-                    &buffer_impl->backend_buffer : NULL, format, offset);
++                    &buffer_impl->backend_buffer : NULL, format, offset));
+     if (FAILED(hr))
+         WARN("D3D11On12 index-buffer binding failed, hr %#lx.\n", hr);
+     if (SUCCEEDED(hr))
+@@ -817,9 +871,9 @@ static HRESULT d3d11_on12_backend_create_input_layout(struct d3d_device *device,
+ {
+     struct d3d11_on12_backend *backend = device->backend_private;
+     HRESULT hr;
+-    hr = backend->create_input_layout(&backend->adapter, elements, registers,
++    hr = D3D11_ON12_CALL(backend, backend->create_input_layout(&backend->adapter, elements, registers,
+             element_count, (struct wine_d3d11on12_input_layout *)
+-                    &layout->backend_layout);
++                    &layout->backend_layout));
+     if (SUCCEEDED(hr))
+     {
+         layout->backend_child.refs = 1;
+@@ -833,8 +887,8 @@ static void d3d11_on12_backend_destroy_input_layout(struct d3d_device *device,
+         struct d3d_input_layout *layout)
+ {
+     struct d3d11_on12_backend *backend = device->backend_private;
+-    HRESULT hr = backend->destroy_input_layout(
+-            (struct wine_d3d11on12_input_layout *)&layout->backend_layout);
++    HRESULT hr = D3D11_ON12_CALL(backend, backend->destroy_input_layout(
++            (struct wine_d3d11on12_input_layout *)&layout->backend_layout));
+     if (FAILED(hr))
+         WARN("D3D11On12 input-layout destruction failed, hr %#lx.\n", hr);
+ }
+@@ -845,9 +899,9 @@ static void d3d11_on12_backend_set_input_layout(
+     struct d3d11_on12_backend *backend = context->device->backend_private;
+     struct d3d_input_layout *layout_impl =
+             unsafe_impl_from_ID3D11InputLayout(layout);
+-    HRESULT hr = backend->set_input_layout(&backend->adapter,
++    HRESULT hr = D3D11_ON12_CALL(backend, backend->set_input_layout(&backend->adapter,
+             layout_impl ? (struct wine_d3d11on12_input_layout *)
+-                    &layout_impl->backend_layout : NULL);
++                    &layout_impl->backend_layout : NULL));
+     if (FAILED(hr))
+         WARN("D3D11On12 input-layout binding failed, hr %#lx.\n", hr);
+     if (SUCCEEDED(hr))
+@@ -860,9 +914,9 @@ static HRESULT d3d11_on12_backend_create_vertex_shader(
+ {
+     struct d3d11_on12_backend *backend = device->backend_private;
+     HRESULT hr;
+-    hr = backend->create_vertex_shader(&backend->adapter, byte_code,
++    hr = D3D11_ON12_CALL(backend, backend->create_vertex_shader(&backend->adapter, byte_code,
+             byte_code_length, (struct wine_d3d11on12_shader *)
+-                    &shader->backend_shader);
++                    &shader->backend_shader));
+     if (SUCCEEDED(hr))
+     {
+         shader->backend_child.refs = 1;
+@@ -878,9 +932,9 @@ static HRESULT d3d11_on12_backend_create_pixel_shader(
+ {
+     struct d3d11_on12_backend *backend = device->backend_private;
+     HRESULT hr;
+-    hr = backend->create_pixel_shader(&backend->adapter, byte_code,
++    hr = D3D11_ON12_CALL(backend, backend->create_pixel_shader(&backend->adapter, byte_code,
+             byte_code_length, (struct wine_d3d11on12_shader *)
+-                    &shader->backend_shader);
++                    &shader->backend_shader));
+     if (SUCCEEDED(hr))
+     {
+         shader->backend_child.refs = 1;
+@@ -894,8 +948,8 @@ static void d3d11_on12_backend_destroy_vertex_shader(
+         struct d3d_device *device, struct d3d_vertex_shader *shader)
+ {
+     struct d3d11_on12_backend *backend = device->backend_private;
+-    HRESULT hr = backend->destroy_shader((struct wine_d3d11on12_shader *)
+-            &shader->backend_shader);
++    HRESULT hr = D3D11_ON12_CALL(backend, backend->destroy_shader((struct wine_d3d11on12_shader *)
++            &shader->backend_shader));
+     if (FAILED(hr))
+         WARN("D3D11On12 vertex-shader destruction failed, hr %#lx.\n", hr);
+ }
+@@ -904,8 +958,8 @@ static void d3d11_on12_backend_destroy_pixel_shader(
+         struct d3d_device *device, struct d3d_pixel_shader *shader)
+ {
+     struct d3d11_on12_backend *backend = device->backend_private;
+-    HRESULT hr = backend->destroy_shader((struct wine_d3d11on12_shader *)
+-            &shader->backend_shader);
++    HRESULT hr = D3D11_ON12_CALL(backend, backend->destroy_shader((struct wine_d3d11on12_shader *)
++            &shader->backend_shader));
+     if (FAILED(hr))
+         WARN("D3D11On12 pixel-shader destruction failed, hr %#lx.\n", hr);
+ }
+@@ -916,9 +970,9 @@ static void d3d11_on12_backend_set_vertex_shader(
+     struct d3d11_on12_backend *backend = context->device->backend_private;
+     struct d3d_vertex_shader *shader_impl =
+             unsafe_impl_from_ID3D11VertexShader(shader);
+-    HRESULT hr = backend->set_vertex_shader(&backend->adapter,
++    HRESULT hr = D3D11_ON12_CALL(backend, backend->set_vertex_shader(&backend->adapter,
+             shader_impl ? (struct wine_d3d11on12_shader *)
+-                    &shader_impl->backend_shader : NULL);
++                    &shader_impl->backend_shader : NULL));
+     if (FAILED(hr))
+         WARN("D3D11On12 vertex-shader binding failed, hr %#lx.\n", hr);
+     if (SUCCEEDED(hr))
+@@ -931,9 +985,9 @@ static void d3d11_on12_backend_set_pixel_shader(
+     struct d3d11_on12_backend *backend = context->device->backend_private;
+     struct d3d_pixel_shader *shader_impl =
+             unsafe_impl_from_ID3D11PixelShader(shader);
+-    HRESULT hr = backend->set_pixel_shader(&backend->adapter,
++    HRESULT hr = D3D11_ON12_CALL(backend, backend->set_pixel_shader(&backend->adapter,
+             shader_impl ? (struct wine_d3d11on12_shader *)
+-                    &shader_impl->backend_shader : NULL);
++                    &shader_impl->backend_shader : NULL));
+     if (FAILED(hr))
+         WARN("D3D11On12 pixel-shader binding failed, hr %#lx.\n", hr);
+     if (SUCCEEDED(hr))
+@@ -953,9 +1007,9 @@ static HRESULT d3d11_on12_backend_create_wrapped_resource(
+             && !IsEqualGUID(iid, &IID_ID3D11DeviceChild) && !IsEqualGUID(iid, &IID_IUnknown))
+         return E_NOINTERFACE;
+     if (!(texture = d3d_texture2d_allocate_wrapped())) return E_OUTOFMEMORY;
+-    hr = backend->create_wrapped_texture(&backend->adapter, resource12, flags,
++    hr = D3D11_ON12_CALL(backend, backend->create_wrapped_texture(&backend->adapter, resource12, flags,
+             input_state, output_state, &texture->desc,
+-            (struct wine_d3d11on12_texture2d *)&texture->backend_texture);
++            (struct wine_d3d11on12_texture2d *)&texture->backend_texture));
+     if (FAILED(hr)) { free(texture); return hr; }
+     texture->backend_child.refs = 1;
+     texture->backend_child.object = texture;
+@@ -986,7 +1040,7 @@ static void d3d11_on12_backend_wrapped_ownership(struct d3d_device *device,
+     }
+     /* Preserve empty-list versus NULL (release-all) semantics. */
+     if (resources && !count) return;
+-    hr = backend->set_wrapped_ownership(&backend->adapter, handles, count, acquire);
++    hr = D3D11_ON12_CALL(backend, backend->set_wrapped_ownership(&backend->adapter, handles, count, acquire));
+     if (FAILED(hr)) WARN("D3D11On12 wrapped ownership failed, hr %#lx.\n", hr);
+     free(handles);
+ }
+@@ -1029,7 +1083,7 @@ static HRESULT d3d11_on12_backend_create_rtv(struct d3d_device *device,
+     texture = unsafe_impl_from_ID3D11Texture2D((ID3D11Texture2D *)resource);
+     if (!texture || !texture->backend_texture.runtime_state) return E_INVALIDARG;
+     view->backend_view.size = sizeof(view->backend_view);
+-    hr = backend->create_rtv(&backend->adapter, &texture->backend_texture, desc, &view->backend_view);
++    hr = D3D11_ON12_CALL(backend, backend->create_rtv(&backend->adapter, &texture->backend_texture, desc, &view->backend_view));
+     if (SUCCEEDED(hr))
+     {
+         view->backend_child.refs = 1;
+@@ -1043,7 +1097,7 @@ static HRESULT d3d11_on12_backend_create_rtv(struct d3d_device *device,
+ static void d3d11_on12_backend_destroy_rtv(struct d3d_device *device, struct d3d_rendertarget_view *view)
+ {
+     struct d3d11_on12_backend *backend = device->backend_private;
+-    HRESULT hr = backend->destroy_rtv(&view->backend_view);
++    HRESULT hr = D3D11_ON12_CALL(backend, backend->destroy_rtv(&view->backend_view));
+     if (FAILED(hr)) WARN("On12 RTV destruction failed, hr %#lx.\n", hr);
+ }
+
+@@ -1067,12 +1121,12 @@ static void d3d11_on12_backend_set_render_targets(struct d3d11_device_context *c
+         if (srv && srv->resource == view->resource)
+         {
+             void *null_handle = NULL;
+-            hr = backend->set_pixel_resources(&backend->adapter, i, 1, &null_handle);
++            hr = D3D11_ON12_CALL(backend, backend->set_pixel_resources(&backend->adapter, i, 1, &null_handle));
+             if (FAILED(hr)) { WARN("On12 SRV hazard unbinding failed, hr %#lx.\n", hr); return; }
+             d3d11_backend_child_bind(&context->bound_ps_srvs[i], NULL);
+         }
+     }
+-    hr = backend->set_render_target(&backend->adapter, view ? &view->backend_view : NULL);
++    hr = D3D11_ON12_CALL(backend, backend->set_render_target(&backend->adapter, view ? &view->backend_view : NULL));
+     if (FAILED(hr)) WARN("On12 target binding failed, hr %#lx.\n", hr);
+     if (SUCCEEDED(hr))
+         d3d11_backend_child_bind(&context->bound_rtv, view ? &view->backend_child : NULL);
+@@ -1088,7 +1142,7 @@ static void d3d11_on12_backend_set_viewports(struct d3d11_device_context *contex
+         WARN("On12 supports one viewport.\n");
+         return;
+     }
+-    hr = backend->set_viewport(&backend->adapter, count ? viewports : NULL);
++    hr = D3D11_ON12_CALL(backend, backend->set_viewport(&backend->adapter, count ? viewports : NULL));
+     if (FAILED(hr)) WARN("On12 viewport failed, hr %#lx.\n", hr);
+ }
+
+@@ -1097,8 +1151,8 @@ static void d3d11_on12_backend_clear_render_target(struct d3d11_device_context *
+ {
+     struct d3d11_on12_backend *backend = context->device->backend_private;
+     struct d3d_rendertarget_view *view = unsafe_impl_from_ID3D11RenderTargetView(iface);
+-    HRESULT hr = backend->clear_render_target(&backend->adapter,
+-            view ? &view->backend_view : NULL, color);
++    HRESULT hr = D3D11_ON12_CALL(backend, backend->clear_render_target(&backend->adapter,
++            view ? &view->backend_view : NULL, color));
+     if (FAILED(hr)) WARN("On12 clear failed, hr %#lx.\n", hr);
+ }
+
+@@ -1120,7 +1174,7 @@ static void d3d11_on12_backend_copy_resource(struct d3d11_device_context *contex
+     struct d3d_texture2d *dst = d3d11_on12_texture(destination), *src = d3d11_on12_texture(source);
+     HRESULT hr;
+     if (!dst || !src) { WARN("On12 copy requires owned Texture2D resources.\n"); return; }
+-    hr = backend->copy_texture(&backend->adapter, &dst->backend_texture, &src->backend_texture);
++    hr = D3D11_ON12_CALL(backend, backend->copy_texture(&backend->adapter, &dst->backend_texture, &src->backend_texture));
+     if (FAILED(hr)) WARN("On12 copy failed, hr %#lx.\n", hr);
+ }
+
+@@ -1133,7 +1187,7 @@ static HRESULT d3d11_on12_backend_map_resource(struct d3d11_device_context *cont
+     if (!mapped) return E_INVALIDARG;
+     memset(mapped, 0, sizeof(*mapped));
+     if (!texture) return DXGI_ERROR_UNSUPPORTED;
+-    return backend->map_texture(&backend->adapter, &texture->backend_texture, subresource, mode, flags, mapped);
++    return D3D11_ON12_CALL(backend, backend->map_texture(&backend->adapter, &texture->backend_texture, subresource, mode, flags, mapped));
+ }
+
+ static void d3d11_on12_backend_unmap_resource(struct d3d11_device_context *context,
+@@ -1143,7 +1197,7 @@ static void d3d11_on12_backend_unmap_resource(struct d3d11_device_context *conte
+     struct d3d_texture2d *texture = d3d11_on12_texture(resource);
+     HRESULT hr;
+     if (!texture) { WARN("On12 unmap requires an owned Texture2D.\n"); return; }
+-    hr = backend->unmap_texture(&backend->adapter, &texture->backend_texture, subresource);
++    hr = D3D11_ON12_CALL(backend, backend->unmap_texture(&backend->adapter, &texture->backend_texture, subresource));
+     if (FAILED(hr)) WARN("On12 unmap failed, hr %#lx.\n", hr);
+ }
+
+@@ -1166,7 +1220,7 @@ static HRESULT d3d11_on12_backend_create_srv(struct d3d_device *device, ID3D11Re
+     HRESULT hr;
+     if (!texture || texture->device != &device->ID3D11Device5_iface) return E_INVALIDARG;
+     view->backend_view.size = sizeof(view->backend_view);
+-    hr = backend->create_srv(&backend->adapter, &texture->backend_texture, desc, &view->backend_view);
++    hr = D3D11_ON12_CALL(backend, backend->create_srv(&backend->adapter, &texture->backend_texture, desc, &view->backend_view));
+     if (SUCCEEDED(hr))
+     {
+         view->backend_child.refs = 1;
+@@ -1180,7 +1234,7 @@ static HRESULT d3d11_on12_backend_create_srv(struct d3d_device *device, ID3D11Re
+ static void d3d11_on12_backend_destroy_srv(struct d3d_device *device, struct d3d_shader_resource_view *view)
+ {
+     struct d3d11_on12_backend *backend = device->backend_private;
+-    HRESULT hr = backend->destroy_srv(&view->backend_view);
++    HRESULT hr = D3D11_ON12_CALL(backend, backend->destroy_srv(&view->backend_view));
+     if (FAILED(hr)) WARN("On12 SRV destruction failed, hr %#lx.\n", hr);
+ }
+
+@@ -1203,7 +1257,7 @@ static void d3d11_on12_backend_set_pixel_resources(struct d3d11_device_context *
+         resolved[i] = view;
+         handles[i] = view ? &view->backend_view : NULL;
+     }
+-    hr = backend->set_pixel_resources(&backend->adapter, start, count, handles);
++    hr = D3D11_ON12_CALL(backend, backend->set_pixel_resources(&backend->adapter, start, count, handles));
+     if (FAILED(hr)) { WARN("On12 SRV binding failed, hr %#lx.\n", hr); return; }
+     for (i = 0; i < count; ++i)
+         d3d11_backend_child_bind(&context->bound_ps_srvs[start + i], resolved[i] ? &resolved[i]->backend_child : NULL);
+@@ -1214,6 +1268,14 @@ static void d3d11_on12_backend_clear_state(struct d3d11_device_context *context)
+     ID3D11ShaderResourceView *resources[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {0};
+     ID3D11Buffer *buffers[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT] = {0};
+     UINT zeros[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT] = {0};
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    BOOL pending;
++
++    /* Cleanup of an unused frontend has no driver bindings to clear. This is
++     * also the empty-state result of an explicit ClearState before first use. */
++    if (!InitOnceBeginInitialize(&backend->initialization, INIT_ONCE_CHECK_ONLY, &pending, NULL)
++            || FAILED(d3d11_on12_initialization_result(backend)))
++        return;
+     d3d11_on12_backend_set_pixel_resources(context, 0, ARRAY_SIZE(resources), resources);
+     d3d11_on12_backend_set_render_targets(context, 0, NULL, NULL);
+     d3d11_on12_backend_set_vertex_shader(context, NULL);
+@@ -1283,7 +1345,8 @@ static HRESULT d3d11_on12_create_frame_backend(IUnknown *device,
+     struct d3d11_on12_backend *backend;
+     struct d3d_device *d3d_device;
+     wine_d3d11on12_get_interface_fn get_interface;
+-    wine_d3d11on12_open_adapter_fn open_adapter;
++    HRESULT (WINAPI *validate_device)(IUnknown *, UINT, const D3D_FEATURE_LEVEL *,
++            UINT, IUnknown *const *, UINT, UINT, D3D_FEATURE_LEVEL *);
+     FARPROC address;
+     HRESULT hr = E_FAIL;
+
+@@ -1466,29 +1529,22 @@ static HRESULT d3d11_on12_create_frame_backend(IUnknown *device,
+
+     address = GetProcAddress(backend->core_module,
+             "WineD3D11On12OpenAdapterV1");
+-    memcpy(&open_adapter, &address, sizeof(open_adapter));
+-    if (!open_adapter)
++    memcpy(&backend->open_adapter, &address, sizeof(backend->open_adapter));
++    if (!backend->open_adapter)
+     {
+         FreeLibrary(backend->core_module);
+         free(backend);
+         return DXGI_ERROR_UNSUPPORTED;
+     }
+
+-    backend->adapter.size = sizeof(backend->adapter);
+-    if (FAILED(hr = open_adapter(device, queues, queue_count, node_mask,
+-            &backend->adapter)))
+-    {
+-        FreeLibrary(backend->core_module);
+-        free(backend);
+-        return hr;
+-    }
+-
+-    if (FAILED(hr = backend->check_frame_support(&backend->adapter)))
++    address = GetProcAddress(backend->core_module, "WineD3D11On12ValidateDeviceV1");
++    memcpy(&validate_device, &address, sizeof(validate_device));
++    if (!validate_device || FAILED(hr = validate_device(device, flags, feature_levels,
++            feature_level_count, queues, queue_count, node_mask, &backend->feature_level)))
+     {
+-        backend->core.close_adapter_device(&backend->adapter);
+         FreeLibrary(backend->core_module);
+         free(backend);
+-        return hr;
++        return validate_device ? hr : DXGI_ERROR_UNSUPPORTED;
+     }
+
+     hr = IUnknown_QueryInterface(device, &IID_ID3D12Device,
+@@ -1497,35 +1553,19 @@ static HRESULT d3d11_on12_create_frame_backend(IUnknown *device,
+         hr = E_NOINTERFACE;
+     if (FAILED(hr))
+     {
+-        backend->core.close_adapter_device(&backend->adapter);
+         FreeLibrary(backend->core_module);
+         free(backend);
+         return hr;
+     }
+-    {
+-        const D3D_FEATURE_LEVEL default_level = D3D_FEATURE_LEVEL_11_0;
+-        D3D12_FEATURE_DATA_FEATURE_LEVELS levels;
+-        levels.NumFeatureLevels = feature_level_count ? feature_level_count : 1;
+-        levels.pFeatureLevelsRequested = feature_level_count ? feature_levels : &default_level;
+-        levels.MaxSupportedFeatureLevel = 0;
+-        hr = ID3D12Device_CheckFeatureSupport(backend->device12, D3D12_FEATURE_FEATURE_LEVELS,
+-                &levels, sizeof(levels));
+-        if (FAILED(hr) || !levels.MaxSupportedFeatureLevel)
+-        {
+-            backend->core.close_adapter_device(&backend->adapter);
+-            ID3D12Device_Release(backend->device12);
+-            FreeLibrary(backend->core_module);
+-            free(backend);
+-            return FAILED(hr) ? hr : DXGI_ERROR_UNSUPPORTED;
+-        }
+-        backend->feature_level = levels.MaxSupportedFeatureLevel;
+-    }
++    backend->queue = queues[0];
++    IUnknown_AddRef(backend->queue);
++    backend->node_mask = node_mask;
+     backend->creation_flags = flags;
+
+     if (!(d3d_device = d3d_device_create_backend(&d3d11_on12_backend_ops,
+             backend)))
+     {
+-        backend->core.close_adapter_device(&backend->adapter);
++        IUnknown_Release(backend->queue);
+         ID3D12Device_Release(backend->device12);
+         FreeLibrary(backend->core_module);
+         free(backend);
+diff --git a/dlls/d3d11/device.c b/dlls/d3d11/device.c
+index 67c288df..edd62c06 100644
+--- a/dlls/d3d11/device.c
++++ b/dlls/d3d11/device.c
+@@ -5432,6 +5432,9 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_CreateBuffer(ID3D11Device5 *iface,
+
+     TRACE("iface %p, desc %p, data %p, buffer %p.\n", iface, desc, data, buffer);
+
++    if (device->standalone_allocation && buffer)
++        *buffer = NULL;
++
+     if (FAILED(hr = d3d_buffer_create(device, desc, data, &object)))
+         return hr;
+
+@@ -5474,6 +5477,9 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_CreateTexture2D(ID3D11Device5 *ifa
+
+     TRACE("iface %p, desc %p, data %p, texture %p.\n", iface, desc, data, texture);
+
++    if (device->standalone_allocation && texture)
++        *texture = NULL;
++
+     if (FAILED(hr = d3d_texture2d_create(device, desc, NULL, data, &object)))
+         return hr;
+
+@@ -5619,6 +5625,9 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_CreateInputLayout(ID3D11Device5 *i
+             "input_layout %p.\n", iface, element_descs, element_count, shader_byte_code,
+             shader_byte_code_length, input_layout);
+
++    if (device->standalone_allocation && input_layout)
++        *input_layout = NULL;
++
+     if (FAILED(hr = d3d_input_layout_create(device, element_descs, element_count,
+             shader_byte_code, shader_byte_code_length, &object)))
+         return hr;
