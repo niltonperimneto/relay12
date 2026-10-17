@@ -29,6 +29,8 @@ static void *srv_last_view;
 static volatile LONG fail_next_srv;
 
 static LONG open_calls;
+static volatile LONG fail_next_open;
+static volatile LONG fail_next_frame_support;
 static LONG create_calls;
 static LONG destroy_calls;
 static LONG close_calls;
@@ -1159,6 +1161,8 @@ static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
     args->pWDDM2_6DeviceFuncs->pfnRecycleDestroyCommandList =
             mock_recycle_destroy_command_list;
     args->pWDDM2_6DeviceFuncs->pfnCommandListExecute = mock_command_list_execute;
+    if (InterlockedExchange(&fail_next_frame_support, 0))
+        args->pWDDM2_6DeviceFuncs->pfnClearRenderTargetView = NULL;
     InterlockedIncrement(&create_calls);
     return S_OK;
 }
@@ -1302,19 +1306,31 @@ static HRESULT mock_close_adapter(D3D10DDI_HADAPTER adapter)
     return S_OK;
 }
 
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverFailNextFrameSupport(void)
+{
+    InterlockedExchange(&fail_next_frame_support, 1);
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverFailNextOpen(void)
+{
+    InterlockedExchange(&fail_next_open, 1);
+}
+
 __declspec(dllexport) HRESULT WINAPI OpenAdapter_D3D11On12(
         D3D10DDIARG_OPENADAPTER *args, void *private_args)
 {
     (void)private_args;
     if (!args || !args->pAdapterFuncs_2)
         return E_INVALIDARG;
+    InterlockedIncrement(&open_calls);
+    if (InterlockedExchange(&fail_next_open, 0))
+        return E_OUTOFMEMORY;
     args->hAdapter.pDrvPrivate = &adapter_private;
     args->pAdapterFuncs_2->pfnGetSupportedVersions = mock_get_versions;
     args->pAdapterFuncs_2->pfnCalcPrivateDeviceSize =
             mock_private_device_size;
     args->pAdapterFuncs_2->pfnCreateDevice = mock_create_device;
     args->pAdapterFuncs_2->pfnCloseAdapter = mock_close_adapter;
-    InterlockedIncrement(&open_calls);
     return S_OK;
 }
 

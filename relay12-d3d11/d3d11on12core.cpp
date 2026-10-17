@@ -1306,6 +1306,42 @@ extern "C" HRESULT WINAPI WineD3D11On12GetInterface(UINT requestedVersion,
     return S_OK;
 }
 
+/* This preflight deliberately makes no driver calls. The host can publish a
+ * real COM frontend while retaining creation-time input and capability checks. */
+extern "C" HRESULT WINAPI WineD3D11On12ValidateDeviceV1(IUnknown *deviceObject,
+        UINT flags, const D3D_FEATURE_LEVEL *featureLevels, UINT featureLevelCount,
+        IUnknown *const *queueObjects, UINT queueCount, UINT nodeMask,
+        D3D_FEATURE_LEVEL *chosenFeatureLevel) noexcept
+{
+    if (!chosenFeatureLevel)
+        return E_INVALIDARG;
+    *chosenFeatureLevel = static_cast<D3D_FEATURE_LEVEL>(0);
+    if ((featureLevels == nullptr) != (featureLevelCount == 0)
+            || (flags & ~knownCreateDeviceFlags))
+        return E_INVALIDARG;
+    ComRef<ID3D12Device> device12;
+    ComRef<ID3D12CommandQueue> queue;
+    HRESULT hr = acquireDeviceAndQueue(deviceObject, queueObjects, queueCount,
+            nodeMask, device12, queue);
+    if (FAILED(hr))
+        return hr;
+    ComRef<ID3D12Device1> device12_1;
+    hr = strictResult(device12.get()->QueryInterface(IID_ID3D12Device1,
+            reinterpret_cast<void **>(device12_1.put())), device12_1);
+    if (FAILED(hr))
+        return hr;
+    const D3D_FEATURE_LEVEL defaultLevel = D3D_FEATURE_LEVEL_11_0;
+    D3D12_FEATURE_DATA_FEATURE_LEVELS levels = {};
+    levels.NumFeatureLevels = featureLevelCount ? featureLevelCount : 1;
+    levels.pFeatureLevelsRequested = featureLevelCount ? featureLevels : &defaultLevel;
+    hr = device12.get()->CheckFeatureSupport(D3D12_FEATURE_FEATURE_LEVELS,
+            &levels, sizeof(levels));
+    if (FAILED(hr) || !levels.MaxSupportedFeatureLevel)
+        return FAILED(hr) ? hr : DXGI_ERROR_UNSUPPORTED;
+    *chosenFeatureLevel = levels.MaxSupportedFeatureLevel;
+    return S_OK;
+}
+
 extern "C" HRESULT WINAPI WineD3D11On12CreateDeviceV1(IUnknown *deviceObject,
         UINT flags, const D3D_FEATURE_LEVEL *featureLevels,
         UINT featureLevelCount, IUnknown *const *queueObjects, UINT queueCount,
@@ -1350,7 +1386,7 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateDeviceV1(IUnknown *deviceObject,
     }
 
     /* Publication is experimental until the hardware acceptance run is green.
-     * The host opens the adapter exactly once and owns its lifetime. Never
+     * The host owns the adapter and opens it once on first backend use. Never
      * call the public d3d11.dll export here: that would recurse into us. */
     wchar_t enabled[2] = {};
     if ((flags & ~D3D11_CREATE_DEVICE_BGRA_SUPPORT) || GetEnvironmentVariableW(L"RELAY12_EXPERIMENTAL_FRAME", enabled, 2) != 1

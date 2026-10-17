@@ -37,6 +37,10 @@
 #define WINE_D3D11ON12_DRAW_INDEXED_INSTANCED 3u
 
 typedef UINT (WINAPI *WineD3D11On12GetABIVersionFn)(void);
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12ValidateDeviceV1(
+        IUnknown *, UINT, const D3D_FEATURE_LEVEL *, UINT, IUnknown *const *,
+        UINT, UINT, D3D_FEATURE_LEVEL *) WINE_D3D11ON12_NOEXCEPT;
+
 typedef HRESULT (WINAPI *WineD3D11On12CreateDeviceFn)(IUnknown *, UINT,
         const D3D_FEATURE_LEVEL *, UINT, IUnknown *const *, UINT, UINT,
         ID3D11Device **, ID3D11DeviceContext **, D3D_FEATURE_LEVEL *);

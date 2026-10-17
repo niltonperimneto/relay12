@@ -420,3 +420,15 @@ resource retention and idempotent destruction. The public frontend lifetime test
 also covers SRV getters after public release, RTV/SRV hazard unbinding in both
 directions, and ClearState cleanup. Real shader sampling remains the GPU UMA
 harness's responsibility.
+
+## Deferred On12 initialization
+
+`tests/d3d11on12lazy.c` runs against the compiled host and recording DDI driver.
+It checks creation-time rejection and cleared outputs for invalid queues and
+missing ID3D12Device1, COM identity across IDXGIDevice, feature-level access,
+unused ClearState/release without loading DTL, eight concurrent first resource
+creations opening exactly one adapter/device, balanced lifetimes, and terminal
+first-use errors through HRESULT and void methods. A separate process with the
+driver disabled verifies the missing-driver path. CI runs these before the
+existing frontend resource-lifetime suite. Real rendering and game-memory
+measurements remain separate requirements. See [the contract](LAZY-INITIALIZATION.md).

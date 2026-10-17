@@ -71,6 +71,8 @@ int main(void)
         REQUIRE(create((IUnknown *)&underlying.ID3D12Device_iface, 0, &requested, 1,
                 queues, 1, 0, &device, &context, &selected) == S_OK);
         REQUIRE(device && context && selected == requested);
+        if (!iteration)
+            CHECK(!GetModuleHandleW(L"d3d11on12.dll"));
         {
             ID3D11ComputeShader *unsupported = (void *)(UINT_PTR)1;
             ID3D11ShaderResourceView *views[2] = {(void *)(UINT_PTR)1, (void *)(UINT_PTR)1};
@@ -140,6 +142,7 @@ int main(void)
             CHECK(!priority);
             IDXGIDevice_Release(dxgi_device);
         }
+        ID3D11DeviceContext_Flush(context);
         driver = GetModuleHandleW(L"d3d11on12.dll");
         address = GetProcAddress(driver, "WineD3D11On12MockDriverGetResourceCounts");
         memcpy(&resources, &address, sizeof(resources));
