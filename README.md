@@ -365,7 +365,7 @@ python3 -m unittest discover -s tests -p "test_*.py"
 
 ## Implementation Roadmap
 
-For complete milestone tracking and task breakdowns, refer to [`docs/DDI-REMAINING-ROADMAP.md`](docs/DDI-REMAINING-ROADMAP.md) and [`docs/D3D11ON12.md`](docs/D3D11ON12.md):
+For current scope, milestone ownership, and acceptance evidence, start with the [roadmap index](docs/ROADMAP.md).
 
 - [x] **Phase 1: Safe Routing & PE Boundary** — Drop-in `d3d11shim.dll` with fail-closed semantics, ordinal routing, and diagnostic query support.
 - [x] **Phase 2: Core Validation & Clean-Room DDI Host** — Direct queue validation, two-tier COM identity, and full clean-room WDDM 2.6/2.7 table definitions.
