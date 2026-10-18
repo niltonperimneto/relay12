@@ -1,16 +1,16 @@
 name: pull request validation
 
 on:
+  # This workflow supplies a required check: docs-only PRs must emit it too.
   pull_request:
-    paths-ignore: &docs
-      - '**.md'
-      - 'docs/**'
-      - 'LICENSE'
   workflow_dispatch:
   push:
     branches:
       - main
-    paths-ignore: *docs
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
 
 permissions:
   contents: read
