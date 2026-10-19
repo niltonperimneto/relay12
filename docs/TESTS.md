@@ -227,7 +227,7 @@ exercise DXGI surfaces, Direct2D, or presentation.
 ## Performance measurement
 
 Performance claims need numbers, and the numbers come from three places. The
-plan they serve is [`PERFORMANCE-RESEARCH-ROADMAP.md`](PERFORMANCE-RESEARCH-ROADMAP.md).
+plan they serve is [`UMA-MEMORY.md`](UMA-MEMORY.md).
 
 **DDI telemetry.** Set `RELAY12_TELEMETRY=1` in the application's environment.
 The core then times the driver's draw and flush slots and, when the device is
@@ -331,7 +331,7 @@ private data set through `ID3D11Device` reads back through it. The CI half of
 The probe also prints `perf:` lines, which are recorded and never judged: the
 shader-cache and pipeline-library support that decide the persistent PSO cache,
 and `ARCHITECTURE1` plus `CUSTOM` heap creation that decide UMA staging (items 1
-and 3 of [`PERFORMANCE-RESEARCH-ROADMAP.md`](PERFORMANCE-RESEARCH-ROADMAP.md)).
+and 3 of [`UMA-MEMORY.md`](UMA-MEMORY.md)).
 
 ### Synchronization-mode runs
 

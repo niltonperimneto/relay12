@@ -23,3 +23,9 @@ backtrace.txt
 
 # Local agent settings
 .claude/settings.local.json
+
+# Local-only plans and roadmaps
+docs/*-PLAN.md
+docs/*-ROADMAP.md
+docs/ROADMAP.md
+.local-docs-backup/
