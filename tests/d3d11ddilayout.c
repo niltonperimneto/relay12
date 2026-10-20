@@ -1302,6 +1302,56 @@ static VOID stub_set_viewports(D3D10DDI_HDEVICE hDevice, UINT num_viewports,
     ++command_list_calls;
 }
 
+/* Constant buffers, updates, samplers and scissor: each typedef serves
+ * several slots, and every one of them is called below. */
+static VOID stub_set_constant_buffers(D3D10DDI_HDEVICE hDevice, UINT start_slot,
+        UINT num_buffers, const D3D10DDI_HRESOURCE *buffers,
+        const UINT *first_constant, const UINT *num_constants)
+{
+    (void)hDevice;
+    (void)start_slot;
+    (void)num_buffers;
+    (void)buffers;
+    (void)first_constant;
+    (void)num_constants;
+    ++command_list_calls;
+}
+
+static VOID stub_update_subresource_up(D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRESOURCE resource, UINT subresource, const D3D10_DDI_BOX *box,
+        const VOID *data, UINT row_pitch, UINT depth_pitch, UINT copy_flags)
+{
+    (void)hDevice;
+    (void)resource;
+    (void)subresource;
+    (void)box;
+    (void)data;
+    (void)row_pitch;
+    (void)depth_pitch;
+    (void)copy_flags;
+    ++command_list_calls;
+}
+
+static VOID stub_set_samplers(D3D10DDI_HDEVICE hDevice, UINT start_slot,
+        UINT num_samplers, const D3D10DDI_HSAMPLER *samplers)
+{
+    (void)hDevice;
+    (void)start_slot;
+    (void)num_samplers;
+    (void)samplers;
+    ++command_list_calls;
+}
+
+static VOID stub_set_scissor_rects(D3D10DDI_HDEVICE hDevice, UINT num_rects,
+        UINT clear_rects, const D3D10_DDI_RECT *rects)
+{
+    (void)hDevice;
+    (void)num_rects;
+    (void)clear_rects;
+    (void)rects;
+    ++command_list_calls;
+}
+
 static VOID stub_clear_render_target_view(D3D10DDI_HDEVICE hDevice,
         D3D10DDI_HRENDERTARGETVIEW view, FLOAT colour[4])
 {
@@ -1769,6 +1819,21 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
     funcs->pfnDynamicResourceUnmap = stub_resource_unmap;
     funcs->pfnResourceCopy = stub_resource_copy;
     funcs->pfnQueryScanoutCaps = stub_query_scanout_caps;
+    funcs->pfnVsSetConstantBuffers = stub_set_constant_buffers;
+    funcs->pfnPsSetConstantBuffers = stub_set_constant_buffers;
+    funcs->pfnGsSetConstantBuffers = stub_set_constant_buffers;
+    funcs->pfnHsSetConstantBuffers = stub_set_constant_buffers;
+    funcs->pfnDsSetConstantBuffers = stub_set_constant_buffers;
+    funcs->pfnCsSetConstantBuffers = stub_set_constant_buffers;
+    funcs->pfnResourceUpdateSubresourceUP = stub_update_subresource_up;
+    funcs->pfnDefaultConstantBufferUpdateSubresourceUP = stub_update_subresource_up;
+    funcs->pfnVsSetSamplers = stub_set_samplers;
+    funcs->pfnPsSetSamplers = stub_set_samplers;
+    funcs->pfnGsSetSamplers = stub_set_samplers;
+    funcs->pfnHsSetSamplers = stub_set_samplers;
+    funcs->pfnDsSetSamplers = stub_set_samplers;
+    funcs->pfnCsSetSamplers = stub_set_samplers;
+    funcs->pfnSetScissorRects = stub_set_scissor_rects;
 
     command_list_calls = 0;
     CHECK_STACK("PFND3D11DDI_ABANDONCOMMANDLIST",
@@ -1907,6 +1972,48 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
                     (D3D10DDI_HDEPTHSTENCILVIEW){0}, NULL, NULL, 1, 0, 1, 0));
     CHECK_STACK("PFND3D10DDI_SETVIEWPORTS",
             funcs->pfnSetViewports(device, 1, 0, NULL));
+    {
+        /* Six stages share each binding typedef, and two update slots share
+         * one; null first-constant and count arrays bind whole buffers. */
+        const D3D10_DDI_BOX box = {0, 0, 0, 4, 1, 1};
+        const D3D10_DDI_RECT scissor = {0, 0, 4, 4};
+        const D3D10DDI_HSAMPLER samplers[1] = {{NULL}};
+        const UINT first[1] = {0}, count[1] = {16};
+        const BYTE bytes[16] = {0};
+
+        CHECK_STACK("PFND3D11_1DDI_SETCONSTANTBUFFERS (vertex)",
+                funcs->pfnVsSetConstantBuffers(device, 0, 1, &vertex_buffer, NULL, NULL));
+        CHECK_STACK("PFND3D11_1DDI_SETCONSTANTBUFFERS (pixel)",
+                funcs->pfnPsSetConstantBuffers(device, 0, 1, &vertex_buffer, first, count));
+        CHECK_STACK("PFND3D11_1DDI_SETCONSTANTBUFFERS (geometry)",
+                funcs->pfnGsSetConstantBuffers(device, 0, 1, &vertex_buffer, NULL, NULL));
+        CHECK_STACK("PFND3D11_1DDI_SETCONSTANTBUFFERS (hull)",
+                funcs->pfnHsSetConstantBuffers(device, 0, 1, &vertex_buffer, NULL, NULL));
+        CHECK_STACK("PFND3D11_1DDI_SETCONSTANTBUFFERS (domain)",
+                funcs->pfnDsSetConstantBuffers(device, 0, 1, &vertex_buffer, NULL, NULL));
+        CHECK_STACK("PFND3D11_1DDI_SETCONSTANTBUFFERS (compute)",
+                funcs->pfnCsSetConstantBuffers(device, 0, 1, &vertex_buffer, NULL, NULL));
+        CHECK_STACK("PFND3D11_1DDI_RESOURCEUPDATESUBRESOURCEUP",
+                funcs->pfnResourceUpdateSubresourceUP(device, vertex_buffer, 0,
+                        &box, bytes, 16, 16, 0));
+        CHECK_STACK("PFND3D11_1DDI_RESOURCEUPDATESUBRESOURCEUP (default constant buffer)",
+                funcs->pfnDefaultConstantBufferUpdateSubresourceUP(device,
+                        vertex_buffer, 0, NULL, bytes, 16, 16, 0));
+        CHECK_STACK("PFND3D10DDI_SETSAMPLERS (vertex)",
+                funcs->pfnVsSetSamplers(device, 0, 1, samplers));
+        CHECK_STACK("PFND3D10DDI_SETSAMPLERS (pixel)",
+                funcs->pfnPsSetSamplers(device, 0, 1, samplers));
+        CHECK_STACK("PFND3D10DDI_SETSAMPLERS (geometry)",
+                funcs->pfnGsSetSamplers(device, 0, 1, samplers));
+        CHECK_STACK("PFND3D10DDI_SETSAMPLERS (hull)",
+                funcs->pfnHsSetSamplers(device, 0, 1, samplers));
+        CHECK_STACK("PFND3D10DDI_SETSAMPLERS (domain)",
+                funcs->pfnDsSetSamplers(device, 0, 1, samplers));
+        CHECK_STACK("PFND3D10DDI_SETSAMPLERS (compute)",
+                funcs->pfnCsSetSamplers(device, 0, 1, samplers));
+        CHECK_STACK("PFND3D10DDI_SETSCISSORRECTS",
+                funcs->pfnSetScissorRects(device, 1, 0, &scissor));
+    }
     CHECK_STACK("PFND3D10DDI_SETBLENDSTATE",
             funcs->pfnSetBlendState(device, (D3D10DDI_HBLENDSTATE){0},
                     blend_factor, 0xffffffffu));
@@ -1967,14 +2074,14 @@ static void check_promoted_device_funcs(D3DWDDM2_6DDI_DEVICEFUNCS *funcs)
         }
     }
 
-    if (command_list_calls == 76 && handle_count == 1)
+    if (command_list_calls == 91 && handle_count == 1)
     {
         printf("[ ok ] the promoted command-list, deferred-context, resource, state, view, shader, "
                 "and binding/draw slots are callable as declared\n");
     }
     else
     {
-        printf("[fail] %d of 76 promoted command/deferred/resource/state/"
+        printf("[fail] %d of 91 promoted command/deferred/resource/state/"
                 "view/shader/draw/scanout slots "
                 "reached their implementation\n", command_list_calls);
         ++failures;

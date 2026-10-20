@@ -1260,6 +1260,14 @@ PROMOTED_SLOTS = {
     "PFND3D10DDI_SETRASTERIZERSTATE",
     "PFND3DWDDM2_0DDI_FLUSH",
     "PFND3DWDDM2_6DDI_QUERY_SCANOUT_CAPS",
+    # Constant buffers, updates, samplers and scissor: 4 names, 15 slots.
+    # SETCONSTANTBUFFERS and SETSAMPLERS each cover all six stages, and
+    # RESOURCEUPDATESUBRESOURCEUP both the general and the default-constant-
+    # buffer update.
+    "PFND3D11_1DDI_SETCONSTANTBUFFERS",
+    "PFND3D11_1DDI_RESOURCEUPDATESUBRESOURCEUP",
+    "PFND3D10DDI_SETSAMPLERS",
+    "PFND3D10DDI_SETSCISSORRECTS",
 }
 
 if not PROMOTED_SLOTS <= {type_name for _, type_name in DEVICEFUNC_SLOTS}:
@@ -1307,9 +1315,23 @@ PSO_RASTER = Struct("D3DWDDM2_0DDI_RASTERIZER_DESC", [
     ("DepthClipEnable", "BOOL"), ("ScissorEnable", "BOOL"),
     ("MultisampleEnable", "BOOL"), ("AntialiasedLineEnable", "BOOL"),
     ("ForcedSampleCount", "UINT"), ("ConservativeRasterizationMode", "INT")]])
+# The sampler descriptor and update box: D3D10_DDI_SAMPLER_DESC and D3D10_DDI_BOX
+# reference pages.  Enum members use the 32-bit transport type, as above.  The
+# box's members are published as LONG; the pinned driver casts it to the
+# UINT-typed D3D12_BOX, which has the same layout.
+PSO_SAMPLER = Struct("D3D10_DDI_SAMPLER_DESC", [
+    Field(n, t, 4, 4) for n, t in [("Filter", "INT"), ("AddressU", "INT"),
+    ("AddressV", "INT"), ("AddressW", "INT"), ("MipLODBias", "FLOAT"),
+    ("MaxAnisotropy", "UINT"), ("ComparisonFunc", "INT")]] + [
+    Field("BorderColor", "FLOAT", 4, 4, count=4),
+    Field("MinLOD", "FLOAT", 4, 4), Field("MaxLOD", "FLOAT", 4, 4)])
+DDI_BOX = Struct("D3D10_DDI_BOX", [
+    Field(n, "LONG", 4, 4) for n in
+    ("left", "top", "front", "right", "bottom", "back")])
 
 GROUPS = HANDLES + [
     PSO_RT_BLEND, PSO_BLEND, PSO_STENCIL_OP, PSO_DEPTH, PSO_RASTER,
+    PSO_SAMPLER, DDI_BOX,
     SHADERCACHE_HASH,
     CALCPRIVATEDEVICESIZE,
     ADAPTERFUNCS,

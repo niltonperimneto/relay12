@@ -2475,7 +2475,8 @@ WINE_DDI_ASSERT_FIELD(D3DWDDM2_0DDI_RASTERIZER_DESC, ConservativeRasterizationMo
  *   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_createsampler
  *
  * Blend, depth-stencil and WDDM2 rasterizer descriptors are authored above.
- * The sampler descriptor remains opaque. The state handles are wrapped
+ * The sampler descriptor is completed with the constant-buffer and sampler
+ * group further down. The state handles are wrapped
  * pointers, matching the resource and command-list handle convention.
  */
 typedef SIZE_T (*PFND3D11_1DDI_CALCPRIVATEBLENDSTATESIZE)(
@@ -2679,8 +2680,8 @@ typedef SIZE_T (*PFND3D11_1DDI_CALCPRIVATETESSELLATIONSHADERSIZE)(
  * MIT-licensed D3D11On12 Device::Flush declaration and implementation.  The
  * published D3D10DDI_DEVICEFUNCS page establishes the table slot, while that
  * source establishes the WDDM 2.0 extension's ContextType and FlushFlags
- * parameters. PFND3D10DDI_SETSCISSORRECTS remains a placeholder because it
- * would need D3D10_DDI_RECT, and the frame does not require a scissor.
+ * parameters. PFND3D10DDI_SETSCISSORRECTS is promoted with the
+ * constant-buffer and sampler group below, which authors D3D10_DDI_RECT.
  */
 typedef SIZE_T (*PFND3D10DDI_CALCPRIVATEELEMENTLAYOUTSIZE)(
         D3D10DDI_HDEVICE hDevice,
@@ -2796,8 +2797,6 @@ typedef VOID (*PFND3D10DDI_SETRASTERIZERSTATE)(
         D3D10DDI_HDEVICE hDevice,
         D3D10DDI_HRASTERIZERSTATE hRasterizerState);
 
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_RESOURCEUPDATESUBRESOURCEUP;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_SETCONSTANTBUFFERS;
 /*
  * Group: shader resource binding callback
  * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_setshaderresources
@@ -2808,7 +2807,136 @@ typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_SETCONSTANTBUFFERS;
  */
 typedef VOID (*PFND3D10DDI_SETSHADERRESOURCES)(D3D10DDI_HDEVICE hDevice,
         UINT StartSlot, UINT NumViews, const D3D10DDI_HSHADERRESOURCEVIEW *views);
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETSAMPLERS;
+
+/*
+ * Group: constant buffer, update, sampler and scissor callbacks
+ * Specification: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d11_1ddi_setconstantbuffers
+ * Specification: https://github.com/MicrosoftDocs/windows-driver-docs-ddi/blob/staging/wdk-ddi-src/content/d3d10umddi/nc-d3d10umddi-pfnd3d11_1ddi_setconstantbuffers.md
+ * Retrieved: 2026-10-19
+ *
+ * Companion pages under the same two paths, each read on both surfaces:
+ *   nc-d3d10umddi-pfnd3d11_1ddi_resourceupdatesubresourceup
+ *   nc-d3d10umddi-pfnd3d10ddi_setsamplers
+ *   nc-d3d10umddi-pfnd3d10ddi_setscissorrects
+ *   ns-d3d10umddi-d3d10_ddi_sampler_desc
+ *   ns-d3d10umddi-d3d10_ddi_box
+ *
+ * The rendered pages carry the syntax blocks transcribed here; the markdown
+ * mirror carries the same parameter lists and member descriptions without
+ * them, and agrees on every name, order and meaning.  Cross-checked against
+ * the pinned MIT D3D11On12: include/device.hpp and include/view.inl declare
+ * SetConstantBuffers, SetSamplers, SetScissorRects and
+ * ResourceUpdateSubresourceUP with these parameter lists, and src/device.cpp
+ * binds them to the slots named below.
+ *
+ * Four typedefs, fifteen slots.  PFND3D11_1DDI_SETCONSTANTBUFFERS and
+ * PFND3D10DDI_SETSAMPLERS are each shared by all six stages.
+ * PFND3D11_1DDI_RESOURCEUPDATESUBRESOURCEUP is both
+ * pfnDefaultConstantBufferUpdateSubresourceUP and
+ * pfnResourceUpdateSubresourceUP.
+ *
+ * Several parameters are published unnamed (unnamedParam1 and so on); the
+ * names used here are the ones each page's Parameters section gives in
+ * italics, so they are the specification's names, not this header's.
+ *
+ * pFirstConstant and pNumConstants are optional: the pinned source annotates
+ * both _In_reads_opt_, and a null pair binds each whole buffer, which is what
+ * a D3D11.0 VSSetConstantBuffers means.  pDstBox is optional per the page
+ * itself: null updates the whole subresource.
+ *
+ * D3D10_DDI_SAMPLER_DESC completes the forward declaration near the top of
+ * this header.  Its three enum-typed members use the 32-bit transport type,
+ * as the state descriptors above do.  The pinned driver reinterprets it as a
+ * D3D12_SAMPLER_DESC (src/sampler.cpp), which pins the same 52-byte layout.
+ *
+ * D3D10_DDI_BOX's members are published as LONG.  The pinned driver casts it
+ * to D3D12_BOX, whose members are UINT; both are six 4-byte integers.
+ *
+ * D3D10_DDI_RECT is published as `typedef RECT D3D10_DDI_RECT;` on the
+ * SetScissorRects page, so it is RECT itself, not a structure authored here.
+ * The driver asserts it is the size of D3D12_RECT (src/context.cpp).
+ */
+struct D3D10_DDI_SAMPLER_DESC
+{
+    INT                            Filter;
+    INT                            AddressU;
+    INT                            AddressV;
+    INT                            AddressW;
+    FLOAT                          MipLODBias;
+    UINT                           MaxAnisotropy;
+    INT                            ComparisonFunc;
+    FLOAT                          BorderColor[4];
+    FLOAT                          MinLOD;
+    FLOAT                          MaxLOD;
+};
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10_DDI_SAMPLER_DESC);
+WINE_DDI_ASSERT_SIZE(D3D10_DDI_SAMPLER_DESC, 52);
+WINE_DDI_ASSERT_ALIGN(D3D10_DDI_SAMPLER_DESC, 4);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_SAMPLER_DESC, Filter, 0);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_SAMPLER_DESC, AddressU, 4);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_SAMPLER_DESC, AddressV, 8);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_SAMPLER_DESC, AddressW, 12);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_SAMPLER_DESC, MipLODBias, 16);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_SAMPLER_DESC, MaxAnisotropy, 20);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_SAMPLER_DESC, ComparisonFunc, 24);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_SAMPLER_DESC, BorderColor, 28);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_SAMPLER_DESC, MinLOD, 44);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_SAMPLER_DESC, MaxLOD, 48);
+
+typedef struct D3D10_DDI_BOX
+{
+    LONG                           left;
+    LONG                           top;
+    LONG                           front;
+    LONG                           right;
+    LONG                           bottom;
+    LONG                           back;
+} D3D10_DDI_BOX;
+
+WINE_DDI_ASSERT_STANDARD_LAYOUT(D3D10_DDI_BOX);
+WINE_DDI_ASSERT_SIZE(D3D10_DDI_BOX, 24);
+WINE_DDI_ASSERT_ALIGN(D3D10_DDI_BOX, 4);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_BOX, left, 0);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_BOX, top, 4);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_BOX, front, 8);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_BOX, right, 12);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_BOX, bottom, 16);
+WINE_DDI_ASSERT_FIELD(D3D10_DDI_BOX, back, 20);
+
+typedef RECT D3D10_DDI_RECT;
+
+WINE_DDI_ASSERT_SIZE(D3D10_DDI_RECT, 16);
+
+typedef VOID (*PFND3D11_1DDI_SETCONSTANTBUFFERS)(
+        D3D10DDI_HDEVICE hDevice,
+        UINT StartSlot,
+        UINT NumBuffers,
+        const D3D10DDI_HRESOURCE *phBuffers,
+        const UINT *pFirstConstant,
+        const UINT *pNumConstants);
+
+typedef VOID (*PFND3D11_1DDI_RESOURCEUPDATESUBRESOURCEUP)(
+        D3D10DDI_HDEVICE hDevice,
+        D3D10DDI_HRESOURCE hDstResource,
+        UINT DstSubresource,
+        const D3D10_DDI_BOX *pDstBox,
+        const VOID *pSysMemUP,
+        UINT RowPitch,
+        UINT DepthPitch,
+        UINT CopyFlags);
+
+typedef VOID (*PFND3D10DDI_SETSAMPLERS)(
+        D3D10DDI_HDEVICE hDevice,
+        UINT StartSlot,
+        UINT NumSamplers,
+        const D3D10DDI_HSAMPLER *phSamplers);
+
+typedef VOID (*PFND3D10DDI_SETSCISSORRECTS)(
+        D3D10DDI_HDEVICE hDevice,
+        UINT NumRects,
+        UINT ClearRects,
+        const D3D10_DDI_RECT *pRects);
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SHADERRESOURCEVIEWREADAFTERWRITEHAZARD;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_RESOURCEREADAFTERWRITEHAZARD;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_QUERYEND;
@@ -2816,7 +2944,6 @@ typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_QUERYBEGIN;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D11_1DDI_RESOURCECOPYREGION;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SO_SETTARGETS;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_DRAWAUTO;
-typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETSCISSORRECTS;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_CLEARDEPTHSTENCILVIEW;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_SETPREDICATION;
 typedef PFNWINE_D3D11DDI_UNDECLARED_CB PFND3D10DDI_QUERYGETDATA;
