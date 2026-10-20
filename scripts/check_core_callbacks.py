@@ -47,6 +47,10 @@ import sys
 from check_adapter_args import struct_body, without_comments
 
 CALLBACKS = "D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS"
+# The kernel-thunk table, D3D10DDIARG_CREATEDEVICE.pKTCallbacks.  Declared
+# through its tag because the header defines the structure as
+# `struct _D3DDDI_DEVICECALLBACKS` behind an earlier typedef.
+KERNEL_CALLBACKS = "_D3DDDI_DEVICECALLBACKS"
 
 # Mandatory because the driver dereferences these without checking, so the
 # reason has to travel with the name: a bare list invites someone to prune it.
@@ -56,6 +60,16 @@ MANDATORY = {
         "rejected creation is indistinguishable from a successful one",
     "pfnPerformAmortizedProcessingCb":
         "D3D11On12's Device::PostSubmit dereferences it on every flush",
+}
+
+# The one kernel-thunk entry the driver reaches outside the present path.
+# Absent from this list for a long time, which is the case for having it: the
+# table compiled, linked and passed every test, and the first asynchronous
+# driver error would have jumped through a null pointer on the worker thread.
+KERNEL_MANDATORY = {
+    "pfnEscapeCb":
+        "D3D11On12's Device::ReportError calls it, unchecked, before every "
+        "failure the translation layer's worker thread reports",
 }
 
 NULL_LITERALS = ("nullptr", "NULL", "0")
@@ -77,15 +91,31 @@ def check_core_callbacks(header_text, core_text):
         errors.append("core callbacks: the core never calls pfnCreateDevice, "
                       "so the table is never handed to a driver")
 
-    for name, why in sorted(MANDATORY.items()):
+    errors += check_table(core, members, CALLBACKS, "coreCallbacks",
+            MANDATORY, creation)
+
+    kernel = struct_body(header, KERNEL_CALLBACKS)
+    if kernel is None:
+        errors.append(f"core callbacks: the header declares no {KERNEL_CALLBACKS}")
+    else:
+        errors += check_table(core, kernel, KERNEL_CALLBACKS, "kernelCallbacks",
+                KERNEL_MANDATORY, creation)
+    return errors
+
+
+def check_table(core, members, structure, variable, mandatory, creation):
+    """Errors for one callback table: every mandatory entry of `structure`,
+    assigned through `state-><variable>.`, before the driver's CreateDevice."""
+    errors = []
+    for name, why in sorted(mandatory.items()):
         if not re.search(rf"\b{re.escape(name)}\s*;", members):
             errors.append(
-                f"core callbacks: {CALLBACKS} has no member {name}; this "
+                f"core callbacks: {structure} has no member {name}; this "
                 "gate's mandatory list has drifted from the header")
             continue
 
         assignments = list(re.finditer(
-            rf"coreCallbacks\.{re.escape(name)}\s*=\s*([A-Za-z_]\w*)\s*;",
+            rf"{variable}\.{re.escape(name)}\s*=\s*([A-Za-z_]\w*)\s*;",
             core))
         if not assignments:
             errors.append(f"core callbacks: {name} is never assigned -- {why}")
@@ -126,8 +156,8 @@ def main():
         print("\n".join(errors), file=sys.stderr)
         return 1
 
-    print(f"core-layer callback table: ok ({len(MANDATORY)} mandatory "
-          "callbacks)")
+    print(f"core-layer callback tables: ok ({len(MANDATORY)} core and "
+          f"{len(KERNEL_MANDATORY)} kernel-thunk mandatory callbacks)")
     return 0
 
 

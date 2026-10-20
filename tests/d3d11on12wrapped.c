@@ -180,6 +180,39 @@ int main(void)
     CHECK(original.refs == 1 && !texture.runtimeState);
     CHECK(WineD3D11On12DestroyTexture2DV1(&texture) == S_OK);
     counts(after); CHECK(!after[6]);
+    /* Closing a device with a wrapped resource still acquired hands it back
+     * in its declared output state, and flushes so the transition reaches the
+     * caller's queue before the caller uses the resource again. */
+    {
+        WineD3D11On12AdapterDevice teardown = {.size = sizeof(teardown)};
+        LONG (WINAPI *flushes)(void) = (void *)(UINT_PTR)GetProcAddress(driver,
+                "WineD3D11On12MockDriverGetFlushCount");
+        LONG flushed;
+        CHECK(flushes != NULL);
+        CHECK(WineD3D11On12OpenAdapterV1((IUnknown *)&device.ID3D12Device_iface, queues, 1, 0, &teardown) == S_OK);
+        CHECK(WineD3D11On12CreateWrappedTexture2DV1(&teardown, (IUnknown *)&original.iface, &flags,
+                D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE, &desc, &texture) == S_OK);
+        CHECK(WineD3D11On12SetWrappedOwnershipV1(&teardown, one, 1, TRUE) == S_OK);
+        counts(before);
+        flushed = flushes ? flushes() : 0;
+        CHECK(WineD3D11On12CloseAdapterDeviceV1(&teardown) == S_OK);
+        counts(after);
+        CHECK(after[2] == before[2] + 1 && after[3] == before[3] + 1);
+        CHECK(after[5] == D3D12_RESOURCE_STATE_COPY_SOURCE);
+        CHECK(!flushes || flushes() == flushed + 1);
+        CHECK(original.refs == 1 && !texture.runtimeState);
+        /* Nothing acquired, nothing to release: no transition and no flush. */
+        CHECK(WineD3D11On12OpenAdapterV1((IUnknown *)&device.ID3D12Device_iface, queues, 1, 0, &teardown) == S_OK);
+        CHECK(WineD3D11On12CreateWrappedTexture2DV1(&teardown, (IUnknown *)&original.iface, &flags,
+                D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE, &desc, &texture) == S_OK);
+        counts(before);
+        flushed = flushes ? flushes() : 0;
+        CHECK(WineD3D11On12CloseAdapterDeviceV1(&teardown) == S_OK);
+        counts(after);
+        CHECK(after[2] == before[2] && after[3] == before[3]);
+        CHECK(!flushes || flushes() == flushed);
+        CHECK(original.refs == 1);
+    }
     CHECK(device.refcount == 1 && queue.refcount == 1 && foreign.refcount == 1);
     printf("[%s] wrapped-resource lifecycle and ownership checks\n", failures ? "fail" : " ok ");
     return failures ? 1 : 0;

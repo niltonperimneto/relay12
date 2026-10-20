@@ -238,6 +238,45 @@ int main(void)
         CHECK(vs_created + ps_created == shaders_destroyed);
         CHECK(underlying.refcount == 1 && queue.refcount == 1);
     }
+    {
+        /* Patch 0028: removal reaches GetDeviceRemovedReason from all three
+         * sources -- D3D12 before the adapter opens, then a worker-thread
+         * error the core latched, which outlives D3D12 recovering. */
+        ID3D11Device *device = NULL;
+        ID3D11DeviceContext *context = NULL;
+        ID3D11Buffer *buffer = (void *)(UINT_PTR)1;
+        D3D11_BUFFER_DESC bd = {0};
+        D3D_FEATURE_LEVEL selected = 0;
+        HRESULT (WINAPI *report_worker)(HRESULT);
+        LONG opened_before = 0, opened_after = 0;
+        void (WINAPI *counts)(LONG *, LONG *, LONG *, LONG *);
+
+        REQUIRE(create((IUnknown *)&underlying.ID3D12Device_iface, 0, &requested, 1,
+                queues, 1, 0, &device, &context, &selected) == S_OK);
+        address = GetProcAddress(driver, "WineD3D11On12MockDriverReportWorkerError");
+        memcpy(&report_worker, &address, sizeof(report_worker));
+        address = GetProcAddress(driver, "WineD3D11On12MockDriverGetCounts");
+        memcpy(&counts, &address, sizeof(counts));
+        REQUIRE(report_worker && counts);
+        counts(&opened_before, NULL, NULL, NULL);
+        CHECK(ID3D11Device_GetDeviceRemovedReason(device) == S_OK);
+        InterlockedExchange(&underlying.removed_reason, DXGI_ERROR_DEVICE_HUNG);
+        CHECK(ID3D11Device_GetDeviceRemovedReason(device) == DXGI_ERROR_DEVICE_HUNG);
+        InterlockedExchange(&underlying.removed_reason, S_OK);
+        counts(&opened_after, NULL, NULL, NULL);
+        CHECK(opened_after == opened_before); /* Asking opened no adapter. */
+        ID3D11DeviceContext_Flush(context);
+        CHECK(ID3D11Device_GetDeviceRemovedReason(device) == S_OK);
+        CHECK(report_worker(E_OUTOFMEMORY) == S_OK);
+        CHECK(ID3D11Device_GetDeviceRemovedReason(device) == DXGI_ERROR_DRIVER_INTERNAL_ERROR);
+        bd.ByteWidth = 32; bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+        CHECK(ID3D11Device_CreateBuffer(device, &bd, NULL, &buffer) == DXGI_ERROR_DEVICE_REMOVED);
+        CHECK(!buffer);
+        ID3D11DeviceContext_Draw(context, 3, 0);
+        CHECK(ID3D11Device_Release(device) == 1);
+        CHECK(ID3D11DeviceContext_Release(context) == 0);
+        CHECK(underlying.refcount == 1 && queue.refcount == 1);
+    }
     ID3D10Blob_Release(vs_code);
     ID3D10Blob_Release(ps_code);
     FreeLibrary(core);

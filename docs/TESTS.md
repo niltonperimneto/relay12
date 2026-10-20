@@ -216,7 +216,35 @@ driver object before `DestroyElementLayout` runs.
 strict COM acquisition, foreign devices, stale handles, batch prevalidation,
 invalid ownership transitions, retained RTVs, adapter teardown, transition
 failure refusal, and eight-thread ownership/destruction stress. CI executes it
-against the native mock driver.
+against the native mock driver. Closing a device with a wrapped resource still
+acquired must release it to its declared output state and flush exactly once;
+closing one with nothing acquired must do neither.
+
+## Device errors and removal
+
+`tests/d3d11on12removal.c` exercises the error routing described in
+[D3D11ON12.md](D3D11ON12.md#device-errors-and-removal). The mock driver reports
+errors in `Device::ReportError`'s shape — a `DeviceStatusQuery` escape with a
+null adapter, then `pfnSetErrorCb` — either on the calling thread or on a fresh
+thread that never called the core, which is what the translation layer's worker
+is. It also rejects `CreateDevice` when `pKTCallbacks->pfnEscapeCb` is null, so
+the original null-call defect fails adapter creation outright.
+
+The test checks that an escape with D3D12 healthy latches nothing; that
+`WASSTILLDRAWING` sends no escape and latches nothing; that a worker error raised
+while `SetViewportV1` is inside the driver is not that call's result but the
+device's (`DXGI_ERROR_DRIVER_INTERNAL_ERROR`); first-error-wins against a later
+D3D12 removal; D3D12's reason winning when the escape sees it first, and staying
+latched after D3D12 recovers; `DXGI_ERROR_DEVICE_REMOVED` with cleared outputs
+from buffer, texture, RTV and blend-state creation and from map; binds, clears
+and draws returning `S_OK` with no driver dispatch; bad handles still rejected;
+destroy still reaching the driver exactly once; isolation between two devices;
+and teardown after removal leaving every count balanced. A final phase races
+eight calling threads (create/destroy, viewport, draw) against sixteen worker
+errors and fails if any export returns anything but its own legitimate result.
+Both defects it guards were mutation-checked: dropping the escape assignment
+fails adapter creation, and routing every error to the per-call slot fails the
+viewport and reason assertions.
 
 `tests/e2e_d3d11_wrapped.cpp` uses the original D3D12 texture and D3D12 readback
 to verify three acquire/clear/release cycles per RGBA/BGRA format. Run it with

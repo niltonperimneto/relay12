@@ -435,3 +435,12 @@ WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12DestroyShaderResourceViewV1(
 WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12SetPixelShaderResourcesV1(
         WineD3D11On12AdapterDevice *, UINT, UINT,
         WineD3D11On12ShaderResourceView *const *) WINE_D3D11ON12_NOEXCEPT;
+
+/* Device removal, appended export; ABI v3 unchanged.  Returns the first error
+ * that belongs to the device rather than to a call -- a failure the driver's
+ * worker thread reported, or a removal D3D12 reported -- and otherwise the
+ * D3D12 device's own removal reason.  Once one is latched, creation and map
+ * exports return DXGI_ERROR_DEVICE_REMOVED, bind and draw exports succeed
+ * without dispatching, and destroy exports keep working. */
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12GetDeviceRemovedReasonV1(
+        WineD3D11On12AdapterDevice *) WINE_D3D11ON12_NOEXCEPT;

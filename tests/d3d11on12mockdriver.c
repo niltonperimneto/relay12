@@ -117,6 +117,66 @@ static D3D10DDI_HRTCORELAYER runtime_device;
 static D3DWDDM2_6DDI_DEVICEFUNCS *runtime_device_funcs;
 static LONG amortized_processing_calls;
 static unsigned char adapter_private;
+/* The most recently created device's callback tables and runtime handles.
+ *
+ * Separate from runtime_callbacks, which keeps the first device's for the
+ * suites written against it.  The removal tests open several devices and
+ * aim errors at one; they need the tables of the device they just opened. */
+static const D3DDDI_DEVICECALLBACKS *latest_kt_callbacks;
+static const D3DWDDM2_6DDI_CORELAYER_DEVICECALLBACKS *latest_callbacks;
+static D3D10DDI_HRTDEVICE latest_rt_device;
+static D3D10DDI_HRTCORELAYER latest_core_layer;
+static LONG escape_calls;
+static volatile LONG last_escape_result;
+/* An error the next SetViewports raises from a second thread while the core
+ * is still inside the call: the case a single error slot gets wrong. */
+static volatile LONG worker_error_next_viewport;
+
+/* DXGI_DDI_ERR_WASSTILLDRAWING; no header on the test include path has it. */
+#define MOCK_DDI_ERR_WASSTILLDRAWING ((HRESULT)0x887b0001)
+
+/* The shape of D3D11On12's Device::ReportError: a device-status escape with a
+ * null adapter and the runtime's device in hDevice, for every failure but
+ * WASSTILLDRAWING, then the error itself through pfnSetErrorCb.  The private
+ * data stands in for D3DDDI_EXECUTIONSTATEESCAPE, which the clean-room header
+ * does not author; the host must not read it. */
+static void mock_device_report_error(HRESULT error)
+{
+    if (FAILED(error) && error != MOCK_DDI_ERR_WASSTILLDRAWING)
+    {
+        D3DDDICB_ESCAPE escape;
+        UINT execution_state = 0;
+
+        memset(&escape, 0, sizeof(escape));
+        escape.hDevice = latest_rt_device.handle;
+        escape.pPrivateDriverData = &execution_state;
+        escape.PrivateDriverDataSize = sizeof(execution_state);
+        escape.Flags.DeviceStatusQuery = 1;
+        InterlockedIncrement(&escape_calls);
+        InterlockedExchange(&last_escape_result,
+                latest_kt_callbacks->pfnEscapeCb(NULL, &escape));
+    }
+    latest_callbacks->pfnSetErrorCb(latest_core_layer, error);
+}
+
+/* The translation layer's worker thread: a thread that has never called the
+ * runtime, reporting a failure no call is waiting for. */
+static DWORD WINAPI mock_worker_thread(void *param)
+{
+    mock_device_report_error((HRESULT)(LONG_PTR)param);
+    return 0;
+}
+
+static void mock_report_worker_error(HRESULT error)
+{
+    HANDLE thread = CreateThread(NULL, 0, mock_worker_thread,
+            (void *)(LONG_PTR)error, 0, NULL);
+
+    if (!thread)
+        return;
+    WaitForSingleObject(thread, INFINITE);
+    CloseHandle(thread);
+}
 
 /* Report a driver-side failure the way the DDI requires: through the
  * runtime's callback table, which does not exist until a device has been
@@ -788,10 +848,14 @@ static void mock_set_render_targets(D3D10DDI_HDEVICE device,
 static void mock_set_viewports(D3D10DDI_HDEVICE device, UINT count,
         UINT clear, const D3D10_DDI_VIEWPORT *viewports)
 {
+    HRESULT worker_error;
+
     (void)device;
     (void)clear;
     if (count && !viewports)
         bad_frame_description = 1;
+    if ((worker_error = InterlockedExchange(&worker_error_next_viewport, S_OK)))
+        mock_report_worker_error(worker_error);
 }
 
 static void mock_clear_render_target_view(D3D10DDI_HDEVICE device,
@@ -1087,6 +1151,10 @@ static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
             || !args->pWDDM2_6UMCallbacks->pfnSetErrorCb
             || !args->pWDDM2_6UMCallbacks->pfnPerformAmortizedProcessingCb)
         return E_POINTER;
+    /* Likewise the kernel-thunk escape: Device::ReportError calls it on
+     * every asynchronous failure without testing it. */
+    if (!args->pKTCallbacks || !args->pKTCallbacks->pfnEscapeCb)
+        return E_POINTER;
     /* The vtable is written into the runtime's private device block below. */
     if (!args->hDrvDevice.pDrvPrivate)
         return E_INVALIDARG;
@@ -1096,6 +1164,10 @@ static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
         runtime_device = args->hRTCoreLayer;
         runtime_device_funcs = args->pWDDM2_6DeviceFuncs;
     }
+    latest_kt_callbacks = args->pKTCallbacks;
+    latest_callbacks = args->pWDDM2_6UMCallbacks;
+    latest_rt_device = args->hRTDevice;
+    latest_core_layer = args->hRTCoreLayer;
     args->pWDDM2_6DeviceFuncs->pfnDestroyDevice = mock_destroy_device;
     args->pWDDM2_6DeviceFuncs->pfnFlush = mock_flush;
     args->pWDDM2_6DeviceFuncs->pfnDraw = mock_draw;
@@ -1396,4 +1468,35 @@ __declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetSRVCounts(
 {
     *created = srv_create_calls; *destroyed = srv_destroy_calls; *bound = srv_bind_calls;
     *start = srv_last_start; *count = srv_last_count; *last = srv_last_view;
+}
+
+/* Device::ReportError from a worker thread, for the most recent device.
+ * Returns what the host's escape answered, or S_FALSE if no escape was sent
+ * (a WASSTILLDRAWING report sends none). */
+__declspec(dllexport) HRESULT WINAPI WineD3D11On12MockDriverReportWorkerError(HRESULT hr)
+{
+    LONG before = escape_calls;
+
+    InterlockedExchange(&last_escape_result, S_FALSE);
+    mock_report_worker_error(hr);
+    return escape_calls == before ? S_FALSE : last_escape_result;
+}
+
+/* The same report on the calling thread, which is how Device::ReportError is
+ * reached outside the worker -- RetrieveShaderComment, for one. */
+__declspec(dllexport) HRESULT WINAPI WineD3D11On12MockDriverReportDeviceError(HRESULT hr)
+{
+    InterlockedExchange(&last_escape_result, S_FALSE);
+    mock_device_report_error(hr);
+    return last_escape_result;
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverWorkerErrorDuringNextViewport(HRESULT hr)
+{
+    InterlockedExchange(&worker_error_next_viewport, hr);
+}
+
+__declspec(dllexport) LONG WINAPI WineD3D11On12MockDriverGetEscapeCount(void)
+{
+    return escape_calls;
 }

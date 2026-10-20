@@ -106,6 +106,7 @@ EXPECTED_EXPORTS = {
         43: "WineD3D11On12DestroyShaderResourceViewV1",
         44: "WineD3D11On12SetPixelShaderResourcesV1",
         45: "WineD3D11On12ValidateDeviceV1",
+        46: "WineD3D11On12GetDeviceRemovedReasonV1",
     },
 }
 

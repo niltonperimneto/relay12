@@ -50,6 +50,9 @@ struct mock_device
      * so an adapter lookup keyed on it must fail. */
     LUID adapter_luid;
     unsigned int adapter_luid_calls;
+    /* What GetDeviceRemovedReason answers.  S_OK is a live device; anything
+     * else is a removal D3D12 knows about, which the core's escape latches. */
+    volatile LONG removed_reason;
 };
 
 static inline struct mock_device *impl_from_device(ID3D12Device *iface)
@@ -136,6 +139,13 @@ static LUID *STDMETHODCALLTYPE mock_device_GetAdapterLuid(ID3D12Device *iface, L
     return luid;
 }
 
+/* Called from the mock driver's simulated worker thread as well as the test's
+ * own, so the field is read with an interlocked operation. */
+static HRESULT STDMETHODCALLTYPE mock_device_GetDeviceRemovedReason(ID3D12Device *iface)
+{
+    return InterlockedCompareExchange(&impl_from_device(iface)->removed_reason, 0, 0);
+}
+
 /* Not const: the widl C interface declares lpVtbl as a pointer to
  * non-const. */
 static ID3D12DeviceVtbl mock_device_vtbl =
@@ -146,6 +156,7 @@ static ID3D12DeviceVtbl mock_device_vtbl =
     .CheckFeatureSupport = mock_device_CheckFeatureSupport,
     .GetNodeCount = mock_device_GetNodeCount,
     .GetAdapterLuid = mock_device_GetAdapterLuid,
+    .GetDeviceRemovedReason = mock_device_GetDeviceRemovedReason,
 };
 
 static inline void mock_device_init(struct mock_device *device)
