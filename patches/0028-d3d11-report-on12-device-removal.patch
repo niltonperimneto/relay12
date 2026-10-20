@@ -37,7 +37,7 @@ index 811713b6..b0d74709 100644
 @@ -626,11 +627,28 @@ static UINT d3d11_on12_backend_get_creation_flags(struct d3d_device *device)
      return backend->creation_flags;
  }
- 
+
 +/* Initialization first, because a device whose adapter never opened has no
 + * other state.  Then the core, which latches errors the driver's worker
 + * thread reports and the removal D3D12 reports through the driver's escape;
@@ -62,10 +62,10 @@ index 811713b6..b0d74709 100644
 +        return hr;
 +    return ID3D12Device_GetDeviceRemovedReason(backend->device12);
  }
- 
+
  static void d3d11_on12_backend_flush(struct d3d11_device_context *context)
 @@ -1520,7 +1538,9 @@ static HRESULT d3d11_on12_create_frame_backend(IUnknown *device,
- 
+
      address = GetProcAddress(backend->core_module, "WineD3D11On12CheckFrameSupportV1");
      memcpy(&backend->check_frame_support, &address, sizeof(backend->check_frame_support));
 -    if (!backend->check_frame_support)
