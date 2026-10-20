@@ -143,6 +143,10 @@ REQUIRED_MAIN = (
     "WineD3D11On12UnmapTexture2DV1",
     "WineD3D11On12CheckFrameSupportV1",
     "backend->check_frame_support(&backend->adapter)",
+    # Patch 0028: removal latched by the core -- worker-thread errors and the
+    # driver's device-status escape -- reaches GetDeviceRemovedReason.
+    '"WineD3D11On12GetDeviceRemovedReasonV1"',
+    "backend->get_removed_reason(&backend->adapter)",
 
     "static const struct d3d11_backend_ops d3d11_on12_backend_ops",
     ".create_texture2d = d3d11_on12_backend_create_texture2d,",

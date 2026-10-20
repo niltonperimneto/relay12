@@ -1499,6 +1499,27 @@ class CoreCallbacksGate(unittest.TestCase):
                         for error in self.check(broken)),
                     self.check(broken))
 
+    def test_an_unassigned_kernel_escape_is_rejected(self):
+        """pKTCallbacks is checked like the core-layer table: the driver's
+        Device::ReportError calls pfnEscapeCb unchecked on every failure the
+        worker thread reports, so a missing entry is a crash, not an error."""
+        for name in check_core_callbacks.KERNEL_MANDATORY:
+            with self.subTest(callback=name):
+                for replacement, expected in (("", "is never assigned"),
+                                              (None, "is assigned nullptr")):
+                    if replacement is None:
+                        broken = self.mutated(
+                            rf"(state->kernelCallbacks\.{name} = )\w+;",
+                            r"\1nullptr;")
+                    else:
+                        broken = self.mutated(
+                            rf"\n *state->kernelCallbacks\.{name} = \w+;",
+                            replacement)
+                    self.assertTrue(
+                        any(f"{name} {expected}" in error
+                            for error in self.check(broken)),
+                        self.check(broken))
+
     def test_a_callback_with_no_definition_is_rejected(self):
         broken = self.mutated(
             r"(state->coreCallbacks\.pfnPerformAmortizedProcessingCb = )\w+;",

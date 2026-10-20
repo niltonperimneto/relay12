@@ -518,6 +518,13 @@ declaration nothing yet needs.
 
 ### Resolved items (formerly blocking)
 
+- **Whether the host implements `pfnEscapeCb` (Resolved)**: it does, and
+  answers the device-status query itself from the caller's
+  `ID3D12Device::GetDeviceRemovedReason` rather than forwarding to Wine's
+  D3DKMT, since display-kernel paths are disabled in this port. The driver's
+  `D3DDDI_EXECUTIONSTATEESCAPE` payload is not read. See `D3D11ON12.md`,
+  "Device errors and removal".
+
 - **`D3DDDI_EXECUTIONSTATEESCAPE` (Resolved)**: Previously returning 404 on
   Microsoft Learn, this structure and its companion enum
   `D3DDDI_DEVICEEXECUTION_STATE` were recovered via the official Windows Driver
@@ -591,10 +598,7 @@ declaration nothing yet needs.
 
 - **Extent of `d3dkmthk.h` types in host signatures**: `D3D11On12`'s `pch.hpp`
   includes `d3dkmthk.h`. Group 1 (Surface discovery) will provide the compiler-verified answer.
-- **Whether the host should implement `pfnEscapeCb` at all**: `D3D11ON12.md`
-  lists display-kernel paths as disabled for this port, so the host may answer
-  the driver's device-removal probe directly rather than forwarding it to
-  Wine's D3DKMT. Declaring the slot does not decide this.
+
 - **What to pass `pfnCalcPrivateShaderSize` on a container path**: the two
   calls disagree about what a shader is. The sizing slot takes the DDI's
   driver bytecode — a token stream whose length is its own second word, which

@@ -187,6 +187,9 @@ contract.
 | 35-37 | `WineD3D11On12{CreateBlend,CreateDepthStencil,CreateRasterizer}StateV1` | Blend, depth-stencil and rasterizer state lifecycle |
 | 38 | `WineD3D11On12DestroyPipelineStateV1` | Unified pipeline state destruction |
 | 39-41 | `WineD3D11On12Set{Blend,DepthStencil,Rasterizer}StateV1` | Pipeline state binding |
+| 42-44 | `WineD3D11On12{Create,Destroy}ShaderResourceViewV1`, `WineD3D11On12SetPixelShaderResourcesV1` | Pixel Texture2D SRV lifecycle and binding |
+| 45 | `WineD3D11On12ValidateDeviceV1` | Allocation-free creation preflight |
+| 46 | `WineD3D11On12GetDeviceRemovedReasonV1` | Latched device error, else D3D12's removal reason |
 
 ### 4.3 Diagnostic Logging
 Diagnostic logging is handled via [`relay12-d3d11/wine_d3d11_diag.h`](relay12-d3d11/wine_d3d11_diag.h):
@@ -206,9 +209,9 @@ Run these before every push. They need no toolchain, no Wine, and no network,
 and they take seconds. All must exit `0`.
 
 ```bash
-python3 -m unittest discover -s tests -p "test_*.py"   # 104 tests
-python3 scripts/gen_ddi_layout.py --check              # 54 structures, 469 fields
-python3 scripts/check_ddi_header.py                    # 21 declaration groups
+python3 -m unittest discover -s tests -p "test_*.py"   # 201 tests
+python3 scripts/gen_ddi_layout.py --check              # 60 structures, 517 fields
+python3 scripts/check_ddi_header.py                    # 23 declaration groups
 python3 scripts/check_interface_acquisition.py         # strictResult() funnel
 python3 scripts/check_shared_state.py                  # InitOnce annotations
 python3 scripts/check_adapter_args.py                  # adapter-arg transcription

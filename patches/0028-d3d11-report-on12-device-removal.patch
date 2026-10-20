@@ -1,0 +1,77 @@
+Subject: d3d11: report On12 device removal latched by the core
+
+GetDeviceRemovedReason on an On12 device asked only the D3D12 device. The
+errors that actually remove a D3D11On12 device mostly never reach D3D12's
+answer: the translation layer's worker thread reports them asynchronously,
+after the D3D11 call that queued the work has returned, and D3D11On12 sends
+a device-status escape first so that a removal D3D12 already knows about
+wins over its own generic failure. The core now answers that escape and
+latches both into a sticky per-device error (WineD3D11On12GetDeviceRemoved
+ReasonV1, ordinal 46). Without asking it, a game polling for removal after
+a failed frame is told S_OK, keeps submitting to a device whose creation
+calls all fail, and never runs its recovery path.
+
+Check, in order: the deferred initialization's result, the core's latched
+error, then ID3D12Device_GetDeviceRemovedReason for a removal no D3D11 work
+has run into. The core is asked only once the adapter is open -- the query
+must not be what opens it, since that would reserve the heaps the deferred
+initialization exists to avoid. The new export is required alongside
+CheckFrameSupportV1, so an older core cannot publish a backend that reports
+removal from one source only. The WineD3D path is unchanged.
+
+Requires WineD3D11On12GetDeviceRemovedReasonV1 (ordinal 46). Applies after
+patches 0002-0027 to WineCX 7dbc5b5322a6ef3fb04bdc643c64b188fd641149.
+
+diff --git a/dlls/d3d11/d3d11_main.c b/dlls/d3d11/d3d11_main.c
+index 811713b6..b0d74709 100644
+--- a/dlls/d3d11/d3d11_main.c
++++ b/dlls/d3d11/d3d11_main.c
+@@ -531,6 +531,7 @@ struct d3d11_on12_backend
+             D3D11_MAP, UINT, D3D11_MAPPED_SUBRESOURCE *);
+     HRESULT (WINAPI *unmap_texture)(struct wine_d3d11on12_adapter_device *, void *, UINT);
+     HRESULT (WINAPI *check_frame_support)(struct wine_d3d11on12_adapter_device *);
++    HRESULT (WINAPI *get_removed_reason)(struct wine_d3d11on12_adapter_device *);
+     HRESULT (WINAPI *create_wrapped_texture)(struct wine_d3d11on12_adapter_device *,
+             IUnknown *, const D3D11_RESOURCE_FLAGS *, D3D12_RESOURCE_STATES,
+             D3D12_RESOURCE_STATES, D3D11_TEXTURE2D_DESC *, struct wine_d3d11on12_texture2d *);
+@@ -626,11 +627,28 @@ static UINT d3d11_on12_backend_get_creation_flags(struct d3d_device *device)
+     return backend->creation_flags;
+ }
+ 
++/* Initialization first, because a device whose adapter never opened has no
++ * other state.  Then the core, which latches errors the driver's worker
++ * thread reports and the removal D3D12 reports through the driver's escape;
++ * those reach no D3D11 call, so without asking the core a removed device
++ * would report S_OK here until D3D12 itself noticed.  Then D3D12, for a
++ * removal no D3D11 work has run into yet.
++ *
++ * Asking must not open the adapter: a device that has submitted nothing has
++ * no core state, and opening one to answer this would reserve the heaps the
++ * deferred initialization exists to avoid. */
+ static HRESULT d3d11_on12_backend_get_removed_reason(struct d3d_device *device)
+ {
+     struct d3d11_on12_backend *backend = device->backend_private;
+     HRESULT hr = d3d11_on12_initialization_result(backend);
+-    return FAILED(hr) ? hr : ID3D12Device_GetDeviceRemovedReason(backend->device12);
++    BOOL pending = TRUE;
++
++    if (FAILED(hr))
++        return hr;
++    if (InitOnceBeginInitialize(&backend->initialization, INIT_ONCE_CHECK_ONLY, &pending, NULL)
++            && !pending && FAILED(hr = backend->get_removed_reason(&backend->adapter)))
++        return hr;
++    return ID3D12Device_GetDeviceRemovedReason(backend->device12);
+ }
+ 
+ static void d3d11_on12_backend_flush(struct d3d11_device_context *context)
+@@ -1520,7 +1538,9 @@ static HRESULT d3d11_on12_create_frame_backend(IUnknown *device,
+ 
+     address = GetProcAddress(backend->core_module, "WineD3D11On12CheckFrameSupportV1");
+     memcpy(&backend->check_frame_support, &address, sizeof(backend->check_frame_support));
+-    if (!backend->check_frame_support)
++    address = GetProcAddress(backend->core_module, "WineD3D11On12GetDeviceRemovedReasonV1");
++    memcpy(&backend->get_removed_reason, &address, sizeof(backend->get_removed_reason));
++    if (!backend->check_frame_support || !backend->get_removed_reason)
+     {
+         FreeLibrary(backend->core_module);
+         free(backend);
