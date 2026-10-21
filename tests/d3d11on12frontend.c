@@ -294,6 +294,127 @@ int main(void)
         CHECK(underlying.refcount == 1 && queue.refcount == 1);
     }
     {
+        /* Patch 0030: state objects reach the driver once per unique
+         * description, are retained while bound, read back through the
+         * getters, and are destroyed when the last binding lets go. */
+        ID3D11Device *device = NULL;
+        ID3D11Device1 *device1 = NULL;
+        ID3D11DeviceContext *context = NULL;
+        ID3D11BlendState *blend = NULL, *same = NULL, *got_blend = NULL;
+        ID3D11BlendState1 *logic = (void *)(UINT_PTR)1;
+        ID3D11DepthStencilState *depth = NULL, *got_depth = NULL;
+        ID3D11RasterizerState *raster = NULL, *got_raster = NULL;
+        ID3D11SamplerState *sampler = NULL, *got_samplers[2] = {NULL, NULL};
+        D3D11_BLEND_DESC bd = {0};
+        D3D11_BLEND_DESC1 bd1 = {0};
+        D3D11_DEPTH_STENCIL_DESC dd = {0};
+        D3D11_RASTERIZER_DESC rd = {0};
+        D3D11_SAMPLER_DESC sd = {0};
+        D3D11_RECT rects[2] = {{0, 0, 4, 4}, {2, 2, 8, 8}}, got_rects[2];
+        D3D_FEATURE_LEVEL selected = 0;
+        const float factor[4] = {0.5f, 0.25f, 0.125f, 1.0f};
+        float got_factor[4];
+        UINT mask = 0, ref = 0, rect_count = 0;
+        LONG creates[3], destroys[3], binds[3], before[3], samplers_created, samplers_destroyed;
+        void (WINAPI *state_counts)(LONG *, LONG *, LONG *);
+        void (WINAPI *sampler_record)(LONG *, LONG *, LONG *, void *, int *);
+
+        SetEnvironmentVariableW(L"RELAY12_MOCK_STATE_SLOTS", L"1");
+        REQUIRE(create((IUnknown *)&underlying.ID3D12Device_iface, 0, &requested, 1,
+                queues, 1, 0, &device, &context, &selected) == S_OK);
+        address = GetProcAddress(driver, "WineD3D11On12MockDriverGetStateCounts");
+        memcpy(&state_counts, &address, sizeof(state_counts));
+        address = GetProcAddress(driver, "WineD3D11On12MockDriverGetSamplerRecord");
+        memcpy(&sampler_record, &address, sizeof(sampler_record));
+        REQUIRE(state_counts && sampler_record);
+        ID3D11DeviceContext_Flush(context); /* opens the adapter with the slots */
+        state_counts(before, NULL, NULL);
+        bd.RenderTarget[0].BlendEnable = TRUE;
+        bd.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+        bd.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+        bd.RenderTarget[0].BlendOp = bd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        bd.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+        bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
+        bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+        REQUIRE(ID3D11Device_CreateBlendState(device, &bd, &blend) == S_OK);
+        CHECK(ID3D11Device_CreateBlendState(device, &bd, &same) == S_OK && same == blend);
+        if (same) ID3D11BlendState_Release(same);
+        if (SUCCEEDED(ID3D11Device_QueryInterface(device, &IID_ID3D11Device1, (void **)&device1)))
+        {
+            bd1.RenderTarget[0].LogicOpEnable = TRUE;
+            bd1.RenderTarget[0].LogicOp = D3D11_LOGIC_OP_XOR;
+            bd1.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+            CHECK(ID3D11Device1_CreateBlendState1(device1, &bd1, &logic) == DXGI_ERROR_UNSUPPORTED);
+            CHECK(!logic);
+            ID3D11Device1_Release(device1);
+        }
+        dd.DepthEnable = TRUE; dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+        dd.DepthFunc = D3D11_COMPARISON_LESS;
+        REQUIRE(ID3D11Device_CreateDepthStencilState(device, &dd, &depth) == S_OK);
+        rd.FillMode = D3D11_FILL_SOLID; rd.CullMode = D3D11_CULL_NONE;
+        rd.DepthClipEnable = TRUE; rd.ScissorEnable = TRUE;
+        REQUIRE(ID3D11Device_CreateRasterizerState(device, &rd, &raster) == S_OK);
+        sd.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+        sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+        sd.MaxLOD = D3D11_FLOAT32_MAX;
+        REQUIRE(ID3D11Device_CreateSamplerState(device, &sd, &sampler) == S_OK);
+        state_counts(creates, NULL, NULL);
+        CHECK(creates[0] == before[0] + 1 && creates[1] == before[1] + 1 && creates[2] == before[2] + 1);
+
+        ID3D11DeviceContext_OMSetBlendState(context, blend, factor, 0x0f);
+        ID3D11DeviceContext_OMSetDepthStencilState(context, depth, 7);
+        ID3D11DeviceContext_RSSetState(context, raster);
+        ID3D11DeviceContext_VSSetSamplers(context, 0, 1, &sampler);
+        ID3D11DeviceContext_PSSetSamplers(context, 3, 1, &sampler);
+        ID3D11DeviceContext_RSSetScissorRects(context, 2, rects);
+        state_counts(NULL, NULL, binds);
+        CHECK(binds[0] && binds[1] && binds[2]);
+        /* Bound state outlives its last public reference. */
+        CHECK(ID3D11BlendState_Release(blend) == 0);
+        CHECK(ID3D11DepthStencilState_Release(depth) == 0);
+        CHECK(ID3D11RasterizerState_Release(raster) == 0);
+        CHECK(ID3D11SamplerState_Release(sampler) == 0);
+        state_counts(NULL, destroys, NULL);
+        sampler_record(&samplers_created, &samplers_destroyed, NULL, NULL, NULL);
+        CHECK(destroys[0] == before[0] && samplers_created == samplers_destroyed + 1);
+        ID3D11DeviceContext_OMGetBlendState(context, &got_blend, got_factor, &mask);
+        CHECK(got_blend == blend && !memcmp(got_factor, factor, sizeof(factor)) && mask == 0x0f);
+        if (got_blend) ID3D11BlendState_Release(got_blend);
+        ID3D11DeviceContext_OMGetDepthStencilState(context, &got_depth, &ref);
+        CHECK(got_depth == depth && ref == 7);
+        if (got_depth) ID3D11DepthStencilState_Release(got_depth);
+        ID3D11DeviceContext_RSGetState(context, &got_raster);
+        CHECK(got_raster == raster);
+        if (got_raster) ID3D11RasterizerState_Release(got_raster);
+        ID3D11DeviceContext_PSGetSamplers(context, 2, 2, got_samplers);
+        CHECK(!got_samplers[0] && got_samplers[1] == sampler);
+        if (got_samplers[1]) ID3D11SamplerState_Release(got_samplers[1]);
+        ID3D11DeviceContext_RSGetScissorRects(context, &rect_count, NULL);
+        CHECK(rect_count == 2);
+        ID3D11DeviceContext_RSGetScissorRects(context, &rect_count, got_rects);
+        CHECK(rect_count == 2 && !memcmp(got_rects, rects, sizeof(rects)));
+
+        /* ClearState lets go of the last bindings: each reaches the driver's
+         * destroy exactly once, sampler included. */
+        ID3D11DeviceContext_ClearState(context);
+        state_counts(NULL, destroys, NULL);
+        sampler_record(&samplers_created, &samplers_destroyed, NULL, NULL, NULL);
+        CHECK(destroys[0] == before[0] + 1 && destroys[1] == before[1] + 1 && destroys[2] == before[2] + 1);
+        CHECK(samplers_created == samplers_destroyed);
+        ID3D11DeviceContext_RSGetScissorRects(context, &rect_count, NULL);
+        CHECK(rect_count == 0);
+        /* The description tree no longer holds the destroyed state. */
+        REQUIRE(ID3D11Device_CreateBlendState(device, &bd, &blend) == S_OK);
+        state_counts(creates, NULL, NULL);
+        CHECK(creates[0] == before[0] + 2);
+        CHECK(ID3D11BlendState_Release(blend) == 0);
+        state_counts(NULL, destroys, NULL);
+        CHECK(destroys[0] == before[0] + 2);
+        CHECK(ID3D11Device_Release(device) == 1);
+        CHECK(ID3D11DeviceContext_Release(context) == 0);
+        CHECK(underlying.refcount == 1 && queue.refcount == 1);
+    }
+    {
         /* Patch 0028: removal reaches GetDeviceRemovedReason from all three
          * sources -- D3D12 before the adapter opens, then a worker-thread
          * error the core latched, which outlives D3D12 recovering. */

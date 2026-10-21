@@ -1,0 +1,1096 @@
+Subject: d3d11: route On12 state objects, samplers and scissor rectangles
+
+Blend, depth-stencil, rasterizer and sampler state objects had no backend:
+every Create*State on a standalone On12 device returned
+DXGI_ERROR_UNSUPPORTED, and OMSetBlendState, OMSetDepthStencilState,
+RSSetState, {VS,PS}SetSamplers and RSSetScissorRects returned after a WARN.
+Core exports 35-41 have existed since the PSO component work but nothing in
+the frontend used them, and without samplers no texture can be filtered.
+
+Each of the four state structures now embeds a backend child and the core's
+pipeline-state handle. When the device's backend provides create_state,
+d3d_*_state_create makes the core object instead of a WineD3D one, after the
+state is in the device's description tree. Wine already deduplicates
+identical descriptions through those trees, so each unique state reaches the
+driver once. The public refcount holds one backend reference, as buffers'
+does, and each binding holds another; the last one destroys the core object
+and removes the tree entry.
+
+That last step has a race the WineD3D path did not need to consider: an
+identical Create*State can find the entry and re-reference it between the
+final decref and the removal. Releases take the wined3d mutex around their
+decref, and the destroy callback rechecks the backend refcount under the
+mutex and keeps the state if it was resurrected.
+
+D3D11.1-only features are refused with DXGI_ERROR_UNSUPPORTED rather than
+silently dropped: blend logic ops, ForcedSampleCount and conservative
+rasterization. Binding goes through exports 39-41 and the new
+SetSamplersV1 and SetScissorRectsV1 (ordinals 53, 54); sampler creation
+through CreateSamplerStateV1 (52). Getters report the retained bindings,
+blend factor, sample mask, stencil reference and scissor rectangles.
+ClearState resets all of them.
+
+The new backend ops are designated members, absent from the WineD3D table,
+so ordinary devices keep their WineD3D state objects. The ten exports
+resolve as one required group.
+
+Requires WineD3D11On12{CreateBlendState,CreateDepthStencilState,
+CreateRasterizerState,DestroyPipelineState,SetBlendState,
+SetDepthStencilState,SetRasterizerState}V1 (ordinals 35-41) and
+WineD3D11On12{CreateSamplerState,SetSamplers,SetScissorRects}V1 (52-54).
+Applies after patches 0002-0029 to WineCX
+7dbc5b5322a6ef3fb04bdc643c64b188fd641149.
+
+diff --git a/dlls/d3d11/d3d11_main.c b/dlls/d3d11/d3d11_main.c
+index 2cdd94cd..6e7efb55 100644
+--- a/dlls/d3d11/d3d11_main.c
++++ b/dlls/d3d11/d3d11_main.c
+@@ -390,6 +390,16 @@ cleanup:
+ #define WINE_D3D11ON12_SHADER_VERTEX 1u
+ #define WINE_D3D11ON12_SHADER_PIXEL 2u
+
++/* The core's WineD3D11On12PipelineState; the state structures in
++ * d3d11_private.h embed one as backend_state. */
++struct wine_d3d11on12_pipeline_state
++{
++    UINT size;
++    UINT kind;
++    void *driver_state;
++    void *runtime_state;
++};
++
+ struct wine_d3d11on12_adapter_device
+ {
+     UINT size;
+@@ -543,6 +553,25 @@ struct d3d11_on12_backend
+             const D3D11_BOX *, const void *, UINT, UINT);
+     HRESULT (WINAPI *update_texture)(struct wine_d3d11on12_adapter_device *, void *, UINT,
+             const D3D11_BOX *, const void *, UINT, UINT);
++    HRESULT (WINAPI *create_blend_state)(struct wine_d3d11on12_adapter_device *,
++            const D3D11_BLEND_DESC *, struct wine_d3d11on12_pipeline_state *);
++    HRESULT (WINAPI *create_depth_stencil_state)(struct wine_d3d11on12_adapter_device *,
++            const D3D11_DEPTH_STENCIL_DESC *, struct wine_d3d11on12_pipeline_state *);
++    HRESULT (WINAPI *create_rasterizer_state)(struct wine_d3d11on12_adapter_device *,
++            const D3D11_RASTERIZER_DESC *, struct wine_d3d11on12_pipeline_state *);
++    HRESULT (WINAPI *create_sampler_state)(struct wine_d3d11on12_adapter_device *,
++            const D3D11_SAMPLER_DESC *, struct wine_d3d11on12_pipeline_state *);
++    HRESULT (WINAPI *destroy_pipeline_state)(struct wine_d3d11on12_pipeline_state *);
++    HRESULT (WINAPI *set_blend_state)(struct wine_d3d11on12_adapter_device *,
++            struct wine_d3d11on12_pipeline_state *, const FLOAT *, UINT);
++    HRESULT (WINAPI *set_depth_stencil_state)(struct wine_d3d11on12_adapter_device *,
++            struct wine_d3d11on12_pipeline_state *, UINT);
++    HRESULT (WINAPI *set_rasterizer_state)(struct wine_d3d11on12_adapter_device *,
++            struct wine_d3d11on12_pipeline_state *);
++    HRESULT (WINAPI *set_samplers)(struct wine_d3d11on12_adapter_device *, UINT, UINT, UINT,
++            struct wine_d3d11on12_pipeline_state *const *);
++    HRESULT (WINAPI *set_scissor_rects)(struct wine_d3d11on12_adapter_device *, UINT,
++            const D3D11_RECT *);
+     HRESULT (WINAPI *create_wrapped_texture)(struct wine_d3d11on12_adapter_device *,
+             IUnknown *, const D3D11_RESOURCE_FLAGS *, D3D12_RESOURCE_STATES,
+             D3D12_RESOURCE_STATES, D3D11_TEXTURE2D_DESC *, struct wine_d3d11on12_texture2d *);
+@@ -1369,10 +1398,136 @@ static void d3d11_on12_backend_update_subresource(struct d3d11_device_context *c
+     if (FAILED(hr)) WARN("On12 UpdateSubresource failed, hr %#lx.\n", hr);
+ }
+
++static HRESULT d3d11_on12_backend_create_state(struct d3d_device *device,
++        enum d3d11_backend_state_kind kind, const void *desc, void *handle)
++{
++    struct d3d11_on12_backend *backend = device->backend_private;
++    struct wine_d3d11on12_pipeline_state *state = handle;
++
++    state->size = sizeof(*state);
++    switch (kind)
++    {
++    case D3D11_BACKEND_STATE_BLEND:
++        return D3D11_ON12_CALL(backend, backend->create_blend_state(&backend->adapter, desc, state));
++    case D3D11_BACKEND_STATE_DEPTH_STENCIL:
++        return D3D11_ON12_CALL(backend, backend->create_depth_stencil_state(&backend->adapter, desc, state));
++    case D3D11_BACKEND_STATE_RASTERIZER:
++        return D3D11_ON12_CALL(backend, backend->create_rasterizer_state(&backend->adapter, desc, state));
++    case D3D11_BACKEND_STATE_SAMPLER:
++        return D3D11_ON12_CALL(backend, backend->create_sampler_state(&backend->adapter, desc, state));
++    }
++    return E_INVALIDARG;
++}
++
++static void d3d11_on12_backend_destroy_state(struct d3d_device *device, void *handle)
++{
++    struct d3d11_on12_backend *backend = device->backend_private;
++    HRESULT hr = D3D11_ON12_CALL(backend, backend->destroy_pipeline_state(handle));
++    if (FAILED(hr)) WARN("On12 state destruction failed, hr %#lx.\n", hr);
++}
++
++/* A state object usable on this device, as its core handle, or NULL with
++ * *valid cleared.  A null interface is valid and binds the default. */
++#define D3D11_ON12_STATE_HANDLE(context, impl, valid) \
++    ((impl) && ((impl)->device != &(context)->device->ID3D11Device5_iface \
++            || !(impl)->backend_child.destroy) ? (*(valid) = FALSE, NULL) \
++            : (impl) ? (struct wine_d3d11on12_pipeline_state *)&(impl)->backend_state : NULL)
++
++static void d3d11_on12_backend_set_blend_state(struct d3d11_device_context *context,
++        ID3D11BlendState *iface, const float *factor, UINT mask)
++{
++    static const float defaults[4] = {1.0f, 1.0f, 1.0f, 1.0f};
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    struct d3d_blend_state *state = unsafe_impl_from_ID3D11BlendState(iface);
++    BOOL valid = TRUE;
++    struct wine_d3d11on12_pipeline_state *handle = D3D11_ON12_STATE_HANDLE(context, state, &valid);
++    HRESULT hr;
++
++    if (!valid) { WARN("On12 blend state is not from this device.\n"); return; }
++    if (!factor) factor = defaults;
++    hr = D3D11_ON12_CALL(backend, backend->set_blend_state(&backend->adapter, handle, factor, mask));
++    if (FAILED(hr)) { WARN("On12 blend state binding failed, hr %#lx.\n", hr); return; }
++    d3d11_backend_child_bind(&context->bound_blend, state ? &state->backend_child : NULL);
++    memcpy(context->bound_blend_factor, factor, sizeof(context->bound_blend_factor));
++    context->bound_sample_mask = mask;
++}
++
++static void d3d11_on12_backend_set_depth_stencil_state(struct d3d11_device_context *context,
++        ID3D11DepthStencilState *iface, UINT reference)
++{
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    struct d3d_depthstencil_state *state = unsafe_impl_from_ID3D11DepthStencilState(iface);
++    BOOL valid = TRUE;
++    struct wine_d3d11on12_pipeline_state *handle = D3D11_ON12_STATE_HANDLE(context, state, &valid);
++    HRESULT hr;
++
++    if (!valid) { WARN("On12 depth/stencil state is not from this device.\n"); return; }
++    hr = D3D11_ON12_CALL(backend, backend->set_depth_stencil_state(&backend->adapter, handle, reference));
++    if (FAILED(hr)) { WARN("On12 depth/stencil binding failed, hr %#lx.\n", hr); return; }
++    d3d11_backend_child_bind(&context->bound_depth_stencil, state ? &state->backend_child : NULL);
++    context->bound_stencil_ref = reference;
++}
++
++static void d3d11_on12_backend_set_rasterizer_state(struct d3d11_device_context *context,
++        ID3D11RasterizerState *iface)
++{
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    struct d3d_rasterizer_state *state = unsafe_impl_from_ID3D11RasterizerState(iface);
++    BOOL valid = TRUE;
++    struct wine_d3d11on12_pipeline_state *handle = D3D11_ON12_STATE_HANDLE(context, state, &valid);
++    HRESULT hr;
++
++    if (!valid) { WARN("On12 rasterizer state is not from this device.\n"); return; }
++    hr = D3D11_ON12_CALL(backend, backend->set_rasterizer_state(&backend->adapter, handle));
++    if (FAILED(hr)) { WARN("On12 rasterizer binding failed, hr %#lx.\n", hr); return; }
++    d3d11_backend_child_bind(&context->bound_rasterizer, state ? &state->backend_child : NULL);
++}
++
++static void d3d11_on12_backend_set_samplers(struct d3d11_device_context *context,
++        enum wined3d_shader_type type, UINT start, UINT count, ID3D11SamplerState *const *samplers)
++{
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    struct wine_d3d11on12_pipeline_state *handles[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT];
++    struct d3d_sampler_state *resolved[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT];
++    UINT stage, i;
++    HRESULT hr;
++
++    if (type != WINED3D_SHADER_TYPE_VERTEX && type != WINED3D_SHADER_TYPE_PIXEL) return;
++    stage = type == WINED3D_SHADER_TYPE_PIXEL ? 1 : 0;
++    if (start > ARRAY_SIZE(handles) || count > ARRAY_SIZE(handles) - start || (count && !samplers)) return;
++    for (i = 0; i < count; ++i)
++    {
++        BOOL valid = TRUE;
++        resolved[i] = unsafe_impl_from_ID3D11SamplerState(samplers[i]);
++        handles[i] = D3D11_ON12_STATE_HANDLE(context, resolved[i], &valid);
++        if (!valid) { WARN("On12 sampler binding requires samplers from this device.\n"); return; }
++    }
++    hr = D3D11_ON12_CALL(backend, backend->set_samplers(&backend->adapter,
++            stage ? WINE_D3D11ON12_SHADER_PIXEL : WINE_D3D11ON12_SHADER_VERTEX, start, count, handles));
++    if (FAILED(hr)) { WARN("On12 sampler binding failed, hr %#lx.\n", hr); return; }
++    for (i = 0; i < count; ++i)
++        d3d11_backend_child_bind(&context->bound_samplers[stage][start + i],
++                resolved[i] ? &resolved[i]->backend_child : NULL);
++}
++
++static void d3d11_on12_backend_set_scissor_rects(struct d3d11_device_context *context,
++        UINT count, const D3D11_RECT *rects)
++{
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    HRESULT hr;
++
++    if (count > ARRAY_SIZE(context->bound_scissor_rects) || (count && !rects)) return;
++    hr = D3D11_ON12_CALL(backend, backend->set_scissor_rects(&backend->adapter, count, rects));
++    if (FAILED(hr)) { WARN("On12 scissor rectangles failed, hr %#lx.\n", hr); return; }
++    if (count) memcpy(context->bound_scissor_rects, rects, count * sizeof(*rects));
++    context->bound_scissor_count = count;
++}
++
+ static void d3d11_on12_backend_clear_state(struct d3d11_device_context *context)
+ {
+     ID3D11ShaderResourceView *resources[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {0};
+     ID3D11Buffer *buffers[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT] = {0};
++    ID3D11SamplerState *samplers[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT] = {0};
+     UINT zeros[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT] = {0};
+     struct d3d11_on12_backend *backend = context->device->backend_private;
+     BOOL pending;
+@@ -1387,6 +1542,14 @@ static void d3d11_on12_backend_clear_state(struct d3d11_device_context *context)
+             D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, buffers);
+     d3d11_on12_backend_set_constant_buffers(context, WINED3D_SHADER_TYPE_PIXEL, 0,
+             D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, buffers);
++    d3d11_on12_backend_set_samplers(context, WINED3D_SHADER_TYPE_VERTEX, 0,
++            D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, samplers);
++    d3d11_on12_backend_set_samplers(context, WINED3D_SHADER_TYPE_PIXEL, 0,
++            D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, samplers);
++    d3d11_on12_backend_set_blend_state(context, NULL, NULL, D3D11_DEFAULT_SAMPLE_MASK);
++    d3d11_on12_backend_set_depth_stencil_state(context, NULL, 0);
++    d3d11_on12_backend_set_rasterizer_state(context, NULL);
++    d3d11_on12_backend_set_scissor_rects(context, 0, NULL);
+     d3d11_on12_backend_set_render_targets(context, 0, NULL, NULL);
+     d3d11_on12_backend_set_vertex_shader(context, NULL);
+     d3d11_on12_backend_set_pixel_shader(context, NULL);
+@@ -1402,6 +1565,13 @@ static const struct d3d11_backend_ops d3d11_on12_backend_ops =
+     .create_srv = d3d11_on12_backend_create_srv,
+     .set_constant_buffers = d3d11_on12_backend_set_constant_buffers,
+     .update_subresource = d3d11_on12_backend_update_subresource,
++    .create_state = d3d11_on12_backend_create_state,
++    .destroy_state = d3d11_on12_backend_destroy_state,
++    .set_blend_state = d3d11_on12_backend_set_blend_state,
++    .set_depth_stencil_state = d3d11_on12_backend_set_depth_stencil_state,
++    .set_rasterizer_state = d3d11_on12_backend_set_rasterizer_state,
++    .set_samplers = d3d11_on12_backend_set_samplers,
++    .set_scissor_rects = d3d11_on12_backend_set_scissor_rects,
+     .destroy_srv = d3d11_on12_backend_destroy_srv,
+     .set_pixel_resources = d3d11_on12_backend_set_pixel_resources,
+     .clear_state = d3d11_on12_backend_clear_state,
+@@ -1660,6 +1830,32 @@ static HRESULT d3d11_on12_create_frame_backend(IUnknown *device,
+         return DXGI_ERROR_UNSUPPORTED;
+     }
+
++    /* State objects, samplers and scissor: one required group. */
++#define D3D11_ON12_RESOLVE(member, name) \
++    address = GetProcAddress(backend->core_module, name); \
++    memcpy(&backend->member, &address, sizeof(backend->member))
++    D3D11_ON12_RESOLVE(create_blend_state, "WineD3D11On12CreateBlendStateV1");
++    D3D11_ON12_RESOLVE(create_depth_stencil_state, "WineD3D11On12CreateDepthStencilStateV1");
++    D3D11_ON12_RESOLVE(create_rasterizer_state, "WineD3D11On12CreateRasterizerStateV1");
++    D3D11_ON12_RESOLVE(create_sampler_state, "WineD3D11On12CreateSamplerStateV1");
++    D3D11_ON12_RESOLVE(destroy_pipeline_state, "WineD3D11On12DestroyPipelineStateV1");
++    D3D11_ON12_RESOLVE(set_blend_state, "WineD3D11On12SetBlendStateV1");
++    D3D11_ON12_RESOLVE(set_depth_stencil_state, "WineD3D11On12SetDepthStencilStateV1");
++    D3D11_ON12_RESOLVE(set_rasterizer_state, "WineD3D11On12SetRasterizerStateV1");
++    D3D11_ON12_RESOLVE(set_samplers, "WineD3D11On12SetSamplersV1");
++    D3D11_ON12_RESOLVE(set_scissor_rects, "WineD3D11On12SetScissorRectsV1");
++#undef D3D11_ON12_RESOLVE
++    if (!backend->create_blend_state || !backend->create_depth_stencil_state
++            || !backend->create_rasterizer_state || !backend->create_sampler_state
++            || !backend->destroy_pipeline_state || !backend->set_blend_state
++            || !backend->set_depth_stencil_state || !backend->set_rasterizer_state
++            || !backend->set_samplers || !backend->set_scissor_rects)
++    {
++        FreeLibrary(backend->core_module);
++        free(backend);
++        return DXGI_ERROR_UNSUPPORTED;
++    }
++
+     address = GetProcAddress(backend->core_module,
+             "WineD3D11On12OpenAdapterV1");
+     memcpy(&backend->open_adapter, &address, sizeof(backend->open_adapter));
+diff --git a/dlls/d3d11/d3d11_private.h b/dlls/d3d11/d3d11_private.h
+index c7f6f9d3..ac9350c6 100644
+--- a/dlls/d3d11/d3d11_private.h
++++ b/dlls/d3d11/d3d11_private.h
+@@ -504,6 +504,16 @@ struct d3d_blend_state
+     D3D11_BLEND_DESC1 desc;
+     struct wine_rb_entry entry;
+     ID3D11Device5 *device;
++    /* Backend-owned state: a child the immediate context can retain while
++     * bound, and the backend's handle, laid out as the core's pipeline state. */
++    struct d3d11_backend_child backend_child;
++    struct
++    {
++        UINT size;
++        UINT kind;
++        void *driver_state;
++        void *runtime_state;
++    } backend_state;
+ };
+
+ static inline struct d3d_blend_state *impl_from_ID3D11BlendState1(ID3D11BlendState1 *iface)
+@@ -528,6 +538,16 @@ struct d3d_depthstencil_state
+     D3D11_DEPTH_STENCIL_DESC desc;
+     struct wine_rb_entry entry;
+     ID3D11Device5 *device;
++    /* Backend-owned state: a child the immediate context can retain while
++     * bound, and the backend's handle, laid out as the core's pipeline state. */
++    struct d3d11_backend_child backend_child;
++    struct
++    {
++        UINT size;
++        UINT kind;
++        void *driver_state;
++        void *runtime_state;
++    } backend_state;
+ };
+
+ static inline struct d3d_depthstencil_state *impl_from_ID3D11DepthStencilState(ID3D11DepthStencilState *iface)
+@@ -554,6 +574,16 @@ struct d3d_rasterizer_state
+     D3D11_RASTERIZER_DESC2 desc;
+     struct wine_rb_entry entry;
+     ID3D11Device5 *device;
++    /* Backend-owned state: a child the immediate context can retain while
++     * bound, and the backend's handle, laid out as the core's pipeline state. */
++    struct d3d11_backend_child backend_child;
++    struct
++    {
++        UINT size;
++        UINT kind;
++        void *driver_state;
++        void *runtime_state;
++    } backend_state;
+ };
+
+ HRESULT d3d_rasterizer_state_create(struct d3d_device *device, const D3D11_RASTERIZER_DESC2 *desc,
+@@ -573,6 +603,16 @@ struct d3d_sampler_state
+     D3D11_SAMPLER_DESC desc;
+     struct wine_rb_entry entry;
+     ID3D11Device5 *device;
++    /* Backend-owned state: a child the immediate context can retain while
++     * bound, and the backend's handle, laid out as the core's pipeline state. */
++    struct d3d11_backend_child backend_child;
++    struct
++    {
++        UINT size;
++        UINT kind;
++        void *driver_state;
++        void *runtime_state;
++    } backend_state;
+ };
+
+ HRESULT d3d_sampler_state_create(struct d3d_device *device, const D3D11_SAMPLER_DESC *desc,
+@@ -632,6 +672,13 @@ struct d3d11_device_context
+     struct d3d11_backend_child *bound_ps_srvs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
+     /* Vertex [0] and pixel [1] constant buffers retained for the backend. */
+     struct d3d11_backend_child *bound_cbs[2][D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
++    /* Pipeline state retained for the backend, and the values its getters
++     * report alongside it. */
++    struct d3d11_backend_child *bound_blend, *bound_depth_stencil, *bound_rasterizer;
++    struct d3d11_backend_child *bound_samplers[2][D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT];
++    float bound_blend_factor[4];
++    UINT bound_sample_mask, bound_stencil_ref, bound_scissor_count;
++    D3D11_RECT bound_scissor_rects[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+     ID3D11DeviceContext4 ID3D11DeviceContext4_iface;
+     ID3D11Multithread ID3D11Multithread_iface;
+     ID3D11VideoContext ID3D11VideoContext_iface;
+@@ -647,6 +694,15 @@ struct d3d11_device_context
+
+ /* Backend-owned lifetime operations shared by the public D3D11 device and
+  * immediate context. WineD3D remains the default backend. */
++/* The pipeline-state kinds a backend creates; the values are the core's. */
++enum d3d11_backend_state_kind
++{
++    D3D11_BACKEND_STATE_BLEND = 1,
++    D3D11_BACKEND_STATE_DEPTH_STENCIL = 2,
++    D3D11_BACKEND_STATE_RASTERIZER = 3,
++    D3D11_BACKEND_STATE_SAMPLER = 4,
++};
++
+ struct d3d11_backend_ops
+ {
+     HRESULT (*create_srv)(struct d3d_device *, ID3D11Resource *,
+@@ -663,6 +719,17 @@ struct d3d11_backend_ops
+             UINT, UINT, ID3D11Buffer *const *);
+     void (*update_subresource)(struct d3d11_device_context *, ID3D11Resource *, UINT,
+             const D3D11_BOX *, const void *, UINT, UINT);
++    /* desc is the D3D11.0 descriptor for kind: D3D11_BLEND_DESC,
++     * D3D11_DEPTH_STENCIL_DESC, D3D11_RASTERIZER_DESC or D3D11_SAMPLER_DESC. */
++    HRESULT (*create_state)(struct d3d_device *, enum d3d11_backend_state_kind,
++            const void *desc, void *backend_state);
++    void (*destroy_state)(struct d3d_device *, void *backend_state);
++    void (*set_blend_state)(struct d3d11_device_context *, ID3D11BlendState *, const float *, UINT);
++    void (*set_depth_stencil_state)(struct d3d11_device_context *, ID3D11DepthStencilState *, UINT);
++    void (*set_rasterizer_state)(struct d3d11_device_context *, ID3D11RasterizerState *);
++    void (*set_samplers)(struct d3d11_device_context *, enum wined3d_shader_type,
++            UINT, UINT, ID3D11SamplerState *const *);
++    void (*set_scissor_rects)(struct d3d11_device_context *, UINT, const D3D11_RECT *);
+
+     void (*set_render_targets)(struct d3d11_device_context *, UINT,
+             ID3D11RenderTargetView *const *, ID3D11DepthStencilView *);
+diff --git a/dlls/d3d11/device.c b/dlls/d3d11/device.c
+index 808d2444..eb101154 100644
+--- a/dlls/d3d11/device.c
++++ b/dlls/d3d11/device.c
+@@ -968,10 +968,11 @@ static void STDMETHODCALLTYPE d3d11_device_context_PSSetShader(ID3D11DeviceConte
+ static void STDMETHODCALLTYPE d3d11_device_context_PSSetSamplers(ID3D11DeviceContext4 *iface,
+         UINT start_slot, UINT sampler_count, ID3D11SamplerState *const *samplers)
+ {
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
++    if (impl_from_ID3D11DeviceContext4(iface)->device->backend_ops->set_samplers)
+     {
+-        WARN("On12 PSSetSamplers is not supported.\n");
++        struct d3d11_device_context *context = impl_from_ID3D11DeviceContext4(iface);
++        context->device->backend_ops->set_samplers(context, WINED3D_SHADER_TYPE_PIXEL,
++                start_slot, sampler_count, samplers);
+         return;
+     }
+
+@@ -1227,10 +1228,11 @@ static void STDMETHODCALLTYPE d3d11_device_context_VSSetShaderResources(ID3D11De
+ static void STDMETHODCALLTYPE d3d11_device_context_VSSetSamplers(ID3D11DeviceContext4 *iface,
+         UINT start_slot, UINT sampler_count, ID3D11SamplerState *const *samplers)
+ {
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
++    if (impl_from_ID3D11DeviceContext4(iface)->device->backend_ops->set_samplers)
+     {
+-        WARN("On12 VSSetSamplers is not supported.\n");
++        struct d3d11_device_context *context = impl_from_ID3D11DeviceContext4(iface);
++        context->device->backend_ops->set_samplers(context, WINED3D_SHADER_TYPE_VERTEX,
++                start_slot, sampler_count, samplers);
+         return;
+     }
+
+@@ -1482,10 +1484,9 @@ static void STDMETHODCALLTYPE d3d11_device_context_OMSetBlendState(ID3D11DeviceC
+     static const float default_blend_factor[] = {1.0f, 1.0f, 1.0f, 1.0f};
+     struct d3d_blend_state *blend_state_impl;
+
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
++    if (context->device->backend_ops->set_blend_state)
+     {
+-        WARN("On12 OMSetBlendState is not supported.\n");
++        context->device->backend_ops->set_blend_state(context, blend_state, blend_factor, sample_mask);
+         return;
+     }
+
+@@ -1509,10 +1510,9 @@ static void STDMETHODCALLTYPE d3d11_device_context_OMSetDepthStencilState(ID3D11
+     struct d3d11_device_context *context = impl_from_ID3D11DeviceContext4(iface);
+     struct d3d_depthstencil_state *state_impl;
+
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
++    if (context->device->backend_ops->set_depth_stencil_state)
+     {
+-        WARN("On12 OMSetDepthStencilState is not supported.\n");
++        context->device->backend_ops->set_depth_stencil_state(context, depth_stencil_state, stencil_ref);
+         return;
+     }
+
+@@ -1653,10 +1653,9 @@ static void STDMETHODCALLTYPE d3d11_device_context_RSSetState(ID3D11DeviceContex
+     struct d3d11_device_context *context = impl_from_ID3D11DeviceContext4(iface);
+     struct d3d_rasterizer_state *rasterizer_state_impl;
+
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
++    if (context->device->backend_ops->set_rasterizer_state)
+     {
+-        WARN("On12 RSSetState is not supported.\n");
++        context->device->backend_ops->set_rasterizer_state(context, rasterizer_state);
+         return;
+     }
+
+@@ -1703,10 +1702,9 @@ static void STDMETHODCALLTYPE d3d11_device_context_RSSetScissorRects(ID3D11Devic
+ {
+     struct d3d11_device_context *context = impl_from_ID3D11DeviceContext4(iface);
+
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
++    if (context->device->backend_ops->set_scissor_rects)
+     {
+-        WARN("On12 RSSetScissorRects is not supported.\n");
++        context->device->backend_ops->set_scissor_rects(context, rect_count, rects);
+         return;
+     }
+
+@@ -2364,11 +2362,21 @@ static void STDMETHODCALLTYPE d3d11_device_context_PSGetSamplers(ID3D11DeviceCon
+     struct d3d11_device_context *context = impl_from_ID3D11DeviceContext4(iface);
+     unsigned int i;
+
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
++    if (impl_from_ID3D11DeviceContext4(iface)->device->backend_ops->set_samplers)
+     {
+-        if (samplers) memset(samplers, 0, sampler_count * sizeof(*samplers));
+-        WARN("On12 PSGetSamplers is not supported.\n");
++        /* bound_samplers[0] holds the vertex stage, [1] the pixel stage. */
++        const unsigned int stage = 1;
++
++        if (!samplers || start_slot > D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT
++                || sampler_count > D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT - start_slot)
++            return;
++        for (i = 0; i < sampler_count; ++i)
++        {
++            struct d3d11_backend_child *child = context->bound_samplers[stage][start_slot + i];
++            struct d3d_sampler_state *state = child ? child->object : NULL;
++            samplers[i] = state ? &state->ID3D11SamplerState_iface : NULL;
++            if (samplers[i]) ID3D11SamplerState_AddRef(samplers[i]);
++        }
+         return;
+     }
+
+@@ -2680,11 +2688,21 @@ static void STDMETHODCALLTYPE d3d11_device_context_VSGetSamplers(ID3D11DeviceCon
+     struct d3d11_device_context *context = impl_from_ID3D11DeviceContext4(iface);
+     unsigned int i;
+
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
++    if (impl_from_ID3D11DeviceContext4(iface)->device->backend_ops->set_samplers)
+     {
+-        if (samplers) memset(samplers, 0, sampler_count * sizeof(*samplers));
+-        WARN("On12 VSGetSamplers is not supported.\n");
++        /* bound_samplers[0] holds the vertex stage, [1] the pixel stage. */
++        const unsigned int stage = 0;
++
++        if (!samplers || start_slot > D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT
++                || sampler_count > D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT - start_slot)
++            return;
++        for (i = 0; i < sampler_count; ++i)
++        {
++            struct d3d11_backend_child *child = context->bound_samplers[stage][start_slot + i];
++            struct d3d_sampler_state *state = child ? child->object : NULL;
++            samplers[i] = state ? &state->ID3D11SamplerState_iface : NULL;
++            if (samplers[i]) ID3D11SamplerState_AddRef(samplers[i]);
++        }
+         return;
+     }
+
+@@ -2934,12 +2952,17 @@ static void STDMETHODCALLTYPE d3d11_device_context_OMGetBlendState(ID3D11DeviceC
+     unsigned int tmp_sample_mask;
+     float tmp_blend_factor[4];
+
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
++    if (context->device->backend_ops->set_blend_state)
+     {
+-        if (blend_state) *blend_state = NULL;
+-        if (sample_mask) *sample_mask = 0;
+-        WARN("On12 OMGetBlendState is not supported.\n");
++        struct d3d_blend_state *state = context->bound_blend ? context->bound_blend->object : NULL;
++
++        if (blend_state)
++        {
++            *blend_state = state ? (ID3D11BlendState *)&state->ID3D11BlendState1_iface : NULL;
++            if (*blend_state) ID3D11BlendState_AddRef(*blend_state);
++        }
++        if (blend_factor) memcpy(blend_factor, context->bound_blend_factor, sizeof(context->bound_blend_factor));
++        if (sample_mask) *sample_mask = context->bound_sample_mask;
+         return;
+     }
+
+@@ -2972,12 +2995,17 @@ static void STDMETHODCALLTYPE d3d11_device_context_OMGetDepthStencilState(ID3D11
+     struct d3d_depthstencil_state *state_impl;
+     UINT stencil_ref_tmp;
+
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
++    if (context->device->backend_ops->set_depth_stencil_state)
+     {
+-        if (depth_stencil_state) *depth_stencil_state = NULL;
+-        if (stencil_ref) *stencil_ref = 0;
+-        WARN("On12 OMGetDepthStencilState is not supported.\n");
++        struct d3d_depthstencil_state *state = context->bound_depth_stencil
++                ? context->bound_depth_stencil->object : NULL;
++
++        if (depth_stencil_state)
++        {
++            *depth_stencil_state = state ? &state->ID3D11DepthStencilState_iface : NULL;
++            if (*depth_stencil_state) ID3D11DepthStencilState_AddRef(*depth_stencil_state);
++        }
++        if (stencil_ref) *stencil_ref = context->bound_stencil_ref;
+         return;
+     }
+
+@@ -3044,11 +3072,16 @@ static void STDMETHODCALLTYPE d3d11_device_context_RSGetState(ID3D11DeviceContex
+     struct d3d_rasterizer_state *rasterizer_state_impl;
+     struct wined3d_rasterizer_state *wined3d_state;
+
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
++    if (context->device->backend_ops->set_rasterizer_state)
+     {
+-        if (rasterizer_state) *rasterizer_state = NULL;
+-        WARN("On12 RSGetState is not supported.\n");
++        struct d3d_rasterizer_state *state = context->bound_rasterizer
++                ? context->bound_rasterizer->object : NULL;
++
++        if (rasterizer_state)
++        {
++            *rasterizer_state = state ? (ID3D11RasterizerState *)&state->ID3D11RasterizerState2_iface : NULL;
++            if (*rasterizer_state) ID3D11RasterizerState_AddRef(*rasterizer_state);
++        }
+         return;
+     }
+
+@@ -3119,11 +3152,16 @@ static void STDMETHODCALLTYPE d3d11_device_context_RSGetScissorRects(ID3D11Devic
+     struct d3d11_device_context *context = impl_from_ID3D11DeviceContext4(iface);
+     unsigned int actual_count;
+
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
++    if (context->device->backend_ops->set_scissor_rects)
+     {
+-        if (rect_count) *rect_count = 0;
+-        WARN("On12 RSGetScissorRects is not supported.\n");
++        /* As D3D11: with no array, report the count; with one, copy up to
++         * the caller's count and report how many were bound. */
++        if (!rect_count)
++            return;
++        if (rects)
++            memcpy(rects, context->bound_scissor_rects,
++                    min(*rect_count, context->bound_scissor_count) * sizeof(*rects));
++        *rect_count = context->bound_scissor_count;
+         return;
+     }
+
+@@ -5902,8 +5940,10 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_CreateBlendState1(ID3D11Device5 *i
+     struct d3d_blend_state *object;
+     HRESULT hr;
+
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11Device5(iface)->standalone_allocation)
++    /* The experimental backend has no WineD3D object for this operation,
++     * unless it creates state objects itself. */
++    if (impl_from_ID3D11Device5(iface)->standalone_allocation
++            && !impl_from_ID3D11Device5(iface)->backend_ops->create_state)
+     {
+         if (state) *state = NULL;
+         WARN("On12 CreateBlendState1 is not supported.\n");
+@@ -5926,8 +5966,10 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_CreateBlendState(ID3D11Device5 *if
+     D3D11_BLEND_DESC1 d3d11_1_desc;
+     unsigned int i;
+
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11Device5(iface)->standalone_allocation)
++    /* The experimental backend has no WineD3D object for this operation,
++     * unless it creates state objects itself. */
++    if (impl_from_ID3D11Device5(iface)->standalone_allocation
++            && !impl_from_ID3D11Device5(iface)->backend_ops->create_state)
+     {
+         if (blend_state) *blend_state = NULL;
+         WARN("On12 CreateBlendState is not supported.\n");
+@@ -5965,8 +6007,10 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_CreateDepthStencilState(ID3D11Devi
+     struct d3d_depthstencil_state *object;
+     HRESULT hr;
+
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11Device5(iface)->standalone_allocation)
++    /* The experimental backend has no WineD3D object for this operation,
++     * unless it creates state objects itself. */
++    if (impl_from_ID3D11Device5(iface)->standalone_allocation
++            && !impl_from_ID3D11Device5(iface)->backend_ops->create_state)
+     {
+         if (depth_stencil_state) *depth_stencil_state = NULL;
+         WARN("On12 CreateDepthStencilState is not supported.\n");
+@@ -5991,8 +6035,10 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_CreateRasterizerState(ID3D11Device
+     D3D11_RASTERIZER_DESC2 desc2;
+     HRESULT hr;
+
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11Device5(iface)->standalone_allocation)
++    /* The experimental backend has no WineD3D object for this operation,
++     * unless it creates state objects itself. */
++    if (impl_from_ID3D11Device5(iface)->standalone_allocation
++            && !impl_from_ID3D11Device5(iface)->backend_ops->create_state)
+     {
+         if (rasterizer_state) *rasterizer_state = NULL;
+         WARN("On12 CreateRasterizerState is not supported.\n");
+@@ -6023,8 +6069,10 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_CreateSamplerState(ID3D11Device5 *
+     struct d3d_sampler_state *object;
+     HRESULT hr;
+
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11Device5(iface)->standalone_allocation)
++    /* The experimental backend has no WineD3D object for this operation,
++     * unless it creates state objects itself. */
++    if (impl_from_ID3D11Device5(iface)->standalone_allocation
++            && !impl_from_ID3D11Device5(iface)->backend_ops->create_state)
+     {
+         if (sampler_state) *sampler_state = NULL;
+         WARN("On12 CreateSamplerState is not supported.\n");
+diff --git a/dlls/d3d11/state.c b/dlls/d3d11/state.c
+index d86ff727..1414ac20 100644
+--- a/dlls/d3d11/state.c
++++ b/dlls/d3d11/state.c
+@@ -21,6 +21,20 @@
+
+ WINE_DEFAULT_DEBUG_CHANNEL(d3d11);
+
++/* Create a state's backend object.  Called under the wined3d mutex, after the
++ * state is in its device's tree and before it is published. */
++static HRESULT d3d_state_create_backend(struct d3d_device *device, enum d3d11_backend_state_kind kind,
++        const void *desc, struct d3d11_backend_child *child, void *backend_state, void *object)
++{
++    HRESULT hr;
++
++    if (FAILED(hr = device->backend_ops->create_state(device, kind, desc, backend_state)))
++        return hr;
++    child->refs = 1;
++    child->object = object;
++    return S_OK;
++}
++
+ /* ID3D11BlendState1 methods */
+
+ static HRESULT STDMETHODCALLTYPE d3d11_blend_state_QueryInterface(ID3D11BlendState1 *iface,
+@@ -55,6 +69,27 @@ static HRESULT STDMETHODCALLTYPE d3d11_blend_state_QueryInterface(ID3D11BlendSta
+     return E_NOINTERFACE;
+ }
+
++/* The last public reference and the last binding are both gone.  A Create*
++ * with an identical description may have found the state in the tree and
++ * re-referenced it since; then it lives on. */
++static void d3d_blend_state_backend_destroy(void *object)
++{
++    struct d3d_blend_state *state = object;
++    struct d3d_device *device = impl_from_ID3D11Device5(state->device);
++
++    wined3d_mutex_lock();
++    if (InterlockedCompareExchange(&state->backend_child.refs, 0, 0))
++    {
++        wined3d_mutex_unlock();
++        return;
++    }
++    wine_rb_remove(&device->blend_states, &state->entry);
++    wined3d_mutex_unlock();
++    device->backend_ops->destroy_state(device, &state->backend_state);
++    wined3d_private_store_cleanup(&state->private_store);
++    free(state);
++}
++
+ static ULONG STDMETHODCALLTYPE d3d11_blend_state_AddRef(ID3D11BlendState1 *iface)
+ {
+     struct d3d_blend_state *state = impl_from_ID3D11BlendState1(iface);
+@@ -62,6 +97,13 @@ static ULONG STDMETHODCALLTYPE d3d11_blend_state_AddRef(ID3D11BlendState1 *iface
+
+     TRACE("%p increasing refcount to %lu.\n", state, refcount);
+
++    if (refcount == 1 && state->backend_child.destroy)
++    {
++        ID3D11Device5_AddRef(state->device);
++        d3d11_backend_child_incref(&state->backend_child);
++        return refcount;
++    }
++
+     if (refcount == 1)
+     {
+         ID3D11Device5_AddRef(state->device);
+@@ -78,6 +120,18 @@ static ULONG STDMETHODCALLTYPE d3d11_blend_state_Release(ID3D11BlendState1 *ifac
+
+     TRACE("%p decreasing refcount to %lu.\n", state, refcount);
+
++    /* Under the mutex: an identical Create* may be finding this state in
++     * the tree right now, and must either see it alive or not at all. */
++    if (!refcount && state->backend_child.destroy)
++    {
++        ID3D11Device5 *device = state->device;
++        wined3d_mutex_lock();
++        d3d11_backend_child_decref(&state->backend_child);
++        wined3d_mutex_unlock();
++        ID3D11Device5_Release(device);
++        return 0;
++    }
++
+     if (!refcount)
+     {
+         ID3D11Device5 *device = state->device;
+@@ -427,6 +481,48 @@ HRESULT d3d_blend_state_create(struct d3d_device *device, const D3D11_BLEND_DESC
+         return E_FAIL;
+     }
+
++    if (device->backend_ops->create_state)
++    {
++        D3D11_BLEND_DESC backend_desc;
++
++        backend_desc.AlphaToCoverageEnable = tmp_desc.AlphaToCoverageEnable;
++        backend_desc.IndependentBlendEnable = tmp_desc.IndependentBlendEnable;
++        hr = S_OK;
++        for (i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i)
++        {
++            const D3D11_RENDER_TARGET_BLEND_DESC1 *rt = &tmp_desc.RenderTarget[i];
++            /* Logic ops are D3D11.1 and the backend takes D3D11.0 states. */
++            if (rt->LogicOpEnable)
++                hr = DXGI_ERROR_UNSUPPORTED;
++            backend_desc.RenderTarget[i].BlendEnable = rt->BlendEnable;
++            backend_desc.RenderTarget[i].SrcBlend = rt->SrcBlend;
++            backend_desc.RenderTarget[i].DestBlend = rt->DestBlend;
++            backend_desc.RenderTarget[i].BlendOp = rt->BlendOp;
++            backend_desc.RenderTarget[i].SrcBlendAlpha = rt->SrcBlendAlpha;
++            backend_desc.RenderTarget[i].DestBlendAlpha = rt->DestBlendAlpha;
++            backend_desc.RenderTarget[i].BlendOpAlpha = rt->BlendOpAlpha;
++            backend_desc.RenderTarget[i].RenderTargetWriteMask = rt->RenderTargetWriteMask;
++        }
++        object->device = &device->ID3D11Device5_iface;
++        if (SUCCEEDED(hr))
++            hr = d3d_state_create_backend(device, D3D11_BACKEND_STATE_BLEND, &backend_desc,
++                    &object->backend_child, &object->backend_state, object);
++        if (FAILED(hr))
++        {
++            WARN("Failed to create backend blend state, hr %#lx.\n", hr);
++            wined3d_private_store_cleanup(&object->private_store);
++            wine_rb_remove(&device->blend_states, &object->entry);
++            free(object);
++            wined3d_mutex_unlock();
++            return hr;
++        }
++        object->backend_child.destroy = d3d_blend_state_backend_destroy;
++        wined3d_mutex_unlock();
++        ID3D11Device5_AddRef(object->device);
++        *state = object;
++        return S_OK;
++    }
++
+     wined3d_desc.alpha_to_coverage = desc->AlphaToCoverageEnable;
+     wined3d_desc.independent = desc->IndependentBlendEnable;
+     for (i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i)
+@@ -516,6 +612,27 @@ static HRESULT STDMETHODCALLTYPE d3d11_depthstencil_state_QueryInterface(ID3D11D
+     return E_NOINTERFACE;
+ }
+
++/* The last public reference and the last binding are both gone.  A Create*
++ * with an identical description may have found the state in the tree and
++ * re-referenced it since; then it lives on. */
++static void d3d_depthstencil_state_backend_destroy(void *object)
++{
++    struct d3d_depthstencil_state *state = object;
++    struct d3d_device *device = impl_from_ID3D11Device5(state->device);
++
++    wined3d_mutex_lock();
++    if (InterlockedCompareExchange(&state->backend_child.refs, 0, 0))
++    {
++        wined3d_mutex_unlock();
++        return;
++    }
++    wine_rb_remove(&device->depthstencil_states, &state->entry);
++    wined3d_mutex_unlock();
++    device->backend_ops->destroy_state(device, &state->backend_state);
++    wined3d_private_store_cleanup(&state->private_store);
++    free(state);
++}
++
+ static ULONG STDMETHODCALLTYPE d3d11_depthstencil_state_AddRef(ID3D11DepthStencilState *iface)
+ {
+     struct d3d_depthstencil_state *state = impl_from_ID3D11DepthStencilState(iface);
+@@ -523,6 +640,13 @@ static ULONG STDMETHODCALLTYPE d3d11_depthstencil_state_AddRef(ID3D11DepthStenci
+
+     TRACE("%p increasing refcount to %lu.\n", state, refcount);
+
++    if (refcount == 1 && state->backend_child.destroy)
++    {
++        ID3D11Device5_AddRef(state->device);
++        d3d11_backend_child_incref(&state->backend_child);
++        return refcount;
++    }
++
+     if (refcount == 1)
+     {
+         ID3D11Device5_AddRef(state->device);
+@@ -539,6 +663,18 @@ static ULONG STDMETHODCALLTYPE d3d11_depthstencil_state_Release(ID3D11DepthStenc
+
+     TRACE("%p decreasing refcount to %lu.\n", state, refcount);
+
++    /* Under the mutex: an identical Create* may be finding this state in
++     * the tree right now, and must either see it alive or not at all. */
++    if (!refcount && state->backend_child.destroy)
++    {
++        ID3D11Device5 *device = state->device;
++        wined3d_mutex_lock();
++        d3d11_backend_child_decref(&state->backend_child);
++        wined3d_mutex_unlock();
++        ID3D11Device5_Release(device);
++        return 0;
++    }
++
+     if (!refcount)
+     {
+         ID3D11Device5 *device = state->device;
+@@ -830,6 +966,26 @@ HRESULT d3d_depthstencil_state_create(struct d3d_device *device, const D3D11_DEP
+         return E_FAIL;
+     }
+
++    if (device->backend_ops->create_state)
++    {
++        object->device = &device->ID3D11Device5_iface;
++        if (FAILED(hr = d3d_state_create_backend(device, D3D11_BACKEND_STATE_DEPTH_STENCIL, &tmp_desc,
++                &object->backend_child, &object->backend_state, object)))
++        {
++            WARN("Failed to create backend depth/stencil state, hr %#lx.\n", hr);
++            wined3d_private_store_cleanup(&object->private_store);
++            wine_rb_remove(&device->depthstencil_states, &object->entry);
++            free(object);
++            wined3d_mutex_unlock();
++            return hr;
++        }
++        object->backend_child.destroy = d3d_depthstencil_state_backend_destroy;
++        wined3d_mutex_unlock();
++        ID3D11Device5_AddRef(object->device);
++        *state = object;
++        return S_OK;
++    }
++
+     wined3d_desc.depth = desc->DepthEnable;
+     wined3d_desc.depth_write = desc->DepthWriteMask;
+     wined3d_desc.depth_func = wined3d_cmp_func_from_d3d11(desc->DepthFunc);
+@@ -924,6 +1080,27 @@ static HRESULT STDMETHODCALLTYPE d3d11_rasterizer_state_QueryInterface(ID3D11Ras
+     return E_NOINTERFACE;
+ }
+
++/* The last public reference and the last binding are both gone.  A Create*
++ * with an identical description may have found the state in the tree and
++ * re-referenced it since; then it lives on. */
++static void d3d_rasterizer_state_backend_destroy(void *object)
++{
++    struct d3d_rasterizer_state *state = object;
++    struct d3d_device *device = impl_from_ID3D11Device5(state->device);
++
++    wined3d_mutex_lock();
++    if (InterlockedCompareExchange(&state->backend_child.refs, 0, 0))
++    {
++        wined3d_mutex_unlock();
++        return;
++    }
++    wine_rb_remove(&device->rasterizer_states, &state->entry);
++    wined3d_mutex_unlock();
++    device->backend_ops->destroy_state(device, &state->backend_state);
++    wined3d_private_store_cleanup(&state->private_store);
++    free(state);
++}
++
+ static ULONG STDMETHODCALLTYPE d3d11_rasterizer_state_AddRef(ID3D11RasterizerState2 *iface)
+ {
+     struct d3d_rasterizer_state *state = impl_from_ID3D11RasterizerState2(iface);
+@@ -931,6 +1108,13 @@ static ULONG STDMETHODCALLTYPE d3d11_rasterizer_state_AddRef(ID3D11RasterizerSta
+
+     TRACE("%p increasing refcount to %lu.\n", state, refcount);
+
++    if (refcount == 1 && state->backend_child.destroy)
++    {
++        ID3D11Device5_AddRef(state->device);
++        d3d11_backend_child_incref(&state->backend_child);
++        return refcount;
++    }
++
+     if (refcount == 1)
+     {
+         ID3D11Device5_AddRef(state->device);
+@@ -947,6 +1131,18 @@ static ULONG STDMETHODCALLTYPE d3d11_rasterizer_state_Release(ID3D11RasterizerSt
+
+     TRACE("%p decreasing refcount to %lu.\n", state, refcount);
+
++    /* Under the mutex: an identical Create* may be finding this state in
++     * the tree right now, and must either see it alive or not at all. */
++    if (!refcount && state->backend_child.destroy)
++    {
++        ID3D11Device5 *device = state->device;
++        wined3d_mutex_lock();
++        d3d11_backend_child_decref(&state->backend_child);
++        wined3d_mutex_unlock();
++        ID3D11Device5_Release(device);
++        return 0;
++    }
++
+     if (!refcount)
+     {
+         ID3D11Device5 *device = state->device;
+@@ -1198,6 +1394,28 @@ static HRESULT d3d_rasterizer_state_init(struct d3d_rasterizer_state *state, str
+         return E_FAIL;
+     }
+
++    if (device->backend_ops->create_state)
++    {
++        D3D11_RASTERIZER_DESC backend_desc;
++
++        /* D3D11.1+ rasterizer extensions are not taken by the backend. */
++        hr = desc->ForcedSampleCount || desc->ConservativeRaster ? DXGI_ERROR_UNSUPPORTED : S_OK;
++        memcpy(&backend_desc, desc, sizeof(backend_desc));
++        state->device = &device->ID3D11Device5_iface;
++        if (SUCCEEDED(hr))
++            hr = d3d_state_create_backend(device, D3D11_BACKEND_STATE_RASTERIZER, &backend_desc,
++                    &state->backend_child, &state->backend_state, state);
++        if (FAILED(hr))
++        {
++            wined3d_private_store_cleanup(&state->private_store);
++            wine_rb_remove(&device->rasterizer_states, &state->entry);
++            return hr;
++        }
++        state->backend_child.destroy = d3d_rasterizer_state_backend_destroy;
++        ID3D11Device5_AddRef(state->device);
++        return S_OK;
++    }
++
+     wined3d_desc.fill_mode = wined3d_fill_mode_from_d3d11(desc->FillMode);
+     wined3d_desc.cull_mode = wined3d_cull_from_d3d11(desc->CullMode);
+     wined3d_desc.front_ccw = desc->FrontCounterClockwise;
+@@ -1341,6 +1559,27 @@ static HRESULT STDMETHODCALLTYPE d3d11_sampler_state_QueryInterface(ID3D11Sample
+     return E_NOINTERFACE;
+ }
+
++/* The last public reference and the last binding are both gone.  A Create*
++ * with an identical description may have found the state in the tree and
++ * re-referenced it since; then it lives on. */
++static void d3d_sampler_state_backend_destroy(void *object)
++{
++    struct d3d_sampler_state *state = object;
++    struct d3d_device *device = impl_from_ID3D11Device5(state->device);
++
++    wined3d_mutex_lock();
++    if (InterlockedCompareExchange(&state->backend_child.refs, 0, 0))
++    {
++        wined3d_mutex_unlock();
++        return;
++    }
++    wine_rb_remove(&device->sampler_states, &state->entry);
++    wined3d_mutex_unlock();
++    device->backend_ops->destroy_state(device, &state->backend_state);
++    wined3d_private_store_cleanup(&state->private_store);
++    free(state);
++}
++
+ static ULONG STDMETHODCALLTYPE d3d11_sampler_state_AddRef(ID3D11SamplerState *iface)
+ {
+     struct d3d_sampler_state *state = impl_from_ID3D11SamplerState(iface);
+@@ -1348,6 +1587,13 @@ static ULONG STDMETHODCALLTYPE d3d11_sampler_state_AddRef(ID3D11SamplerState *if
+
+     TRACE("%p increasing refcount to %lu.\n", state, refcount);
+
++    if (refcount == 1 && state->backend_child.destroy)
++    {
++        ID3D11Device5_AddRef(state->device);
++        d3d11_backend_child_incref(&state->backend_child);
++        return refcount;
++    }
++
+     if (refcount == 1)
+     {
+         ID3D11Device5_AddRef(state->device);
+@@ -1364,6 +1610,18 @@ static ULONG STDMETHODCALLTYPE d3d11_sampler_state_Release(ID3D11SamplerState *i
+
+     TRACE("%p decreasing refcount to %lu.\n", state, refcount);
+
++    /* Under the mutex: an identical Create* may be finding this state in
++     * the tree right now, and must either see it alive or not at all. */
++    if (!refcount && state->backend_child.destroy)
++    {
++        ID3D11Device5 *device = state->device;
++        wined3d_mutex_lock();
++        d3d11_backend_child_decref(&state->backend_child);
++        wined3d_mutex_unlock();
++        ID3D11Device5_Release(device);
++        return 0;
++    }
++
+     if (!refcount)
+     {
+         ID3D11Device5 *device = state->device;
+@@ -1631,6 +1889,21 @@ static HRESULT d3d_sampler_state_init(struct d3d_sampler_state *state, struct d3
+         return E_FAIL;
+     }
+
++    if (device->backend_ops->create_state)
++    {
++        state->device = &device->ID3D11Device5_iface;
++        if (FAILED(hr = d3d_state_create_backend(device, D3D11_BACKEND_STATE_SAMPLER, desc,
++                &state->backend_child, &state->backend_state, state)))
++        {
++            wined3d_private_store_cleanup(&state->private_store);
++            wine_rb_remove(&device->sampler_states, &state->entry);
++            return hr;
++        }
++        state->backend_child.destroy = d3d_sampler_state_backend_destroy;
++        ID3D11Device5_AddRef(state->device);
++        return S_OK;
++    }
++
+     /* We cannot fail after creating a wined3d_sampler object. It would lead to
+      * double free. */
+     if (FAILED(hr = wined3d_sampler_create(device->wined3d_device, &wined3d_desc,

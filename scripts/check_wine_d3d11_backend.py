@@ -44,6 +44,12 @@ REQUIRED_HEADER = (
     "void (*set_constant_buffers)(struct d3d11_device_context *, enum wined3d_shader_type,",
     "void (*update_subresource)(struct d3d11_device_context *, ID3D11Resource *, UINT,",
     "struct d3d11_backend_child *bound_cbs[2][D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];",
+    # Patch 0030: backend-owned state objects, samplers and scissor.
+    "HRESULT (*create_state)(struct d3d_device *, enum d3d11_backend_state_kind,",
+    "void (*destroy_state)(struct d3d_device *, void *backend_state);",
+    "void (*set_samplers)(struct d3d11_device_context *, enum wined3d_shader_type,",
+    "void (*set_scissor_rects)(struct d3d11_device_context *, UINT, const D3D11_RECT *);",
+    "struct d3d11_backend_child *bound_samplers[2][D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT];",
 )
 
 REQUIRED_DEVICE = (
@@ -56,6 +62,12 @@ REQUIRED_DEVICE = (
     "context->device->backend_ops->set_constant_buffers(context, type, start_slot, buffer_count, buffers);",
     "context->device->backend_ops->update_subresource(context, resource, subresource_idx,",
     "if (d3d11_backend_get_constant_buffers(impl_from_ID3D11DeviceContext4(iface),",
+    # Patch 0030.
+    "context->device->backend_ops->set_blend_state(context, blend_state, blend_factor, sample_mask);",
+    "context->device->backend_ops->set_depth_stencil_state(context, depth_stencil_state, stencil_ref);",
+    "context->device->backend_ops->set_rasterizer_state(context, rasterizer_state);",
+    "context->device->backend_ops->set_scissor_rects(context, rect_count, rects);",
+    "&& !impl_from_ID3D11Device5(iface)->backend_ops->create_state)",
     "context->device->backend_ops->map_resource(context,",
     "context->device->backend_ops->unmap_resource(context,",
     "|| !backend_ops->create_rtv",
@@ -128,6 +140,17 @@ REQUIRED_TEXTURE = (
     "device_impl->backend_ops->destroy_texture2d(device_impl, texture);",
 )
 
+REQUIRED_STATE = (
+    # Patch 0030: each state kind creates through the backend, and its
+    # destroy callback rechecks the backend refcount under the mutex.
+    "static HRESULT d3d_state_create_backend(struct d3d_device *device, enum d3d11_backend_state_kind kind,",
+    "object->backend_child.destroy = d3d_blend_state_backend_destroy;",
+    "object->backend_child.destroy = d3d_depthstencil_state_backend_destroy;",
+    "state->backend_child.destroy = d3d_rasterizer_state_backend_destroy;",
+    "state->backend_child.destroy = d3d_sampler_state_backend_destroy;",
+    "if (InterlockedCompareExchange(&state->backend_child.refs, 0, 0))",
+)
+
 REQUIRED_SHADER = (
     "device->backend_ops->create_vertex_shader(device,",
     "device_impl->backend_ops->destroy_vertex_shader(device_impl, shader);",
@@ -167,6 +190,15 @@ REQUIRED_MAIN = (
     "d3d11_backend_child_bind(&context->bound_cbs[stage][start + i],",
     "backend->map_buffer(&backend->adapter,",
     "backend->unmap_buffer(&backend->adapter,",
+    # Patch 0030.
+    '"WineD3D11On12CreateSamplerStateV1"',
+    '"WineD3D11On12SetSamplersV1"',
+    '"WineD3D11On12SetScissorRectsV1"',
+    '"WineD3D11On12CreateBlendStateV1"',
+    '"WineD3D11On12DestroyPipelineStateV1"',
+    ".create_state = d3d11_on12_backend_create_state,",
+    ".set_samplers = d3d11_on12_backend_set_samplers,",
+    "d3d11_backend_child_bind(&context->bound_samplers[stage][start + i],",
 
     "static const struct d3d11_backend_ops d3d11_on12_backend_ops",
     ".create_texture2d = d3d11_on12_backend_create_texture2d,",
@@ -208,6 +240,7 @@ def check_tree(root):
     buffer = (root / "dlls/d3d11/buffer.c").read_text()
     shader = (root / "dlls/d3d11/shader.c").read_text()
     texture = (root / "dlls/d3d11/texture.c").read_text()
+    state = (root / "dlls/d3d11/state.c").read_text()
     main = (root / "dlls/d3d11/d3d11_main.c").read_text()
     configure = (root / "configure.ac").read_text()
     host_makefile = root / "dlls/d3d11on12host/Makefile.in"
@@ -229,6 +262,9 @@ def check_tree(root):
     for marker in REQUIRED_SHADER:
         if marker not in shader:
             errors.append(f"shader.c is missing: {marker}")
+    for marker in REQUIRED_STATE:
+        if marker not in state:
+            errors.append(f"state.c is missing: {marker}")
     for marker in REQUIRED_MAIN:
         if marker not in main:
             errors.append(f"d3d11_main.c is missing: {marker}")
