@@ -398,6 +398,7 @@ typedef struct WineD3D11On12PipelineState
 #define WINE_D3D11ON12_STATE_BLEND 1u
 #define WINE_D3D11ON12_STATE_DEPTH_STENCIL 2u
 #define WINE_D3D11ON12_STATE_RASTERIZER 3u
+#define WINE_D3D11ON12_STATE_SAMPLER 4u
 WINE_D3D11ON12_ASSERT(sizeof(WineD3D11On12PipelineState) == 24);
 WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12CreateBlendStateV1(
         WineD3D11On12AdapterDevice *, const D3D11_BLEND_DESC *,
@@ -466,3 +467,19 @@ WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12UpdateBufferV1(
 WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12UpdateTexture2DV1(
         WineD3D11On12AdapterDevice *, WineD3D11On12Texture2D *, UINT,
         const D3D11_BOX *, const void *, UINT, UINT) WINE_D3D11ON12_NOEXCEPT;
+
+/* Samplers and scissor, appended exports; ABI v3 unchanged.  A sampler is a
+ * WineD3D11On12PipelineState of kind WINE_D3D11ON12_STATE_SAMPLER, destroyed
+ * through WineD3D11On12DestroyPipelineStateV1; it may be bound in any number
+ * of slots and stages, and outlives its destroyed handle until the last of
+ * them is replaced.  SetSamplersV1 takes the vertex or pixel stage and up to
+ * D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT slots; SetScissorRectsV1 up to
+ * D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE rectangles. */
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12CreateSamplerStateV1(
+        WineD3D11On12AdapterDevice *, const D3D11_SAMPLER_DESC *,
+        WineD3D11On12PipelineState *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12SetSamplersV1(
+        WineD3D11On12AdapterDevice *, UINT, UINT, UINT,
+        WineD3D11On12PipelineState *const *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12SetScissorRectsV1(
+        WineD3D11On12AdapterDevice *, UINT, const D3D11_RECT *) WINE_D3D11ON12_NOEXCEPT;

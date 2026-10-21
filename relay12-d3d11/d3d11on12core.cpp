@@ -664,6 +664,12 @@ struct AdapterState
     UINT commandListPoolCount;
     PipelineStateNode *pipelineStates;
     PipelineStateNode *boundPipelineStates[3];
+    /* Vertex [0] and pixel [1] samplers, guarded by resourceRegistryLock.  One
+     * sampler can sit in many slots and both stages, which is why a pipeline
+     * state counts its bindings rather than flagging one. */
+    PipelineStateNode *boundSamplers[2][D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT];
+    /* Scissor rectangles last set, for the DDI's clear count. */
+    UINT scissorCount;
     DeviceTelemetry telemetry;
     ResourceCensus census;
     alignas(8) unsigned char privateDevice[1];
@@ -4108,7 +4114,9 @@ struct PipelineStateNode
     AdapterState *owner;
     WineD3D11On12PipelineState *publicHandle;
     UINT kind;
-    bool bound;
+    /* Slots holding this state; it is freed when the count reaches zero
+     * after its public handle is destroyed. */
+    UINT bindCount;
     alignas(8) unsigned char privateState[1];
 };
 
@@ -4131,6 +4139,8 @@ void freePipelineState(PipelineStateNode *p) noexcept
         owner->deviceFuncs.pfnDestroyBlendState(owner->hDevice, {p->privateState});
     else if (p->kind == WINE_D3D11ON12_STATE_DEPTH_STENCIL)
         owner->deviceFuncs.pfnDestroyDepthStencilState(owner->hDevice, {p->privateState});
+    else if (p->kind == WINE_D3D11ON12_STATE_SAMPLER)
+        owner->deviceFuncs.pfnDestroySampler(owner->hDevice, {p->privateState});
     else
         owner->deviceFuncs.pfnDestroyRasterizerState(owner->hDevice, {p->privateState});
     auto **link = &pipelineStateRegistry;
@@ -4153,8 +4163,21 @@ void destroyAllPipelineStates(AdapterState *owner) noexcept
     FrameLock lock;
     /* The driver device is about to be destroyed; no later draw can read its
      * tracked state. Command lists were retired before this function. */
+    /* Samplers are unbound first, as SRVs are: the driver should not be
+     * asked to destroy a sampler it still holds in a slot. */
+    for (UINT stage = 0; stage < 2; ++stage)
+    {
+        auto set = stage ? owner->deviceFuncs.pfnPsSetSamplers : owner->deviceFuncs.pfnVsSetSamplers;
+        for (UINT slot = 0; slot < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT; ++slot)
+            if (owner->boundSamplers[stage][slot] && set)
+            {
+                const D3D10DDI_HSAMPLER empty = {};
+                set(owner->hDevice, slot, 1, &empty);
+            }
+    }
     while (owner->pipelineStates) freePipelineState(owner->pipelineStates);
     ZeroMemory(owner->boundPipelineStates, sizeof(owner->boundPipelineStates));
+    ZeroMemory(owner->boundSamplers, sizeof(owner->boundSamplers));
 }
 
 HRESULT preparePipelineOutput(WineD3D11On12PipelineState *out) noexcept
@@ -4221,22 +4244,27 @@ bool validStencil(const D3D11_DEPTH_STENCILOP_DESC &desc) noexcept
             && desc.StencilFunc >= 1 && desc.StencilFunc <= 8;
 }
 
+/* Replace what one slot holds, keeping both states' counts right.  The old
+ * state is freed here if this was its last slot and its handle is gone. */
+void rebindPipelineSlot(PipelineStateNode **slot, PipelineStateNode *p) noexcept
+{
+    auto *old = *slot;
+    if (old == p) return;
+    *slot = p;
+    if (p) ++p->bindCount;
+    if (old && !--old->bindCount && !old->publicHandle) freePipelineState(old);
+}
+
 void setPipelineBinding(AdapterState *owner, UINT kind, PipelineStateNode *p) noexcept
 {
-    auto *old = owner->boundPipelineStates[kind - 1];
-    if (old == p) return;
-    owner->boundPipelineStates[kind - 1] = p;
-    if (p) p->bound = true;
-    if (old)
-    {
-        old->bound = false;
-        if (!old->publicHandle) freePipelineState(old);
-    }
+    rebindPipelineSlot(&owner->boundPipelineStates[kind - 1], p);
 }
 
 void clearPipelineBindings(AdapterState *owner) noexcept
 {
     for (UINT kind = 1; kind <= 3; ++kind) setPipelineBinding(owner, kind, nullptr);
+    for (auto &stage : owner->boundSamplers)
+        for (auto &slot : stage) rebindPipelineSlot(&slot, nullptr);
 }
 }
 
@@ -4352,7 +4380,7 @@ extern "C" HRESULT WINAPI WineD3D11On12DestroyPipelineStateV1(
     if (auto *p = findPipelineState(state))
     {
         p->publicHandle = nullptr;
-        if (!p->bound) freePipelineState(p);
+        if (!p->bindCount) freePipelineState(p);
     }
     state->kind = 0; state->hDrvState = nullptr; state->runtimeState = nullptr;
     return S_OK;
@@ -4646,4 +4674,122 @@ extern "C" HRESULT WINAPI WineD3D11On12UpdateTexture2DV1(WineD3D11On12AdapterDev
     owner->deviceFuncs.pfnResourceUpdateSubresourceUP(owner->hDevice, r->driverHandle,
             subresource, box ? &ddiBox : nullptr, data, rowPitch, depthPitch, 0);
     return frameError(owner);
+}
+
+/* Samplers and scissor, append-only exports 52-54.
+ *
+ * A sampler is a pipeline-state node of kind 4, created and destroyed like the
+ * other three; only binding differs, because one sampler is commonly bound in
+ * several slots of both stages at once. */
+namespace
+{
+bool finite(FLOAT value) noexcept
+{
+    return __builtin_isfinite(value);
+}
+
+/* D3D11_FILTER is a bit-field: mip, mag and min point-or-linear in bits 0, 2
+ * and 4, anisotropic 0x40 (only with all three linear, 0x55), and the
+ * reduction in bits 7-8 -- 0x80 comparison, 0x100 minimum, 0x180 maximum.
+ * Anything outside those bits is not a filter. */
+bool validFilter(UINT filter) noexcept
+{
+    const UINT base = filter & ~0x180u;
+    if (filter & ~0x1d5u) return false;
+    return !(base & 0x40u) || base == 0x55u;
+}
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12CreateSamplerStateV1(
+        WineD3D11On12AdapterDevice *device, const D3D11_SAMPLER_DESC *desc,
+        WineD3D11On12PipelineState *out) noexcept
+{
+    FrameLock lock;
+    HRESULT hr = preparePipelineOutput(out);
+    if (FAILED(hr)) return hr;
+    auto *owner = frameOwner(device);
+    if (!owner || !desc || !validFilter(desc->Filter)
+            || desc->AddressU < 1 || desc->AddressU > 5
+            || desc->AddressV < 1 || desc->AddressV > 5
+            || desc->AddressW < 1 || desc->AddressW > 5
+            || desc->MaxAnisotropy > 16
+            || !finite(desc->MipLODBias) || __builtin_isnan(desc->MinLOD)
+            || __builtin_isnan(desc->MaxLOD)) return E_INVALIDARG;
+    for (FLOAT c : desc->BorderColor)
+        if (!finite(c)) return E_INVALIDARG;
+    const bool comparison = (desc->Filter & 0x180u) == 0x80u;
+    if (comparison && (desc->ComparisonFunc < 1 || desc->ComparisonFunc > 8)) return E_INVALIDARG;
+    D3D10_DDI_SAMPLER_DESC ddi = {};
+    ddi.Filter = desc->Filter;
+    ddi.AddressU = desc->AddressU;
+    ddi.AddressV = desc->AddressV;
+    ddi.AddressW = desc->AddressW;
+    ddi.MipLODBias = desc->MipLODBias;
+    /* Ignored outside anisotropic filtering, and ignored fields are
+     * canonicalized as the other state descriptors' are. */
+    ddi.MaxAnisotropy = (desc->Filter & 0x40u) ? desc->MaxAnisotropy : 1;
+    ddi.ComparisonFunc = comparison ? desc->ComparisonFunc : D3D11_COMPARISON_NEVER;
+    memcpy(ddi.BorderColor, desc->BorderColor, sizeof(ddi.BorderColor));
+    ddi.MinLOD = desc->MinLOD;
+    ddi.MaxLOD = desc->MaxLOD;
+    auto &f = owner->deviceFuncs;
+    return createPipelineState(owner, WINE_D3D11ON12_STATE_SAMPLER, ddi,
+            f.pfnCalcPrivateSamplerSize, f.pfnCreateSampler, f.pfnDestroySampler, out);
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12SetSamplersV1(WineD3D11On12AdapterDevice *device,
+        UINT stage, UINT start, UINT count, WineD3D11On12PipelineState *const *states) noexcept
+{
+    constexpr UINT slots = D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT;
+    if ((stage != WINE_D3D11ON12_SHADER_VERTEX && stage != WINE_D3D11ON12_SHADER_PIXEL)
+            || start > slots || count > slots - start || (count && !states))
+        return E_INVALIDARG;
+    FrameLock lock;
+    auto *owner = frameOwner(device);
+    if (!owner) return E_INVALIDARG;
+    auto set = stage == WINE_D3D11ON12_SHADER_VERTEX ? owner->deviceFuncs.pfnVsSetSamplers
+            : owner->deviceFuncs.pfnPsSetSamplers;
+    if (!set) return DXGI_ERROR_UNSUPPORTED;
+    D3D10DDI_HSAMPLER handles[slots] = {};
+    PipelineStateNode *resolved[slots] = {};
+    for (UINT i = 0; i < count; ++i)
+    {
+        if (!states[i]) continue;
+        auto *p = findPipelineState(states[i]);
+        if (!p || p->owner != owner || p->kind != WINE_D3D11ON12_STATE_SAMPLER) return E_INVALIDARG;
+        resolved[i] = p;
+        handles[i].pDrvPrivate = p->privateState;
+    }
+    if (!count || deviceRemoved(owner)) return S_OK;
+    beginDdiCall(owner);
+    set(owner->hDevice, start, count, handles);
+    const HRESULT hr = frameError(owner);
+    if (SUCCEEDED(hr))
+        for (UINT i = 0; i < count; ++i)
+            rebindPipelineSlot(&owner->boundSamplers[stage - 1][start + i], resolved[i]);
+    return hr;
+}
+
+/* The DDI's ClearRects is the previous count minus the new one when it
+ * shrinks: an optimization hint the runtime owes the driver, so the core
+ * tracks the previous count itself. */
+extern "C" HRESULT WINAPI WineD3D11On12SetScissorRectsV1(WineD3D11On12AdapterDevice *device,
+        UINT count, const D3D11_RECT *rects) noexcept
+{
+    static_assert(sizeof(D3D10_DDI_RECT) == sizeof(D3D11_RECT), "scissor transport");
+    if (count > D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE || (count && !rects))
+        return E_INVALIDARG;
+    FrameLock lock;
+    auto *owner = frameOwner(device);
+    if (!owner) return E_INVALIDARG;
+    if (!owner->deviceFuncs.pfnSetScissorRects) return DXGI_ERROR_UNSUPPORTED;
+    if (deviceRemoved(owner)) return S_OK;
+    D3D10_DDI_RECT ddi[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};
+    if (count) memcpy(ddi, rects, count * sizeof(*ddi));
+    const UINT clear = owner->scissorCount > count ? owner->scissorCount - count : 0;
+    beginDdiCall(owner);
+    owner->deviceFuncs.pfnSetScissorRects(owner->hDevice, count, clear, count ? ddi : nullptr);
+    const HRESULT hr = frameError(owner);
+    if (SUCCEEDED(hr)) owner->scissorCount = count;
+    return hr;
 }

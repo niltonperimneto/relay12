@@ -112,6 +112,9 @@ EXPECTED_EXPORTS = {
         49: "WineD3D11On12UnmapBufferV1",
         50: "WineD3D11On12UpdateBufferV1",
         51: "WineD3D11On12UpdateTexture2DV1",
+        52: "WineD3D11On12CreateSamplerStateV1",
+        53: "WineD3D11On12SetSamplersV1",
+        54: "WineD3D11On12SetScissorRectsV1",
     },
 }
 

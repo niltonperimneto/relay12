@@ -50,3 +50,6 @@ WineD3D11On12SetRasterizerStateV1 @41
     WineD3D11On12UnmapBufferV1 @49
     WineD3D11On12UpdateBufferV1 @50
     WineD3D11On12UpdateTexture2DV1 @51
+    WineD3D11On12CreateSamplerStateV1 @52
+    WineD3D11On12SetSamplersV1 @53
+    WineD3D11On12SetScissorRectsV1 @54

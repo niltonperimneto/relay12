@@ -193,6 +193,8 @@ contract.
 | 47 | `WineD3D11On12SetConstantBuffersV1` | Vertex/pixel constant-buffer binding |
 | 48, 49 | `WineD3D11On12{Map,Unmap}BufferV1` | Dynamic and staging buffer maps |
 | 50, 51 | `WineD3D11On12Update{Buffer,Texture2D}V1` | UpdateSubresource on default-usage resources |
+| 52, 53 | `WineD3D11On12{CreateSamplerState,SetSamplers}V1` | Sampler creation (pipeline-state kind 4) and binding |
+| 54 | `WineD3D11On12SetScissorRectsV1` | Scissor rectangles |
 
 ### 4.3 Diagnostic Logging
 Diagnostic logging is handled via [`relay12-d3d11/wine_d3d11_diag.h`](relay12-d3d11/wine_d3d11_diag.h):

@@ -1063,6 +1063,119 @@ static void mock_default_cb_update_subresource(D3D10DDI_HDEVICE device,
             depth_pitch, copy_flags);
 }
 
+/* Samplers: each private block holds a tag and the descriptor the core
+ * translated, so the test sees the DDI side of the translation. */
+struct mock_sampler
+{
+    UINT tag;
+    D3D10_DDI_SAMPLER_DESC desc;
+};
+#define MOCK_SAMPLER_TAG 0x5a3b1e00u
+static LONG sampler_create_calls, sampler_destroy_calls, sampler_bind_calls;
+static void *bound_samplers[2][16];
+static D3D10_DDI_SAMPLER_DESC last_sampler_desc;
+static int bad_sampler;
+static LONG scissor_calls;
+static UINT last_scissor_count, last_scissor_clear;
+static D3D10_DDI_RECT last_scissor_rects[16];
+
+static SIZE_T mock_calc_private_sampler_size(D3D10DDI_HDEVICE device,
+        const D3D10_DDI_SAMPLER_DESC *desc)
+{
+    (void)device;
+    if (!desc) bad_sampler = 1;
+    return sizeof(struct mock_sampler);
+}
+
+static void mock_create_sampler(D3D10DDI_HDEVICE device, const D3D10_DDI_SAMPLER_DESC *desc,
+        D3D10DDI_HSAMPLER sampler, D3D10DDI_HRTSAMPLER runtime)
+{
+    struct mock_sampler *object = sampler.pDrvPrivate;
+
+    (void)device;
+    if (!desc || !object || !runtime.handle) { bad_sampler = 1; return; }
+    object->tag = MOCK_SAMPLER_TAG;
+    object->desc = *desc;
+    last_sampler_desc = *desc;
+    InterlockedIncrement(&sampler_create_calls);
+}
+
+static void mock_destroy_sampler(D3D10DDI_HDEVICE device, D3D10DDI_HSAMPLER sampler)
+{
+    struct mock_sampler *object = sampler.pDrvPrivate;
+    UINT stage, slot;
+
+    (void)device;
+    if (!object || object->tag != MOCK_SAMPLER_TAG) { bad_sampler = 1; return; }
+    /* The driver must not be asked to destroy a sampler it still has bound. */
+    for (stage = 0; stage < 2; ++stage)
+        for (slot = 0; slot < 16; ++slot)
+            if (bound_samplers[stage][slot] == object) bad_sampler = 1;
+    object->tag = 0;
+    InterlockedIncrement(&sampler_destroy_calls);
+}
+
+static void mock_set_samplers(UINT stage, UINT start, UINT count, const D3D10DDI_HSAMPLER *samplers)
+{
+    UINT i;
+
+    if (start > 16 || count > 16 - start || (count && !samplers)) { bad_sampler = 1; return; }
+    for (i = 0; i < count; ++i)
+    {
+        struct mock_sampler *object = samplers[i].pDrvPrivate;
+        if (object && object->tag != MOCK_SAMPLER_TAG) bad_sampler = 1;
+        bound_samplers[stage][start + i] = object;
+    }
+    InterlockedIncrement(&sampler_bind_calls);
+}
+
+static void mock_vs_set_samplers(D3D10DDI_HDEVICE device, UINT start, UINT count,
+        const D3D10DDI_HSAMPLER *samplers)
+{ (void)device; mock_set_samplers(0, start, count, samplers); }
+
+static void mock_ps_set_samplers(D3D10DDI_HDEVICE device, UINT start, UINT count,
+        const D3D10DDI_HSAMPLER *samplers)
+{ (void)device; mock_set_samplers(1, start, count, samplers); }
+
+static void mock_set_scissor_rects(D3D10DDI_HDEVICE device, UINT count, UINT clear,
+        const D3D10_DDI_RECT *rects)
+{
+    (void)device;
+    if (count > 16 || clear > 16 - count || (count && !rects)) { bad_sampler = 1; return; }
+    last_scissor_count = count;
+    last_scissor_clear = clear;
+    if (count) memcpy(last_scissor_rects, rects, count * sizeof(*rects));
+    InterlockedIncrement(&scissor_calls);
+}
+
+/* Blend, depth-stencil and rasterizer states, so suites that cannot
+ * substitute slots -- the frontend test reaches the driver only through
+ * Wine -- still have somewhere to create them.  tests/d3d11on12pso.c
+ * replaces these with its own strict stubs. */
+static LONG pipeline_state_creates[3], pipeline_state_destroys[3], pipeline_state_binds[3];
+#define MOCK_STATE_SLOTS(name, DESC, H, RT, index) \
+static SIZE_T mock_calc_##name(D3D10DDI_HDEVICE device, const DESC *desc) \
+{ (void)device; (void)desc; return sizeof(UINT); } \
+static void mock_create_##name(D3D10DDI_HDEVICE device, const DESC *desc, H state, RT runtime) \
+{ (void)device; (void)desc; (void)runtime; *(UINT *)state.pDrvPrivate = index + 1; \
+  InterlockedIncrement(&pipeline_state_creates[index]); } \
+static void mock_destroy_##name(D3D10DDI_HDEVICE device, H state) \
+{ (void)device; if (*(UINT *)state.pDrvPrivate != index + 1) bad_sampler = 1; \
+  *(UINT *)state.pDrvPrivate = 0; InterlockedIncrement(&pipeline_state_destroys[index]); }
+MOCK_STATE_SLOTS(blend_state, D3D11_1_DDI_BLEND_DESC, D3D10DDI_HBLENDSTATE, D3D10DDI_HRTBLENDSTATE, 0)
+MOCK_STATE_SLOTS(depth_stencil_state, D3D10_DDI_DEPTH_STENCIL_DESC, D3D10DDI_HDEPTHSTENCILSTATE,
+        D3D10DDI_HRTDEPTHSTENCILSTATE, 1)
+MOCK_STATE_SLOTS(rasterizer_state, D3DWDDM2_0DDI_RASTERIZER_DESC, D3D10DDI_HRASTERIZERSTATE,
+        D3D10DDI_HRTRASTERIZERSTATE, 2)
+static void mock_set_blend_state(D3D10DDI_HDEVICE device, D3D10DDI_HBLENDSTATE state,
+        const FLOAT factor[4], UINT mask)
+{ (void)device; (void)state; (void)factor; (void)mask; InterlockedIncrement(&pipeline_state_binds[0]); }
+static void mock_set_depth_stencil_state(D3D10DDI_HDEVICE device, D3D10DDI_HDEPTHSTENCILSTATE state,
+        UINT reference)
+{ (void)device; (void)state; (void)reference; InterlockedIncrement(&pipeline_state_binds[1]); }
+static void mock_set_rasterizer_state(D3D10DDI_HDEVICE device, D3D10DDI_HRASTERIZERSTATE state)
+{ (void)device; (void)state; InterlockedIncrement(&pipeline_state_binds[2]); }
+
 static void mock_resource_copy(D3D10DDI_HDEVICE device,
         D3D10DDI_HRESOURCE destination, D3D10DDI_HRESOURCE source)
 {
@@ -1427,6 +1540,29 @@ static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
     args->pWDDM2_6DeviceFuncs->pfnRecycleDestroyCommandList =
             mock_recycle_destroy_command_list;
     args->pWDDM2_6DeviceFuncs->pfnCommandListExecute = mock_command_list_execute;
+    /* Opt-in: tests/d3d11on12pso.c checks the core refuses a driver that
+     * lacks these slots, then substitutes its own. */
+    if (GetEnvironmentVariableA("RELAY12_MOCK_STATE_SLOTS", NULL, 0))
+    {
+        args->pWDDM2_6DeviceFuncs->pfnCalcPrivateBlendStateSize = mock_calc_blend_state;
+        args->pWDDM2_6DeviceFuncs->pfnCreateBlendState = mock_create_blend_state;
+        args->pWDDM2_6DeviceFuncs->pfnDestroyBlendState = mock_destroy_blend_state;
+        args->pWDDM2_6DeviceFuncs->pfnSetBlendState = mock_set_blend_state;
+        args->pWDDM2_6DeviceFuncs->pfnCalcPrivateDepthStencilStateSize = mock_calc_depth_stencil_state;
+        args->pWDDM2_6DeviceFuncs->pfnCreateDepthStencilState = mock_create_depth_stencil_state;
+        args->pWDDM2_6DeviceFuncs->pfnDestroyDepthStencilState = mock_destroy_depth_stencil_state;
+        args->pWDDM2_6DeviceFuncs->pfnSetDepthStencilState = mock_set_depth_stencil_state;
+        args->pWDDM2_6DeviceFuncs->pfnCalcPrivateRasterizerStateSize = mock_calc_rasterizer_state;
+        args->pWDDM2_6DeviceFuncs->pfnCreateRasterizerState = mock_create_rasterizer_state;
+        args->pWDDM2_6DeviceFuncs->pfnDestroyRasterizerState = mock_destroy_rasterizer_state;
+        args->pWDDM2_6DeviceFuncs->pfnSetRasterizerState = mock_set_rasterizer_state;
+    }
+    args->pWDDM2_6DeviceFuncs->pfnCalcPrivateSamplerSize = mock_calc_private_sampler_size;
+    args->pWDDM2_6DeviceFuncs->pfnCreateSampler = mock_create_sampler;
+    args->pWDDM2_6DeviceFuncs->pfnDestroySampler = mock_destroy_sampler;
+    args->pWDDM2_6DeviceFuncs->pfnVsSetSamplers = mock_vs_set_samplers;
+    args->pWDDM2_6DeviceFuncs->pfnPsSetSamplers = mock_ps_set_samplers;
+    args->pWDDM2_6DeviceFuncs->pfnSetScissorRects = mock_set_scissor_rects;
     args->pWDDM2_6DeviceFuncs->pfnVsSetConstantBuffers = mock_vs_set_constant_buffers;
     args->pWDDM2_6DeviceFuncs->pfnPsSetConstantBuffers = mock_ps_set_constant_buffers;
     args->pWDDM2_6DeviceFuncs->pfnDynamicConstantBufferMapDiscard = mock_map_cb_discard;
@@ -1746,4 +1882,42 @@ __declspec(dllexport) SIZE_T WINAPI WineD3D11On12MockDriverReadResource(void *pr
         bytes = size;
     memcpy(out, image->pixels, bytes);
     return bytes;
+}
+
+/* Sampler and scissor records for tests/d3d11on12sampler.c. */
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetSamplerRecord(LONG *created,
+        LONG *destroyed, LONG *binds, D3D10_DDI_SAMPLER_DESC *last, int *bad)
+{
+    if (created) *created = sampler_create_calls;
+    if (destroyed) *destroyed = sampler_destroy_calls;
+    if (binds) *binds = sampler_bind_calls;
+    if (last) *last = last_sampler_desc;
+    if (bad) *bad = bad_sampler;
+}
+
+__declspec(dllexport) void *WINAPI WineD3D11On12MockDriverGetBoundSampler(UINT stage, UINT slot)
+{
+    return stage < 2 && slot < 16 ? bound_samplers[stage][slot] : NULL;
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetScissorRecord(LONG *calls,
+        UINT *count, UINT *clear, D3D10_DDI_RECT *rects)
+{
+    if (calls) *calls = scissor_calls;
+    if (count) *count = last_scissor_count;
+    if (clear) *clear = last_scissor_clear;
+    if (rects) memcpy(rects, last_scissor_rects, sizeof(last_scissor_rects));
+}
+
+/* Blend [0], depth-stencil [1] and rasterizer [2] state records. */
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetStateCounts(LONG *creates,
+        LONG *destroys, LONG *binds)
+{
+    UINT i;
+    for (i = 0; i < 3; ++i)
+    {
+        if (creates) creates[i] = pipeline_state_creates[i];
+        if (destroys) destroys[i] = pipeline_state_destroys[i];
+        if (binds) binds[i] = pipeline_state_binds[i];
+    }
 }

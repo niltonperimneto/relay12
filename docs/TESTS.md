@@ -241,6 +241,24 @@ destroying while bound, racing destruction's unbind. That phase is the Phase B
 storm for these slots: `ddi_thread_stress.c` runs without the mock driver, so
 device-level storms live with the suite that loads it.
 
+## Samplers and scissor
+
+`tests/d3d11on12sampler.c` checks the sampler descriptor's translation into
+`D3D10_DDI_SAMPLER_DESC` as the driver receives it, with ignored fields
+canonicalized; rejection of bad address modes, filters, comparison functions,
+anisotropy and non-finite values with no handle published; one sampler bound in
+three slots across both stages; wrong-kind, copied, foreign and out-of-range
+binds rejected without partial binding; destruction while bound, where the
+handle goes inert at once and the driver object survives until its last slot
+lets go; and scissor rectangles carried as `RECT` with `ClearRects` equal to
+the previous count minus the new one. The mock fails the run if the driver is
+asked to destroy a sampler it still has bound, which is why teardown unbinds
+samplers first. The frontend test covers patch 0030: state objects deduplicated
+per description, refused D3D11.1 logic ops, retention while bound, the getters,
+and ClearState releasing each to exactly one driver destroy. The mock's
+blend/depth-stencil/rasterizer slots are opt-in (`RELAY12_MOCK_STATE_SLOTS`)
+because `d3d11on12pso.c` checks the core refuses a driver without them.
+
 ## Device errors and removal
 
 `tests/d3d11on12removal.c` exercises the error routing described in

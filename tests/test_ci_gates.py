@@ -75,6 +75,8 @@ class WineD3D11BackendGate(unittest.TestCase):
             check_wine_d3d11_backend.REQUIRED_SHADER))
         (source / "texture.c").write_text("\n".join(
             check_wine_d3d11_backend.REQUIRED_TEXTURE))
+        (source / "state.c").write_text("\n".join(
+            check_wine_d3d11_backend.REQUIRED_STATE))
         (source / "d3d11_main.c").write_text("\n".join(
             check_wine_d3d11_backend.REQUIRED_MAIN))
         (root / "configure.ac").write_text(
@@ -93,6 +95,20 @@ class WineD3D11BackendGate(unittest.TestCase):
             check_wine_d3d11_backend.REQUIRED_HEADER), "\n".join(
             check_wine_d3d11_backend.REQUIRED_DEVICE))
         self.assertEqual(check_wine_d3d11_backend.check_tree(root), [])
+
+    def test_unguarded_state_destruction_is_rejected(self):
+        """Patch 0030: a state destroyed without rechecking its backend
+        refcount under the mutex can be freed after an identical Create*
+        found it in the tree and handed it out again."""
+        root = self.make_tree("\n".join(
+            check_wine_d3d11_backend.REQUIRED_HEADER), "\n".join(
+            check_wine_d3d11_backend.REQUIRED_DEVICE))
+        guard = "if (InterlockedCompareExchange(&state->backend_child.refs, 0, 0))"
+        state = root / "dlls" / "d3d11" / "state.c"
+        self.assertIn(guard, state.read_text())
+        state.write_text(state.read_text().replace(guard, ""))
+        self.assertIn(f"state.c is missing: {guard}",
+                      check_wine_d3d11_backend.check_tree(root))
 
     def test_direct_flush_regression_is_rejected(self):
         markers = list(check_wine_d3d11_backend.REQUIRED_DEVICE)
