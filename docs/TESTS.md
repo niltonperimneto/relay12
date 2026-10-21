@@ -18,7 +18,7 @@ Developers can easily misread documentation, miscount padding bytes, or mix up l
 ## 1a. Behavioural Determinism: The Frame Harness
 Layout and per-slot callability are necessary and not sufficient. Every driver handle in this DDI is one wrapped pointer, so a frame that bound the vertex buffer where it meant to bind the render target would call the right slots, in the right order, with arguments of the right types — and only the identity of a pointer would be wrong. No layout assertion and no per-slot call can see that.
 * **`tests/d3d11ddi_triangle.c`:** drives the promoted device function table through the MVP frame — create, bind, clear, draw, copy to staging, map, verify, unmap, tear down — with recording stubs, then asserts the recorded call sequence against a written-out expected order and checks that each binding received the handle the matching creation produced. The clear stub fills a backing image, draw replaces its centre texel, and readback requires the centre to carry the drawn red and a corner the cleared blue, matching the application-level test. Objects get distinct driver private blocks, allocated by the test the way the runtime allocates them, which is what makes the identity checks discriminating rather than vacuous. Compiled in C and C++ and run under Wine, like the layout harness.
-* **What it does not claim:** recording stubs do not prove GPU rendering. `tests/d3d11on12frame.c` additionally drives the real core against a mock driver, including fault injection, mapping validation, retained views, and teardown with outstanding maps. `tests/d3d11on12frontend.c` loads the compiled Wine host to check bound-object lifetime, cycle-free device destruction, and safe rejection of unsupported operations. Real GPU acceptance uses `tests/e2e_d3d11_triangle.cpp`; see [FIRST-FRAME-VALIDATION.md](FIRST-FRAME-VALIDATION.md).
+* **What it does not claim:** recording stubs do not prove GPU rendering. `tests/d3d11on12frame.c` additionally drives the real core against a mock driver, including fault injection, mapping validation, retained views, and teardown with outstanding maps. `tests/d3d11on12frontend.c` loads the compiled Wine host to check bound-object lifetime, cycle-free device destruction, and safe rejection of unsupported operations. Real GPU acceptance uses `tests/e2e_d3d11_triangle.cpp`; see [FIRST-FRAME-VALIDATION.md](FIRST-FRAME-VALIDATION.md). The Tier 1 surface has its own acceptance test, `tests/e2e_d3d11_tier1.cpp`, described under "Tier 1 hardware acceptance" below.
 
 ## 1b. Fail-Closed Driver Initialization Tests
 Real driver interactions start with the adapter and device, requiring strict argument handling before the boundary to the translation layer is even entered.
@@ -290,6 +290,28 @@ to verify three acquire/clear/release cycles per RGBA/BGRA format. Run it with
 `scripts/run-d3dmetal-frame.py --test wrapped`; see
 [WRAPPED-RESOURCE-VALIDATION.md](WRAPPED-RESOURCE-VALIDATION.md). It does not
 exercise DXGI surfaces, Direct2D, or presentation.
+
+## Tier 1 hardware acceptance
+
+`tests/e2e_d3d11_tier1.cpp` draws one 64x64 offscreen frame that needs every
+Tier 1 operation, and reads back seven texels, each owned by exactly one of
+them:
+
+| Texel | Expected | Proves |
+| --- | --- | --- |
+| (8, 8) | green | a pixel shader reads a constant buffer |
+| (8, 56) | yellow | a second `WRITE_DISCARD` map renames the buffer, so the first draw keeps green |
+| (40, 8) | red | `UpdateSubresource` filled the texture, sampled through a point sampler |
+| (56, 8) | green | blending: a zero-alpha texel leaves the destination |
+| (40, 40), (56, 40) | black, magenta | sampling inside the scissor rectangle |
+| (40, 56) | yellow | the scissor rejected the textured pass below row 48 |
+
+The vertex buffer starts as zeros and is filled by `UpdateSubresource`, so if
+the buffer update fails nothing is drawn. Every expected value is an exact
+byte, because the blended texels have alpha 0 or 1. The run releases its
+sampler, blend and rasterizer states while they are bound, which checks that
+bindings retain them. Three create/render/teardown cycles must pass. Run it
+with `scripts/run-d3dmetal-frame.py --test tier1`. CI only compiles it.
 
 ## Performance measurement
 

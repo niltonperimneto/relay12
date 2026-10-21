@@ -14,7 +14,7 @@ def main():
     parser.add_argument("--prefix", type=Path, required=True)
     parser.add_argument("--artifacts", type=Path, required=True)
     parser.add_argument("--timeout", type=int, default=120)
-    parser.add_argument("--test", choices=("triangle", "wrapped"), default="triangle")
+    parser.add_argument("--test", choices=("triangle", "wrapped", "tier1"), default="triangle")
     args = parser.parse_args()
     # Keep the bin/ launcher location: wine64 commonly links into lib/wine/.
     wine = args.wine.absolute()
