@@ -11,8 +11,11 @@
  */
 #include "wine_d3d11ddi.h"
 
+/* Not #error: CI's clean-room dependency pass preprocesses every
+ * tests/d3d11ddi*.c without -DCASE, and must succeed.  A compile without a
+ * case still fails, at the declaration below. */
 #ifndef CASE
-#error "compile once per case: -DCASE=1 .. -DCASE=4"
+#define CASE 0
 #endif
 
 #if CASE == 1
@@ -45,5 +48,5 @@ void scissor_with_a_viewport(
     funcs->pfnSetScissorRects(hDevice, 1, 0, viewport);
 }
 #else
-#error "unknown case"
+typedef char compile_once_per_case_with_CASE_1_to_4[-1];
 #endif
