@@ -449,6 +449,10 @@ struct ResourceState
     void *publicHandle;
     UINT kind;
     D3D11_TEXTURE2D_DESC description;
+    /* Buffers only; description stays zero for them. */
+    D3D11_BUFFER_DESC bufferDescription;
+    /* One byte per subresource: zero when unmapped, otherwise the MAP_FAMILY
+     * that mapped it, because unmap has to go through the same family. */
     BYTE *mapped;
     UINT viewCount;
     D3D11_RESOURCE_FLAGS flags;
@@ -463,6 +467,15 @@ struct ResourceState
 
 #define RESOURCE_KIND_BUFFER 1u
 #define RESOURCE_KIND_TEXTURE2D 2u
+
+/* The driver's map slots come in pairs bound to different code -- the pinned
+ * D3D11On12 maps dynamic constant and IA buffers by renaming them, other
+ * dynamic resources by discarding, and staging resources by synchronizing --
+ * so a subresource is unmapped through the family that mapped it. */
+#define MAP_FAMILY_STAGING 1u
+#define MAP_FAMILY_CONSTANT_BUFFER 2u
+#define MAP_FAMILY_IA_BUFFER 3u
+#define MAP_FAMILY_DYNAMIC_RESOURCE 4u
 
 INIT_ONCE resourceRegistryOnce = INIT_ONCE_STATIC_INIT;
 /* shared-state: published once through resourceRegistryOnce */
@@ -640,6 +653,9 @@ struct AdapterState
     RenderTargetState *renderTargets;
     ShaderResourceViewState *shaderResourceViews;
     ShaderResourceViewState *boundPixelResources[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
+    /* Vertex [0] and pixel [1] constant buffers, guarded by resourceRegistryLock.
+     * Held so destroying a bound buffer unbinds it before the driver frees it. */
+    ResourceState *boundConstantBuffers[2][D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
     DeferredContextState *deferredContexts;
     CommandListState *commandLists;
     /* Command-list blocks already through RecycleDestroyCommandList, kept for
@@ -813,6 +829,44 @@ void unlinkOwnerResource(ResourceState *resource) noexcept
     }
 }
 
+UINT subresourceCountOf(const ResourceState *resource) noexcept
+{
+    return resource->kind == RESOURCE_KIND_BUFFER ? 1u
+            : resource->description.MipLevels * resource->description.ArraySize;
+}
+
+void unmapThroughFamily(AdapterState *owner, ResourceState *resource,
+        UINT subresource, BYTE family) noexcept
+{
+    const auto &f = owner->deviceFuncs;
+    PFND3D10DDI_RESOURCEUNMAP unmap =
+            family == MAP_FAMILY_CONSTANT_BUFFER ? f.pfnDynamicConstantBufferUnmap
+            : family == MAP_FAMILY_IA_BUFFER ? f.pfnDynamicIABufferUnmap
+            : family == MAP_FAMILY_DYNAMIC_RESOURCE ? f.pfnDynamicResourceUnmap
+            : f.pfnStagingResourceUnmap;
+    if (unmap)
+        unmap(owner->hDevice, resource->driverHandle, subresource);
+    resource->mapped[subresource] = 0;
+}
+
+/* Caller holds resourceRegistryLock. */
+void unbindConstantBuffer(AdapterState *owner, ResourceState *resource) noexcept
+{
+    for (UINT stage = 0; stage < 2; ++stage)
+    {
+        auto set = stage ? owner->deviceFuncs.pfnPsSetConstantBuffers
+                : owner->deviceFuncs.pfnVsSetConstantBuffers;
+        for (UINT slot = 0; slot < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; ++slot)
+            if (owner->boundConstantBuffers[stage][slot] == resource)
+            {
+                const D3D10DDI_HRESOURCE empty = {};
+                if (set)
+                    set(owner->hDevice, slot, 1, &empty, nullptr, nullptr);
+                owner->boundConstantBuffers[stage][slot] = nullptr;
+            }
+    }
+}
+
 void destroyResourceState(ResourceState *resource) noexcept
 {
     if (!resource)
@@ -820,9 +874,14 @@ void destroyResourceState(ResourceState *resource) noexcept
     markDdiThread();
     AdapterState *owner = resource->owner;
     if (resource->mapped && owner && owner->deviceCreated)
-        for (UINT i = 0; i < resource->description.MipLevels * resource->description.ArraySize; ++i)
-            if (resource->mapped[i] && owner->deviceFuncs.pfnStagingResourceUnmap)
-                owner->deviceFuncs.pfnStagingResourceUnmap(owner->hDevice, resource->driverHandle, i);
+        for (UINT i = 0; i < subresourceCountOf(resource); ++i)
+            if (resource->mapped[i])
+                unmapThroughFamily(owner, resource, i, resource->mapped[i]);
+    if (owner && owner->deviceCreated && resource->kind == RESOURCE_KIND_BUFFER)
+    {
+        FrameLock lock;
+        unbindConstantBuffer(owner, resource);
+    }
     if (resource->created && owner && owner->deviceCreated
             && owner->deviceFuncs.pfnDestroyResource)
         owner->deviceFuncs.pfnDestroyResource(owner->hDevice,
@@ -1965,9 +2024,17 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateBufferV1(
     if (!resource)
         return E_OUTOFMEMORY;
 
+    resource->mapped = static_cast<BYTE *>(HeapAlloc(GetProcessHeap(),
+            HEAP_ZERO_MEMORY, 1));
+    if (!resource->mapped)
+    {
+        HeapFree(GetProcessHeap(), 0, resource);
+        return E_OUTOFMEMORY;
+    }
     resource->owner = owner;
     resource->publicHandle = buffer;
     resource->kind = RESOURCE_KIND_BUFFER;
+    resource->bufferDescription = *description;
     resource->flags.BindFlags = description->BindFlags;
     resource->flags.MiscFlags = description->MiscFlags;
     resource->flags.CPUAccessFlags = description->CPUAccessFlags;
@@ -1995,6 +2062,7 @@ extern "C" HRESULT WINAPI WineD3D11On12CreateBufferV1(
         unlinkOwnerResource(resource);
         ReleaseSRWLockExclusive(&resourceRegistryLock);
         unlinkResource(resource);
+        HeapFree(GetProcessHeap(), 0, resource->mapped);
         HeapFree(GetProcessHeap(), 0, resource);
         return hr;
     }
@@ -2047,7 +2115,7 @@ ResourceState *findBufferLocked(AdapterState *owner,
                 && resource->publicHandle == buffer && resource->created
                 && resource->kind == RESOURCE_KIND_BUFFER
                 && resource->driverHandle.pDrvPrivate == buffer->hDrvResource
-                && (resource->flags.BindFlags & requiredBindFlag))
+                && (!requiredBindFlag || (resource->flags.BindFlags & requiredBindFlag)))
             return resource;
     }
     return nullptr;
@@ -4020,7 +4088,11 @@ extern "C" HRESULT WINAPI WineD3D11On12ExecuteCommandListV1(
      * context has no render target bound afterwards. */
     owner->boundRenderTarget = nullptr;
     HRESULT hr = frameError(owner);
-    if (SUCCEEDED(hr)) clearPipelineBindings(owner);
+    if (SUCCEEDED(hr))
+    {
+        clearPipelineBindings(owner);
+        ZeroMemory(owner->boundConstantBuffers, sizeof(owner->boundConstantBuffers));
+    }
     return hr;
 }
 
@@ -4338,4 +4410,240 @@ extern "C" HRESULT WINAPI WineD3D11On12SetRasterizerStateV1(
     HRESULT hr = frameError(owner);
     if (SUCCEEDED(hr)) setPipelineBinding(owner, WINE_D3D11ON12_STATE_RASTERIZER, p);
     return hr;
+}
+
+/* Constant buffers and buffer/texture updates, append-only exports 47-51.
+ *
+ * Vertex and pixel stages only, because only those shaders exist; the stage
+ * is a parameter so later stages need no new export.  Whole buffers are
+ * bound -- the first-constant and count arrays are passed null, which is
+ * D3D11.0's VSSetConstantBuffers. */
+namespace
+{
+PFND3D11_1DDI_SETCONSTANTBUFFERS constantBufferSlot(AdapterState *owner, UINT stage) noexcept
+{
+    return stage == WINE_D3D11ON12_SHADER_VERTEX ? owner->deviceFuncs.pfnVsSetConstantBuffers
+            : stage == WINE_D3D11ON12_SHADER_PIXEL ? owner->deviceFuncs.pfnPsSetConstantBuffers
+            : nullptr;
+}
+
+/* Bytes per texel for the formats UpdateTexture2DV1 can validate a pitch
+ * for.  Zero means the core does not know the format's footprint, and the
+ * update is refused rather than dispatched with an unchecked pitch. */
+UINT texelBytes(DXGI_FORMAT format) noexcept
+{
+    switch (format)
+    {
+    case DXGI_FORMAT_R8_UNORM: case DXGI_FORMAT_R8_UINT: case DXGI_FORMAT_A8_UNORM:
+        return 1;
+    case DXGI_FORMAT_R8G8_UNORM: case DXGI_FORMAT_R16_FLOAT: case DXGI_FORMAT_R16_UNORM:
+    case DXGI_FORMAT_R16_UINT: case DXGI_FORMAT_B5G6R5_UNORM:
+        return 2;
+    case DXGI_FORMAT_R8G8B8A8_UNORM: case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+    case DXGI_FORMAT_B8G8R8A8_UNORM: case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+    case DXGI_FORMAT_B8G8R8X8_UNORM: case DXGI_FORMAT_R10G10B10A2_UNORM:
+    case DXGI_FORMAT_R32_FLOAT: case DXGI_FORMAT_R32_UINT: case DXGI_FORMAT_R16G16_FLOAT:
+        return 4;
+    case DXGI_FORMAT_R16G16B16A16_FLOAT: case DXGI_FORMAT_R32G32_FLOAT:
+        return 8;
+    case DXGI_FORMAT_R32G32B32A32_FLOAT:
+        return 16;
+    default:
+        return 0;
+    }
+}
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12SetConstantBuffersV1(
+        WineD3D11On12AdapterDevice *device, UINT stage, UINT start, UINT count,
+        WineD3D11On12Buffer *const *buffers) noexcept
+{
+    constexpr UINT slots = D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT;
+    if ((stage != WINE_D3D11ON12_SHADER_VERTEX && stage != WINE_D3D11ON12_SHADER_PIXEL)
+            || start > slots || count > slots - start || (count && !buffers))
+        return E_INVALIDARG;
+    FrameLock lock;
+    auto *owner = frameOwner(device);
+    if (!owner) return E_INVALIDARG;
+    auto set = constantBufferSlot(owner, stage);
+    if (!set) return DXGI_ERROR_UNSUPPORTED;
+    D3D10DDI_HRESOURCE handles[slots] = {};
+    ResourceState *resolved[slots] = {};
+    for (UINT i = 0; i < count; ++i)
+    {
+        if (!buffers[i]) continue;
+        resolved[i] = findBufferLocked(owner, buffers[i], D3D11_BIND_CONSTANT_BUFFER);
+        if (!resolved[i]) return E_INVALIDARG;
+        handles[i] = resolved[i]->driverHandle;
+    }
+    if (!count || deviceRemoved(owner)) return S_OK;
+    beginDdiCall(owner);
+    set(owner->hDevice, start, count, handles, nullptr, nullptr);
+    const HRESULT hr = frameError(owner);
+    if (SUCCEEDED(hr))
+        for (UINT i = 0; i < count; ++i)
+            owner->boundConstantBuffers[stage - 1][start + i] = resolved[i];
+    return hr;
+}
+
+/* Dynamic buffers map with WRITE_DISCARD or WRITE_NO_OVERWRITE through the
+ * family their bind flag selects; staging buffers map READ, WRITE or
+ * READ_WRITE through the staging family, and may ask not to wait.  Anything
+ * else is the misuse D3D11 reports as DXGI_ERROR_INVALID_CALL. */
+extern "C" HRESULT WINAPI WineD3D11On12MapBufferV1(WineD3D11On12AdapterDevice *device,
+        WineD3D11On12Buffer *buffer, D3D11_MAP mode, UINT flags,
+        D3D11_MAPPED_SUBRESOURCE *out) noexcept
+{
+    if (!out) return E_INVALIDARG;
+    ZeroMemory(out, sizeof(*out));
+    FrameLock lock;
+    auto *owner = frameOwner(device);
+    /* No bind flag required: a staging buffer has none. */
+    auto *r = owner ? findBufferLocked(owner, buffer, 0) : nullptr;
+    if (!owner || !r) return E_INVALIDARG;
+    if (deviceRemoved(owner)) return DXGI_ERROR_DEVICE_REMOVED;
+    const auto &d = r->bufferDescription;
+    const auto &f = owner->deviceFuncs;
+    PFND3D10DDI_RESOURCEMAP map = nullptr;
+    BYTE family = 0;
+    if (d.Usage == D3D11_USAGE_DYNAMIC && !flags && (d.CPUAccessFlags & D3D11_CPU_ACCESS_WRITE))
+    {
+        const bool discard = mode == D3D11_MAP_WRITE_DISCARD;
+        if (!discard && mode != D3D11_MAP_WRITE_NO_OVERWRITE)
+            return DXGI_ERROR_INVALID_CALL;
+        if (d.BindFlags & D3D11_BIND_CONSTANT_BUFFER)
+        {
+            family = MAP_FAMILY_CONSTANT_BUFFER;
+            map = discard ? f.pfnDynamicConstantBufferMapDiscard : f.pfnDynamicConstantBufferMapNoOverwrite;
+        }
+        else if (d.BindFlags & (D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_INDEX_BUFFER))
+        {
+            family = MAP_FAMILY_IA_BUFFER;
+            map = discard ? f.pfnDynamicIABufferMapDiscard : f.pfnDynamicIABufferMapNoOverwrite;
+        }
+        else if (discard)
+        {
+            family = MAP_FAMILY_DYNAMIC_RESOURCE;
+            map = f.pfnDynamicResourceMapDiscard;
+        }
+        else
+            return DXGI_ERROR_INVALID_CALL;
+    }
+    else if (d.Usage == D3D11_USAGE_STAGING && !(flags & ~D3D11_MAP_FLAG_DO_NOT_WAIT))
+    {
+        const UINT need = mode == D3D11_MAP_READ ? D3D11_CPU_ACCESS_READ
+                : mode == D3D11_MAP_WRITE ? D3D11_CPU_ACCESS_WRITE
+                : mode == D3D11_MAP_READ_WRITE ? (D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE) : 0;
+        if (!need || (d.CPUAccessFlags & need) != need) return DXGI_ERROR_INVALID_CALL;
+        family = MAP_FAMILY_STAGING;
+        map = f.pfnStagingResourceMap;
+    }
+    else
+        return DXGI_ERROR_INVALID_CALL;
+    if (r->mapped[0]) return DXGI_ERROR_INVALID_CALL;
+    if (!map || !f.pfnStagingResourceUnmap || !f.pfnDynamicConstantBufferUnmap
+            || !f.pfnDynamicIABufferUnmap || !f.pfnDynamicResourceUnmap)
+        return DXGI_ERROR_UNSUPPORTED;
+    D3D10DDI_MAPPED_SUBRESOURCE mapped = {};
+    beginDdiCall(owner);
+    map(owner->hDevice, r->driverHandle, 0, static_cast<D3D10_DDI_MAP>(mode), flags, &mapped);
+    HRESULT hr = frameError(owner);
+    if (hr == ddiWasStillDrawing) return DXGI_ERROR_WAS_STILL_DRAWING;
+    if (FAILED(hr)) return hr;
+    if (!mapped.pData)
+    {
+        r->mapped[0] = family;
+        unmapThroughFamily(owner, r, 0, family);
+        return E_FAIL;
+    }
+    r->mapped[0] = family;
+    out->pData = mapped.pData;
+    out->RowPitch = d.ByteWidth;
+    out->DepthPitch = d.ByteWidth;
+    return S_OK;
+}
+
+extern "C" HRESULT WINAPI WineD3D11On12UnmapBufferV1(WineD3D11On12AdapterDevice *device,
+        WineD3D11On12Buffer *buffer) noexcept
+{
+    FrameLock lock;
+    auto *owner = frameOwner(device);
+    if (!owner) return E_INVALIDARG;
+    auto *r = findBufferLocked(owner, buffer, 0);
+    if (!r) return E_INVALIDARG;
+    if (!r->mapped[0]) return DXGI_ERROR_INVALID_CALL;
+    beginDdiCall(owner);
+    unmapThroughFamily(owner, r, 0, r->mapped[0]);
+    return frameError(owner);
+}
+
+/* UpdateSubresource on a default-usage buffer.  A constant buffer takes the
+ * whole-buffer update slot and refuses a box, as D3D11.0 does; any other
+ * buffer takes the general slot with its byte range.  An empty box is a
+ * no-op, as at the API. */
+extern "C" HRESULT WINAPI WineD3D11On12UpdateBufferV1(WineD3D11On12AdapterDevice *device,
+        WineD3D11On12Buffer *buffer, const D3D11_BOX *box, const void *data,
+        UINT rowPitch, UINT depthPitch) noexcept
+{
+    if (!data) return E_INVALIDARG;
+    FrameLock lock;
+    auto *owner = frameOwner(device);
+    auto *r = owner ? findBufferLocked(owner, buffer, 0) : nullptr;
+    if (!owner || !r) return E_INVALIDARG;
+    const auto &d = r->bufferDescription;
+    if (d.Usage != D3D11_USAGE_DEFAULT) return DXGI_ERROR_INVALID_CALL;
+    const bool constant = d.BindFlags & D3D11_BIND_CONSTANT_BUFFER;
+    if (constant && box) return E_INVALIDARG;
+    if (box && (box->top != 0 || box->bottom != 1 || box->front != 0 || box->back != 1
+            || box->right > d.ByteWidth)) return E_INVALIDARG;
+    if (box && box->left >= box->right) return S_OK;
+    auto update = constant ? owner->deviceFuncs.pfnDefaultConstantBufferUpdateSubresourceUP
+            : owner->deviceFuncs.pfnResourceUpdateSubresourceUP;
+    if (!update) return DXGI_ERROR_UNSUPPORTED;
+    if (deviceRemoved(owner)) return S_OK;
+    D3D10_DDI_BOX ddiBox = {};
+    if (box)
+        ddiBox = {static_cast<LONG>(box->left), 0, 0, static_cast<LONG>(box->right), 1, 1};
+    beginDdiCall(owner);
+    update(owner->hDevice, r->driverHandle, 0, box ? &ddiBox : nullptr, data, rowPitch, depthPitch, 0);
+    return frameError(owner);
+}
+
+/* UpdateSubresource on a default-usage Texture2D subresource.  The box is
+ * checked against that mip's extent and the row pitch against the box's
+ * width, for formats whose texel size the core knows; others are refused
+ * rather than dispatched with an unchecked pitch. */
+extern "C" HRESULT WINAPI WineD3D11On12UpdateTexture2DV1(WineD3D11On12AdapterDevice *device,
+        WineD3D11On12Texture2D *texture, UINT subresource, const D3D11_BOX *box,
+        const void *data, UINT rowPitch, UINT depthPitch) noexcept
+{
+    if (!data) return E_INVALIDARG;
+    FrameLock lock;
+    auto *owner = frameOwner(device);
+    auto *r = findTextureLocked(owner, texture);
+    if (!owner || !r) return E_INVALIDARG;
+    const auto &d = r->description;
+    if (subresource >= d.MipLevels * d.ArraySize || d.SampleDesc.Count != 1) return E_INVALIDARG;
+    if (d.Usage != D3D11_USAGE_DEFAULT || r->mapped[subresource]) return DXGI_ERROR_INVALID_CALL;
+    if (r->wrappedResource && (FAILED(owner->wrappedOwnershipError) || !r->acquired))
+        return FAILED(owner->wrappedOwnershipError) ? owner->wrappedOwnershipError : E_INVALIDARG;
+    const UINT bytes = texelBytes(d.Format);
+    if (!bytes) return DXGI_ERROR_UNSUPPORTED;
+    const UINT mip = subresource % d.MipLevels;
+    const UINT width = d.Width >> mip ? d.Width >> mip : 1;
+    const UINT height = d.Height >> mip ? d.Height >> mip : 1;
+    const UINT left = box ? box->left : 0, top = box ? box->top : 0;
+    const UINT right = box ? box->right : width, bottom = box ? box->bottom : height;
+    if (right > width || bottom > height || (box && (box->front != 0 || box->back != 1)))
+        return E_INVALIDARG;
+    if (left >= right || top >= bottom) return S_OK;
+    if (static_cast<UINT64>(right - left) * bytes > rowPitch) return E_INVALIDARG;
+    if (!owner->deviceFuncs.pfnResourceUpdateSubresourceUP) return DXGI_ERROR_UNSUPPORTED;
+    if (deviceRemoved(owner)) return S_OK;
+    D3D10_DDI_BOX ddiBox = {static_cast<LONG>(left), static_cast<LONG>(top), 0,
+            static_cast<LONG>(right), static_cast<LONG>(bottom), 1};
+    beginDdiCall(owner);
+    owner->deviceFuncs.pfnResourceUpdateSubresourceUP(owner->hDevice, r->driverHandle,
+            subresource, box ? &ddiBox : nullptr, data, rowPitch, depthPitch, 0);
+    return frameError(owner);
 }

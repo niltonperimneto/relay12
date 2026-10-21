@@ -220,6 +220,27 @@ against the native mock driver. Closing a device with a wrapped resource still
 acquired must release it to its declared output state and flush exactly once;
 closing one with nothing acquired must do neither.
 
+## Constant buffers, buffer maps and updates
+
+`tests/d3d11on12cbuffer.c` binds constant buffers in both stages at both ends
+of the 14-slot range and rejects out-of-range slots, unknown stages, a buffer
+without the constant-buffer bind flag and another device's buffer before any
+dispatch. Destroying a buffer bound in two stages unbinds both first. Every map
+family is driven — constant-buffer and IA discard/no-overwrite, dynamic-resource
+discard, staging write and read-write, and a do-not-wait read — and the mock
+fails the run if an unmap goes through a different family than the map, as the
+pinned driver binds those pairs to different code. Misuse (wrong mode for the
+usage, missing CPU access, flags on a dynamic map, default usage, a double map,
+an unmap with no map) returns `DXGI_ERROR_INVALID_CALL` and reaches no driver
+slot; destroying a mapped buffer unmaps it through its family. Updates are read
+back from the mock's storage: a whole constant buffer through its own slot, a
+byte range of a vertex buffer, and a 4x2 box of an RGBA8 texture at a padded
+row pitch, with bounds, pitch, unknown-format and usage rejections. A final
+phase has eight threads creating, binding in both stages, mapping, updating and
+destroying while bound, racing destruction's unbind. That phase is the Phase B
+storm for these slots: `ddi_thread_stress.c` runs without the mock driver, so
+device-level storms live with the suite that loads it.
+
 ## Device errors and removal
 
 `tests/d3d11on12removal.c` exercises the error routing described in

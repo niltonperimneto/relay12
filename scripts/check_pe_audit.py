@@ -107,6 +107,11 @@ EXPECTED_EXPORTS = {
         44: "WineD3D11On12SetPixelShaderResourcesV1",
         45: "WineD3D11On12ValidateDeviceV1",
         46: "WineD3D11On12GetDeviceRemovedReasonV1",
+        47: "WineD3D11On12SetConstantBuffersV1",
+        48: "WineD3D11On12MapBufferV1",
+        49: "WineD3D11On12UnmapBufferV1",
+        50: "WineD3D11On12UpdateBufferV1",
+        51: "WineD3D11On12UpdateTexture2DV1",
     },
 }
 

@@ -16,6 +16,12 @@ struct mock_image
     UINT width;
     UINT height;
     BYTE *pixels;
+    /* A buffer is width bytes wide and one row high, with no 4-byte texel. */
+    BOOL is_buffer;
+    /* Which map family holds it, so an unmap through another family -- a
+     * renamed-buffer map undone by the dynamic-resource unmap, say -- is
+     * caught; the pinned driver binds those pairs to different code. */
+    LONG map_family;
 };
 
 struct mock_rtv
@@ -131,6 +137,21 @@ static volatile LONG last_escape_result;
 /* An error the next SetViewports raises from a second thread while the core
  * is still inside the call: the case a single error slot gets wrong. */
 static volatile LONG worker_error_next_viewport;
+/* Constant-buffer bindings per stage (vertex, pixel), as the driver holds
+ * them; a non-null first-constant or count array is recorded as malformed,
+ * because the core binds whole buffers only. */
+static void *bound_constant_buffers[2][14];
+static LONG constant_buffer_bind_calls;
+static int bad_constant_buffer_binding;
+/* Map families, numbered for the test: 1 constant-buffer discard, 2
+ * constant-buffer no-overwrite, 3 IA discard, 4 IA no-overwrite, 5 dynamic
+ * resource discard, 6 staging.  Unmaps record the family they undo. */
+static LONG last_map_family, last_unmap_family, buffer_map_calls, buffer_unmap_calls;
+static LONG last_map_type;
+static int bad_buffer_map;
+/* UpdateSubresourceUP: 1 general, 2 default constant buffer. */
+static LONG update_calls, last_update_slot;
+static int last_update_had_box, bad_update;
 
 /* DXGI_DDI_ERR_WASSTILLDRAWING; no header on the test include path has it. */
 #define MOCK_DDI_ERR_WASSTILLDRAWING ((HRESULT)0x887b0001)
@@ -196,7 +217,7 @@ static BOOL mock_report_error(HRESULT error)
  * that every later access then runs past. */
 static SIZE_T mock_image_bytes(const struct mock_image *image)
 {
-    return (SIZE_T)image->width * image->height * 4;
+    return (SIZE_T)image->width * image->height * (image->is_buffer ? 1 : 4);
 }
 
 /* Every frame entry point resolves its handle through one of these two, so a
@@ -436,11 +457,24 @@ static void mock_create_resource(D3D10DDI_HDEVICE device,
         InterlockedIncrement(&texture_create_calls);
     }
     else if (description->ResourceDimension != D3D10DDIRESOURCE_BUFFER
-            || description->pMipInfoList->TexelWidth != 256
+            || !description->pMipInfoList->TexelWidth
             || description->pMipInfoList->TexelHeight != 1
             || description->pMipInfoList->TexelDepth != 1)
     {
         bad_resource_description = 1;
+    }
+    else
+    {
+        /* Buffers get storage too, so constant-buffer maps and updates can
+         * be read back byte for byte. */
+        image->is_buffer = TRUE;
+        image->width = description->pMipInfoList->TexelWidth;
+        image->height = 1;
+        image->pixels = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, image->width);
+        if (!image->pixels)
+            bad_resource_description = 1;
+        else if (description->pInitialDataUP && description->pInitialDataUP->pSysMem)
+            memcpy(image->pixels, description->pInitialDataUP->pSysMem, image->width);
     }
     InterlockedIncrement(&resource_create_calls);
 }
@@ -879,6 +913,156 @@ static void mock_clear_render_target_view(D3D10DDI_HDEVICE device,
         memcpy(image->pixels + offset, rgba, sizeof(rgba));
 }
 
+static void mock_set_constant_buffers(UINT stage, UINT start, UINT count,
+        const D3D10DDI_HRESOURCE *buffers, const UINT *first, const UINT *counts)
+{
+    UINT i;
+
+    if (start > 14 || count > 14 - start || (count && !buffers) || first || counts)
+    {
+        bad_constant_buffer_binding = 1;
+        return;
+    }
+    for (i = 0; i < count; ++i)
+        bound_constant_buffers[stage][start + i] = buffers[i].pDrvPrivate;
+    InterlockedIncrement(&constant_buffer_bind_calls);
+}
+
+static void mock_vs_set_constant_buffers(D3D10DDI_HDEVICE device, UINT start,
+        UINT count, const D3D10DDI_HRESOURCE *buffers, const UINT *first,
+        const UINT *counts)
+{
+    (void)device;
+    mock_set_constant_buffers(0, start, count, buffers, first, counts);
+}
+
+static void mock_ps_set_constant_buffers(D3D10DDI_HDEVICE device, UINT start,
+        UINT count, const D3D10DDI_HRESOURCE *buffers, const UINT *first,
+        const UINT *counts)
+{
+    (void)device;
+    mock_set_constant_buffers(1, start, count, buffers, first, counts);
+}
+
+static void mock_map_buffer(LONG family, D3D10DDI_HRESOURCE resource,
+        UINT subresource, D3D10_DDI_MAP mode, UINT flags,
+        D3D10DDI_MAPPED_SUBRESOURCE *out)
+{
+    struct mock_image *image = mock_image_of(resource.pDrvPrivate);
+
+    if (!image || !out || !image->is_buffer || subresource || image->map_family)
+    {
+        bad_buffer_map = 1;
+        return;
+    }
+    (void)flags;
+    if (InterlockedExchange(&fail_next_map, 0)
+            && mock_report_error(DXGI_ERROR_DEVICE_REMOVED))
+        return;
+    image->map_family = family;
+    InterlockedExchange(&last_map_family, family);
+    InterlockedExchange(&last_map_type, mode);
+    InterlockedIncrement(&buffer_map_calls);
+    out->pData = image->pixels;
+    out->RowPitch = image->width;
+    out->DepthPitch = image->width;
+}
+
+static void mock_unmap_buffer(LONG family, D3D10DDI_HRESOURCE resource, UINT subresource)
+{
+    struct mock_image *image = mock_image_of(resource.pDrvPrivate);
+    /* A no-overwrite map is undone by its family's one unmap. */
+    LONG mapped_family;
+
+    if (!image || subresource)
+    {
+        bad_buffer_map = 1;
+        return;
+    }
+    mapped_family = image->map_family == 2 ? 1 : image->map_family == 4 ? 3 : image->map_family;
+    if (mapped_family != family)
+        bad_buffer_map = 1;
+    image->map_family = 0;
+    InterlockedExchange(&last_unmap_family, family);
+    InterlockedIncrement(&buffer_unmap_calls);
+}
+
+#define MOCK_MAP_SLOT(name, family) \
+static void mock_##name(D3D10DDI_HDEVICE device, D3D10DDI_HRESOURCE resource, \
+        UINT subresource, D3D10_DDI_MAP mode, UINT flags, \
+        D3D10DDI_MAPPED_SUBRESOURCE *out) \
+{ (void)device; mock_map_buffer(family, resource, subresource, mode, flags, out); }
+#define MOCK_UNMAP_SLOT(name, family) \
+static void mock_##name(D3D10DDI_HDEVICE device, D3D10DDI_HRESOURCE resource, \
+        UINT subresource) \
+{ (void)device; mock_unmap_buffer(family, resource, subresource); }
+MOCK_MAP_SLOT(map_cb_discard, 1)
+MOCK_MAP_SLOT(map_cb_no_overwrite, 2)
+MOCK_MAP_SLOT(map_ia_discard, 3)
+MOCK_MAP_SLOT(map_ia_no_overwrite, 4)
+MOCK_MAP_SLOT(map_resource_discard, 5)
+MOCK_UNMAP_SLOT(unmap_cb, 1)
+MOCK_UNMAP_SLOT(unmap_ia, 3)
+MOCK_UNMAP_SLOT(unmap_resource, 5)
+
+/* Buffers copy box.left..box.right bytes; textures copy 4-byte texels, a
+ * row at a time at the caller's pitch.  A null box is the whole subresource. */
+static void mock_update_subresource(LONG slot, D3D10DDI_HRESOURCE resource,
+        UINT subresource, const D3D10_DDI_BOX *box, const VOID *data,
+        UINT row_pitch, UINT depth_pitch, UINT copy_flags)
+{
+    struct mock_image *image = mock_image_of(resource.pDrvPrivate);
+    UINT left = 0, top = 0, right, bottom, row;
+
+    (void)depth_pitch;
+    if (!image || !data || subresource || copy_flags)
+    {
+        bad_update = 1;
+        return;
+    }
+    right = box ? (UINT)box->right : image->width;
+    bottom = box ? (UINT)box->bottom : image->height;
+    if (box)
+    {
+        left = (UINT)box->left;
+        top = (UINT)box->top;
+    }
+    if (left >= right || top >= bottom || right > image->width || bottom > image->height
+            || (box && (box->front != 0 || box->back != 1)))
+    {
+        bad_update = 1;
+        return;
+    }
+    if (image->is_buffer)
+        memcpy(image->pixels + left, data, right - left);
+    else
+        for (row = top; row < bottom; ++row)
+            memcpy(image->pixels + ((SIZE_T)row * image->width + left) * 4,
+                    (const BYTE *)data + (SIZE_T)(row - top) * row_pitch,
+                    (SIZE_T)(right - left) * 4);
+    InterlockedExchange(&last_update_slot, slot);
+    last_update_had_box = box != NULL;
+    InterlockedIncrement(&update_calls);
+}
+
+static void mock_resource_update_subresource(D3D10DDI_HDEVICE device,
+        D3D10DDI_HRESOURCE resource, UINT subresource, const D3D10_DDI_BOX *box,
+        const VOID *data, UINT row_pitch, UINT depth_pitch, UINT copy_flags)
+{
+    (void)device;
+    mock_update_subresource(1, resource, subresource, box, data, row_pitch,
+            depth_pitch, copy_flags);
+}
+
+static void mock_default_cb_update_subresource(D3D10DDI_HDEVICE device,
+        D3D10DDI_HRESOURCE resource, UINT subresource, const D3D10_DDI_BOX *box,
+        const VOID *data, UINT row_pitch, UINT depth_pitch, UINT copy_flags)
+{
+    (void)device;
+    mock_update_subresource(2, resource, subresource, box, data, row_pitch,
+            depth_pitch, copy_flags);
+}
+
 static void mock_resource_copy(D3D10DDI_HDEVICE device,
         D3D10DDI_HRESOURCE destination, D3D10DDI_HRESOURCE source)
 {
@@ -922,6 +1106,11 @@ static void mock_staging_resource_map(D3D10DDI_HDEVICE device,
         bad_frame_description = 1;
         return;
     }
+    if (image->is_buffer)
+    {
+        mock_map_buffer(6, resource, subresource, mode, flags, out);
+        return;
+    }
     if (InterlockedExchange(&fail_next_map, 0)
             && mock_report_error(DXGI_ERROR_DEVICE_REMOVED))
         return;
@@ -938,6 +1127,11 @@ static void mock_staging_resource_unmap(D3D10DDI_HDEVICE device,
     if (!resource.pDrvPrivate || subresource)
     {
         bad_frame_description = 1;
+        return;
+    }
+    if (((struct mock_image *)resource.pDrvPrivate)->is_buffer)
+    {
+        mock_unmap_buffer(6, resource, subresource);
         return;
     }
     InterlockedIncrement(&unmap_calls);
@@ -1233,6 +1427,19 @@ static HRESULT mock_create_device(D3D10DDI_HADAPTER adapter,
     args->pWDDM2_6DeviceFuncs->pfnRecycleDestroyCommandList =
             mock_recycle_destroy_command_list;
     args->pWDDM2_6DeviceFuncs->pfnCommandListExecute = mock_command_list_execute;
+    args->pWDDM2_6DeviceFuncs->pfnVsSetConstantBuffers = mock_vs_set_constant_buffers;
+    args->pWDDM2_6DeviceFuncs->pfnPsSetConstantBuffers = mock_ps_set_constant_buffers;
+    args->pWDDM2_6DeviceFuncs->pfnDynamicConstantBufferMapDiscard = mock_map_cb_discard;
+    args->pWDDM2_6DeviceFuncs->pfnDynamicConstantBufferMapNoOverwrite = mock_map_cb_no_overwrite;
+    args->pWDDM2_6DeviceFuncs->pfnDynamicConstantBufferUnmap = mock_unmap_cb;
+    args->pWDDM2_6DeviceFuncs->pfnDynamicIABufferMapDiscard = mock_map_ia_discard;
+    args->pWDDM2_6DeviceFuncs->pfnDynamicIABufferMapNoOverwrite = mock_map_ia_no_overwrite;
+    args->pWDDM2_6DeviceFuncs->pfnDynamicIABufferUnmap = mock_unmap_ia;
+    args->pWDDM2_6DeviceFuncs->pfnDynamicResourceMapDiscard = mock_map_resource_discard;
+    args->pWDDM2_6DeviceFuncs->pfnDynamicResourceUnmap = mock_unmap_resource;
+    args->pWDDM2_6DeviceFuncs->pfnResourceUpdateSubresourceUP = mock_resource_update_subresource;
+    args->pWDDM2_6DeviceFuncs->pfnDefaultConstantBufferUpdateSubresourceUP =
+            mock_default_cb_update_subresource;
     if (InterlockedExchange(&fail_next_frame_support, 0))
         args->pWDDM2_6DeviceFuncs->pfnClearRenderTargetView = NULL;
     InterlockedIncrement(&create_calls);
@@ -1499,4 +1706,44 @@ __declspec(dllexport) void WINAPI WineD3D11On12MockDriverWorkerErrorDuringNextVi
 __declspec(dllexport) LONG WINAPI WineD3D11On12MockDriverGetEscapeCount(void)
 {
     return escape_calls;
+}
+
+/* Constant-buffer, map and update records for tests/d3d11on12cbuffer.c. */
+__declspec(dllexport) void *WINAPI WineD3D11On12MockDriverGetBoundConstantBuffer(UINT stage, UINT slot)
+{
+    return stage < 2 && slot < 14 ? bound_constant_buffers[stage][slot] : NULL;
+}
+
+__declspec(dllexport) void WINAPI WineD3D11On12MockDriverGetBufferRecord(LONG *bind_calls,
+        LONG *map_calls_out, LONG *unmap_calls_out, LONG *map_family,
+        LONG *unmap_family, LONG *map_type, LONG *updates, LONG *update_slot,
+        int *update_had_box, int *bad)
+{
+    if (bind_calls) *bind_calls = constant_buffer_bind_calls;
+    if (map_calls_out) *map_calls_out = buffer_map_calls;
+    if (unmap_calls_out) *unmap_calls_out = buffer_unmap_calls;
+    if (map_family) *map_family = last_map_family;
+    if (unmap_family) *unmap_family = last_unmap_family;
+    if (map_type) *map_type = last_map_type;
+    if (updates) *updates = update_calls;
+    if (update_slot) *update_slot = last_update_slot;
+    if (update_had_box) *update_had_box = last_update_had_box;
+    if (bad) *bad = bad_constant_buffer_binding | bad_buffer_map << 1 | bad_update << 2;
+}
+
+/* Copies a resource's storage out, so a test can compare contents rather
+ * than call counts.  Returns the bytes copied. */
+__declspec(dllexport) SIZE_T WINAPI WineD3D11On12MockDriverReadResource(void *private_resource,
+        void *out, SIZE_T size)
+{
+    struct mock_image *image = private_resource;
+    SIZE_T bytes;
+
+    if (!image || !image->pixels || !out)
+        return 0;
+    bytes = mock_image_bytes(image);
+    if (bytes > size)
+        bytes = size;
+    memcpy(out, image->pixels, bytes);
+    return bytes;
 }
