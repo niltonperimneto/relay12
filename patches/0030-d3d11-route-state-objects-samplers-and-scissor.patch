@@ -503,8 +503,8 @@ index 808d2444..eb101154 100644
      {
 -        if (samplers) memset(samplers, 0, sampler_count * sizeof(*samplers));
 -        WARN("On12 PSGetSamplers is not supported.\n");
-+        struct d3d11_device_context *context = impl_from_ID3D11DeviceContext4(iface);
-+        UINT stage = WINED3D_SHADER_TYPE_PIXEL == WINED3D_SHADER_TYPE_PIXEL ? 1 : 0, i;
++        /* bound_samplers[0] holds the vertex stage, [1] the pixel stage. */
++        const unsigned int stage = 1;
 +
 +        if (!samplers || start_slot > D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT
 +                || sampler_count > D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT - start_slot)
@@ -529,8 +529,8 @@ index 808d2444..eb101154 100644
      {
 -        if (samplers) memset(samplers, 0, sampler_count * sizeof(*samplers));
 -        WARN("On12 VSGetSamplers is not supported.\n");
-+        struct d3d11_device_context *context = impl_from_ID3D11DeviceContext4(iface);
-+        UINT stage = WINED3D_SHADER_TYPE_VERTEX == WINED3D_SHADER_TYPE_PIXEL ? 1 : 0, i;
++        /* bound_samplers[0] holds the vertex stage, [1] the pixel stage. */
++        const unsigned int stage = 0;
 +
 +        if (!samplers || start_slot > D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT
 +                || sampler_count > D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT - start_slot)
