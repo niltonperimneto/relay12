@@ -210,8 +210,8 @@ and they take seconds. All must exit `0`.
 
 ```bash
 python3 -m unittest discover -s tests -p "test_*.py"   # 201 tests
-python3 scripts/gen_ddi_layout.py --check              # 60 structures, 517 fields
-python3 scripts/check_ddi_header.py                    # 23 declaration groups
+python3 scripts/gen_ddi_layout.py --check              # 62 structures, 533 fields
+python3 scripts/check_ddi_header.py                    # 24 declaration groups
 python3 scripts/check_interface_acquisition.py         # strictResult() funnel
 python3 scripts/check_shared_state.py                  # InitOnce annotations
 python3 scripts/check_adapter_args.py                  # adapter-arg transcription

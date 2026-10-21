@@ -285,9 +285,10 @@ misinterpretation; `--check` defends against structural *drift* across 178+ slot
 | Command-list creation | `D3D11DDI_HCOMMANDLIST`, `D3D11DDI_HRTCOMMANDLIST`, `D3D11DDIARG_CREATECOMMANDLIST` | 8 each |
 | Deferred-context creation | `D3D11DDI_HANDLETYPE`, `D3D11DDI_HANDLESIZE`, `D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE`, `D3D11DDIARG_CREATEDEFERREDCONTEXT` | 4 / 16 / 4 / 40 |
 | Resource creation | `D3D10DDIARG_CREATERESOURCE`, `D3D11DDIARG_CREATERESOURCE`, `D3D10DDIARG_OPENRESOURCE` | 64 / 80 / 40 |
+| Constant buffers, updates, samplers, scissor | `D3D10_DDI_SAMPLER_DESC` (completed), `D3D10_DDI_BOX`, `D3D10_DDI_RECT` (`RECT`) | 52 / 24 / 16 |
 | SRV/RTV creation | `D3D10DDI_H(RT)SHADERRESOURCEVIEW`, `D3D10DDI_H(RT)RENDERTARGETVIEW`, `D3DWDDM2_0DDIARG_CREATESHADERRESOURCEVIEW` (and its 6 union arms), `D3DWDDM2_0DDIARG_CREATERENDERTARGETVIEW` (and its 5 union arms) | 8 each / 40 / 32 |
 | Vertex/pixel shader creation | `D3D10DDI_H(RT)SHADER`, `D3D11_1DDIARG_STAGE_IO_SIGNATURES` (incomplete, pointer-only) | 8 each |
-| Device function table | `D3DWDDM2_6DDI_DEVICEFUNCS`, 178 slots across 138 published `PFN` names, of which 27 promoted (28 slots) and 111 held behind placeholders | 1424 |
+| Device function table | `D3DWDDM2_6DDI_DEVICEFUNCS`, 178 slots across 138 published `PFN` names, of which 69 promoted (102 slots) and 69 held behind placeholders | 1424 |
 
 #### Key constraints in `D3D10DDIARG_CREATEDEVICE` (88 bytes)
 
@@ -511,7 +512,7 @@ declaration nothing yet needs.
 | # | Group | Scope | Rationale and dependencies |
 | :--- | :--- | :--- | :--- |
 | 1 | Surface discovery | MIT tree test build against clean-room header | Turns remaining clean-room work into a measurable compiler worklist |
-| 2 | Signature promotion | Promote slots in `D3DWDDM2_6DDI_DEVICEFUNCS` | 59 of 138 distinct callback types promoted covering 76 of 178 slots (including WDDM 2.6 scanout caps query, element layout, draw, pipeline states, resources, views, and command lists). See the DDI callback definitions in this document and `D3D11ON12.md` |
+| 2 | Signature promotion | Promote slots in `D3DWDDM2_6DDI_DEVICEFUNCS` | 69 of 138 distinct callback types promoted covering 102 of 178 slots (including WDDM 2.6 scanout caps query, element layout, draw, pipeline states, resources, views, command lists, and the constant-buffer, update, sampler and scissor bindings). See the DDI callback definitions in this document and `D3D11ON12.md` |
 | 3 | DXGI DDI interop | `DXGI_DDI_BASE_CALLBACKS`, `DXGI1_6_1_DDI_BASE_FUNCTIONS` | Required by `DXGIBaseDDI` pointers in creation arguments |
 
 ## Resolved items & open questions

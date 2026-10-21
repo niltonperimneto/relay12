@@ -750,6 +750,22 @@ jobs:
             echo "promoted C++ state slot accepted the wrong handle type"
             exit 1
           fi
+          # One compile per case: in a single translation unit the first
+          # rejected case would hide whether the others are rejected too.
+          for bind_case in 1 2 3 4; do
+            if x86_64-w64-mingw32-gcc -std=gnu11 -Wall -Wextra -Werror \
+              -Irelay12-d3d11/ddi -DCASE="$bind_case" \
+              -c tests/d3d11ddibindpromotednegative.c; then
+              echo "promoted constant-buffer/update/sampler/scissor slot (case $bind_case) accepted the wrong argument"
+              exit 1
+            fi
+            if x86_64-w64-mingw32-g++ -std=c++17 -Wall -Wextra -Werror \
+              -fno-exceptions -fno-rtti -Irelay12-d3d11/ddi -x c++ \
+              -DCASE="$bind_case" -c tests/d3d11ddibindpromotednegative.c; then
+              echo "promoted C++ constant-buffer/update/sampler/scissor slot (case $bind_case) accepted the wrong argument"
+              exit 1
+            fi
+          done
           if x86_64-w64-mingw32-gcc -std=gnu11 -Wall -Wextra -Werror \
             -Irelay12-d3d11/ddi -c tests/d3d11ddidrawpromotednegative.c; then
             echo "promoted binding slot accepted the wrong handle type"
