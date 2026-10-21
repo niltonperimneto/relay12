@@ -1,0 +1,445 @@
+Subject: d3d11: route On12 constant buffers, buffer maps and UpdateSubresource
+
+Almost every real D3D11 frame reads shader constants, and the standalone On12
+device rejected all of it: VSSetConstantBuffers and PSSetConstantBuffers (and
+their *1 and getter forms) returned after a WARN, UpdateSubresource did the
+same, and Map accepted only staging Texture2D readback. A shader with a
+cbuffer therefore drew with whatever the driver's slots held.
+
+Route them through the core's new exports (ordinals 47-51):
+
+  - {VS,PS}SetConstantBuffers bind whole buffers through
+    WineD3D11On12SetConstantBuffersV1 and retain each bound buffer with
+    d3d11_backend_child_bind, as SRVs are retained, so a buffer released
+    while bound survives until it is replaced or ClearState runs. The *1
+    forms route when they pass no ranges; constant ranges are not routed yet
+    and are refused with a WARN rather than bound whole. Getters read the
+    retained bindings, and the *1 getters report constant 0 and
+    ByteWidth / 16 constants per bound buffer, as D3D11 does.
+  - Map/Unmap on an owned buffer go to MapBufferV1/UnmapBufferV1, which pick
+    the driver's map family from the buffer's usage and bind flags. Texture2D
+    maps are unchanged.
+  - UpdateSubresource on an owned buffer or Texture2D goes to UpdateBufferV1
+    or UpdateTexture2DV1, which validate the box and pitch before dispatch.
+  - ClearState unbinds both stages' constant buffers.
+
+The D3D10 equivalents are not touched: standalone On12 devices are created
+d3d11_only, so ID3D10Device is never handed out for them. Other shader stages
+keep their rejection; only vertex and pixel shaders exist on this backend.
+The new ops are designated members, absent from the WineD3D table, so
+ordinary devices keep their WineD3D paths. The five exports resolve as one
+required group, so an older core cannot publish a partial backend.
+
+Requires WineD3D11On12{SetConstantBuffers,MapBuffer,UnmapBuffer,UpdateBuffer,
+UpdateTexture2D}V1 (ordinals 47-51). Applies after patches 0002-0028 to WineCX
+7dbc5b5322a6ef3fb04bdc643c64b188fd641149.
+
+diff --git a/dlls/d3d11/d3d11_main.c b/dlls/d3d11/d3d11_main.c
+index b0d74709..2cdd94cd 100644
+--- a/dlls/d3d11/d3d11_main.c
++++ b/dlls/d3d11/d3d11_main.c
+@@ -387,6 +387,8 @@ cleanup:
+ #define WINE_D3D11ON12_DRAW_INDEXED 1u
+ #define WINE_D3D11ON12_DRAW_INSTANCED 2u
+ #define WINE_D3D11ON12_DRAW_INDEXED_INSTANCED 3u
++#define WINE_D3D11ON12_SHADER_VERTEX 1u
++#define WINE_D3D11ON12_SHADER_PIXEL 2u
+
+ struct wine_d3d11on12_adapter_device
+ {
+@@ -532,6 +534,15 @@ struct d3d11_on12_backend
+     HRESULT (WINAPI *unmap_texture)(struct wine_d3d11on12_adapter_device *, void *, UINT);
+     HRESULT (WINAPI *check_frame_support)(struct wine_d3d11on12_adapter_device *);
+     HRESULT (WINAPI *get_removed_reason)(struct wine_d3d11on12_adapter_device *);
++    HRESULT (WINAPI *set_constant_buffers)(struct wine_d3d11on12_adapter_device *, UINT, UINT, UINT,
++            struct wine_d3d11on12_buffer *const *);
++    HRESULT (WINAPI *map_buffer)(struct wine_d3d11on12_adapter_device *, struct wine_d3d11on12_buffer *,
++            D3D11_MAP, UINT, D3D11_MAPPED_SUBRESOURCE *);
++    HRESULT (WINAPI *unmap_buffer)(struct wine_d3d11on12_adapter_device *, struct wine_d3d11on12_buffer *);
++    HRESULT (WINAPI *update_buffer)(struct wine_d3d11on12_adapter_device *, struct wine_d3d11on12_buffer *,
++            const D3D11_BOX *, const void *, UINT, UINT);
++    HRESULT (WINAPI *update_texture)(struct wine_d3d11on12_adapter_device *, void *, UINT,
++            const D3D11_BOX *, const void *, UINT, UINT);
+     HRESULT (WINAPI *create_wrapped_texture)(struct wine_d3d11on12_adapter_device *,
+             IUnknown *, const D3D11_RESOURCE_FLAGS *, D3D12_RESOURCE_STATES,
+             D3D12_RESOURCE_STATES, D3D11_TEXTURE2D_DESC *, struct wine_d3d11on12_texture2d *);
+@@ -1196,14 +1207,31 @@ static void d3d11_on12_backend_copy_resource(struct d3d11_device_context *contex
+     if (FAILED(hr)) WARN("On12 copy failed, hr %#lx.\n", hr);
+ }
+
++/* An owned buffer of this device, or NULL. */
++static struct d3d_buffer *d3d11_on12_buffer(struct d3d_device *device, ID3D11Resource *resource)
++{
++    D3D11_RESOURCE_DIMENSION type;
++    struct d3d_buffer *buffer;
++    if (!resource) return NULL;
++    ID3D11Resource_GetType(resource, &type);
++    if (type != D3D11_RESOURCE_DIMENSION_BUFFER) return NULL;
++    buffer = unsafe_impl_from_ID3D11Buffer((ID3D11Buffer *)resource);
++    return buffer && buffer->device == &device->ID3D11Device5_iface
++            && buffer->backend_buffer.runtime_state ? buffer : NULL;
++}
++
+ static HRESULT d3d11_on12_backend_map_resource(struct d3d11_device_context *context,
+         ID3D11Resource *resource, UINT subresource, D3D11_MAP mode, UINT flags,
+         D3D11_MAPPED_SUBRESOURCE *mapped)
+ {
+     struct d3d11_on12_backend *backend = context->device->backend_private;
+     struct d3d_texture2d *texture = d3d11_on12_texture(resource);
++    struct d3d_buffer *buffer = d3d11_on12_buffer(context->device, resource);
+     if (!mapped) return E_INVALIDARG;
+     memset(mapped, 0, sizeof(*mapped));
++    if (buffer)
++        return subresource ? E_INVALIDARG : D3D11_ON12_CALL(backend, backend->map_buffer(&backend->adapter,
++                (struct wine_d3d11on12_buffer *)&buffer->backend_buffer, mode, flags, mapped));
+     if (!texture) return DXGI_ERROR_UNSUPPORTED;
+     return D3D11_ON12_CALL(backend, backend->map_texture(&backend->adapter, &texture->backend_texture, subresource, mode, flags, mapped));
+ }
+@@ -1213,8 +1241,16 @@ static void d3d11_on12_backend_unmap_resource(struct d3d11_device_context *conte
+ {
+     struct d3d11_on12_backend *backend = context->device->backend_private;
+     struct d3d_texture2d *texture = d3d11_on12_texture(resource);
++    struct d3d_buffer *buffer = d3d11_on12_buffer(context->device, resource);
+     HRESULT hr;
+-    if (!texture) { WARN("On12 unmap requires an owned Texture2D.\n"); return; }
++    if (buffer && !subresource)
++    {
++        hr = D3D11_ON12_CALL(backend, backend->unmap_buffer(&backend->adapter,
++                (struct wine_d3d11on12_buffer *)&buffer->backend_buffer));
++        if (FAILED(hr)) WARN("On12 buffer unmap failed, hr %#lx.\n", hr);
++        return;
++    }
++    if (!texture) { WARN("On12 unmap requires an owned Texture2D or buffer.\n"); return; }
+     hr = D3D11_ON12_CALL(backend, backend->unmap_texture(&backend->adapter, &texture->backend_texture, subresource));
+     if (FAILED(hr)) WARN("On12 unmap failed, hr %#lx.\n", hr);
+ }
+@@ -1281,6 +1317,58 @@ static void d3d11_on12_backend_set_pixel_resources(struct d3d11_device_context *
+         d3d11_backend_child_bind(&context->bound_ps_srvs[start + i], resolved[i] ? &resolved[i]->backend_child : NULL);
+ }
+
++/* Vertex and pixel stages; the core is told which by its own stage value. */
++static void d3d11_on12_backend_set_constant_buffers(struct d3d11_device_context *context,
++        enum wined3d_shader_type type, UINT start, UINT count, ID3D11Buffer *const *buffers)
++{
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    struct wine_d3d11on12_buffer *handles[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
++    struct d3d_buffer *resolved[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
++    UINT stage, i;
++    HRESULT hr;
++
++    if (type != WINED3D_SHADER_TYPE_VERTEX && type != WINED3D_SHADER_TYPE_PIXEL) return;
++    stage = type == WINED3D_SHADER_TYPE_PIXEL ? 1 : 0;
++    if (start > ARRAY_SIZE(handles) || count > ARRAY_SIZE(handles) - start || (count && !buffers)) return;
++    for (i = 0; i < count; ++i)
++    {
++        struct d3d_buffer *buffer = unsafe_impl_from_ID3D11Buffer(buffers[i]);
++        if (buffer && (buffer->device != &context->device->ID3D11Device5_iface || !buffer->backend_child.destroy))
++        { WARN("On12 constant-buffer binding requires buffers from this device.\n"); return; }
++        resolved[i] = buffer;
++        handles[i] = buffer ? (struct wine_d3d11on12_buffer *)&buffer->backend_buffer : NULL;
++    }
++    hr = D3D11_ON12_CALL(backend, backend->set_constant_buffers(&backend->adapter,
++            stage ? WINE_D3D11ON12_SHADER_PIXEL : WINE_D3D11ON12_SHADER_VERTEX, start, count, handles));
++    if (FAILED(hr)) { WARN("On12 constant-buffer binding failed, hr %#lx.\n", hr); return; }
++    for (i = 0; i < count; ++i)
++        d3d11_backend_child_bind(&context->bound_cbs[stage][start + i],
++                resolved[i] ? &resolved[i]->backend_child : NULL);
++}
++
++static void d3d11_on12_backend_update_subresource(struct d3d11_device_context *context,
++        ID3D11Resource *resource, UINT subresource, const D3D11_BOX *box, const void *data,
++        UINT row_pitch, UINT depth_pitch)
++{
++    struct d3d11_on12_backend *backend = context->device->backend_private;
++    struct d3d_buffer *buffer = d3d11_on12_buffer(context->device, resource);
++    struct d3d_texture2d *texture = d3d11_on12_texture(resource);
++    HRESULT hr;
++
++    if (buffer && !subresource)
++        hr = D3D11_ON12_CALL(backend, backend->update_buffer(&backend->adapter,
++                (struct wine_d3d11on12_buffer *)&buffer->backend_buffer, box, data, row_pitch, depth_pitch));
++    else if (texture && texture->device == &context->device->ID3D11Device5_iface)
++        hr = D3D11_ON12_CALL(backend, backend->update_texture(&backend->adapter,
++                &texture->backend_texture, subresource, box, data, row_pitch, depth_pitch));
++    else
++    {
++        WARN("On12 UpdateSubresource requires an owned buffer or Texture2D.\n");
++        return;
++    }
++    if (FAILED(hr)) WARN("On12 UpdateSubresource failed, hr %#lx.\n", hr);
++}
++
+ static void d3d11_on12_backend_clear_state(struct d3d11_device_context *context)
+ {
+     ID3D11ShaderResourceView *resources[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {0};
+@@ -1295,6 +1383,10 @@ static void d3d11_on12_backend_clear_state(struct d3d11_device_context *context)
+             || FAILED(d3d11_on12_initialization_result(backend)))
+         return;
+     d3d11_on12_backend_set_pixel_resources(context, 0, ARRAY_SIZE(resources), resources);
++    d3d11_on12_backend_set_constant_buffers(context, WINED3D_SHADER_TYPE_VERTEX, 0,
++            D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, buffers);
++    d3d11_on12_backend_set_constant_buffers(context, WINED3D_SHADER_TYPE_PIXEL, 0,
++            D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, buffers);
+     d3d11_on12_backend_set_render_targets(context, 0, NULL, NULL);
+     d3d11_on12_backend_set_vertex_shader(context, NULL);
+     d3d11_on12_backend_set_pixel_shader(context, NULL);
+@@ -1308,6 +1400,8 @@ static void d3d11_on12_backend_clear_state(struct d3d11_device_context *context)
+ static const struct d3d11_backend_ops d3d11_on12_backend_ops =
+ {
+     .create_srv = d3d11_on12_backend_create_srv,
++    .set_constant_buffers = d3d11_on12_backend_set_constant_buffers,
++    .update_subresource = d3d11_on12_backend_update_subresource,
+     .destroy_srv = d3d11_on12_backend_destroy_srv,
+     .set_pixel_resources = d3d11_on12_backend_set_pixel_resources,
+     .clear_state = d3d11_on12_backend_clear_state,
+@@ -1547,6 +1641,25 @@ static HRESULT d3d11_on12_create_frame_backend(IUnknown *device,
+         return DXGI_ERROR_UNSUPPORTED;
+     }
+
++    /* Constant buffers, buffer maps and updates: one required group. */
++    address = GetProcAddress(backend->core_module, "WineD3D11On12SetConstantBuffersV1");
++    memcpy(&backend->set_constant_buffers, &address, sizeof(backend->set_constant_buffers));
++    address = GetProcAddress(backend->core_module, "WineD3D11On12MapBufferV1");
++    memcpy(&backend->map_buffer, &address, sizeof(backend->map_buffer));
++    address = GetProcAddress(backend->core_module, "WineD3D11On12UnmapBufferV1");
++    memcpy(&backend->unmap_buffer, &address, sizeof(backend->unmap_buffer));
++    address = GetProcAddress(backend->core_module, "WineD3D11On12UpdateBufferV1");
++    memcpy(&backend->update_buffer, &address, sizeof(backend->update_buffer));
++    address = GetProcAddress(backend->core_module, "WineD3D11On12UpdateTexture2DV1");
++    memcpy(&backend->update_texture, &address, sizeof(backend->update_texture));
++    if (!backend->set_constant_buffers || !backend->map_buffer || !backend->unmap_buffer
++            || !backend->update_buffer || !backend->update_texture)
++    {
++        FreeLibrary(backend->core_module);
++        free(backend);
++        return DXGI_ERROR_UNSUPPORTED;
++    }
++
+     address = GetProcAddress(backend->core_module,
+             "WineD3D11On12OpenAdapterV1");
+     memcpy(&backend->open_adapter, &address, sizeof(backend->open_adapter));
+diff --git a/dlls/d3d11/d3d11_private.h b/dlls/d3d11/d3d11_private.h
+index 39192273..c7f6f9d3 100644
+--- a/dlls/d3d11/d3d11_private.h
++++ b/dlls/d3d11/d3d11_private.h
+@@ -630,6 +630,8 @@ struct d3d11_device_context
+     struct d3d11_backend_child *bound_vbs[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT];
+     struct d3d11_backend_child *bound_ib, *bound_layout, *bound_vs, *bound_ps, *bound_rtv;
+     struct d3d11_backend_child *bound_ps_srvs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
++    /* Vertex [0] and pixel [1] constant buffers retained for the backend. */
++    struct d3d11_backend_child *bound_cbs[2][D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
+     ID3D11DeviceContext4 ID3D11DeviceContext4_iface;
+     ID3D11Multithread ID3D11Multithread_iface;
+     ID3D11VideoContext ID3D11VideoContext_iface;
+@@ -657,6 +659,10 @@ struct d3d11_backend_ops
+     HRESULT (*map_resource)(struct d3d11_device_context *, ID3D11Resource *, UINT,
+             D3D11_MAP, UINT, D3D11_MAPPED_SUBRESOURCE *);
+     void (*unmap_resource)(struct d3d11_device_context *, ID3D11Resource *, UINT);
++    void (*set_constant_buffers)(struct d3d11_device_context *, enum wined3d_shader_type,
++            UINT, UINT, ID3D11Buffer *const *);
++    void (*update_subresource)(struct d3d11_device_context *, ID3D11Resource *, UINT,
++            const D3D11_BOX *, const void *, UINT, UINT);
+
+     void (*set_render_targets)(struct d3d11_device_context *, UINT,
+             ID3D11RenderTargetView *const *, ID3D11DepthStencilView *);
+diff --git a/dlls/d3d11/device.c b/dlls/d3d11/device.c
+index edd62c06..808d2444 100644
+--- a/dlls/d3d11/device.c
++++ b/dlls/d3d11/device.c
+@@ -876,15 +876,58 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_context_SetPrivateDataInterface(ID
+     return d3d_set_private_data_interface(&context->private_store, guid, data);
+ }
+
++/* A backend that owns constant buffers binds whole buffers only: offsets into
++ * a buffer (the *SetConstantBuffers1 ranges) are not routed yet. */
++static BOOL d3d11_backend_set_constant_buffers(struct d3d11_device_context *context,
++        enum wined3d_shader_type type, UINT start_slot, UINT buffer_count,
++        ID3D11Buffer *const *buffers, const UINT *first_constant, const UINT *num_constants)
++{
++    if (!context->device->backend_ops->set_constant_buffers)
++        return FALSE;
++    if (first_constant || num_constants)
++    {
++        WARN("On12 constant-buffer ranges are not supported.\n");
++        return TRUE;
++    }
++    context->device->backend_ops->set_constant_buffers(context, type, start_slot, buffer_count, buffers);
++    return TRUE;
++}
++
++/* Getters read the backend's retained bindings.  A whole-buffer binding is
++ * reported as constant 0 for ByteWidth / 16 constants, as D3D11 reports it. */
++static BOOL d3d11_backend_get_constant_buffers(struct d3d11_device_context *context,
++        enum wined3d_shader_type type, UINT start_slot, UINT buffer_count,
++        ID3D11Buffer **buffers, UINT *first_constant, UINT *num_constants)
++{
++    UINT stage = type == WINED3D_SHADER_TYPE_PIXEL ? 1 : 0, i;
++
++    if (!context->device->backend_ops->set_constant_buffers)
++        return FALSE;
++    if (start_slot > D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT
++            || buffer_count > D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT - start_slot)
++        return TRUE;
++    for (i = 0; i < buffer_count; ++i)
++    {
++        struct d3d11_backend_child *child = context->bound_cbs[stage][start_slot + i];
++        struct d3d_buffer *buffer = child ? child->object : NULL;
++
++        if (buffers)
++        {
++            buffers[i] = buffer ? &buffer->ID3D11Buffer_iface : NULL;
++            if (buffers[i]) ID3D11Buffer_AddRef(buffers[i]);
++        }
++        if (first_constant) first_constant[i] = 0;
++        if (num_constants) num_constants[i] = buffer ? buffer->desc.ByteWidth / 16 : 0;
++    }
++    return TRUE;
++}
++
+ static void STDMETHODCALLTYPE d3d11_device_context_VSSetConstantBuffers(ID3D11DeviceContext4 *iface,
+         UINT start_slot, UINT buffer_count, ID3D11Buffer *const *buffers)
+ {
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
+-    {
+-        WARN("On12 VSSetConstantBuffers is not supported.\n");
++    if (d3d11_backend_set_constant_buffers(impl_from_ID3D11DeviceContext4(iface),
++            WINED3D_SHADER_TYPE_VERTEX, start_slot, buffer_count, buffers, NULL, NULL))
+         return;
+-    }
+
+     TRACE("iface %p, start_slot %u, buffer_count %u, buffers %p.\n",
+             iface, start_slot, buffer_count, buffers);
+@@ -1035,12 +1078,9 @@ static void STDMETHODCALLTYPE d3d11_device_context_Unmap(ID3D11DeviceContext4 *i
+ static void STDMETHODCALLTYPE d3d11_device_context_PSSetConstantBuffers(ID3D11DeviceContext4 *iface,
+         UINT start_slot, UINT buffer_count, ID3D11Buffer *const *buffers)
+ {
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
+-    {
+-        WARN("On12 PSSetConstantBuffers is not supported.\n");
++    if (d3d11_backend_set_constant_buffers(impl_from_ID3D11DeviceContext4(iface),
++            WINED3D_SHADER_TYPE_PIXEL, start_slot, buffer_count, buffers, NULL, NULL))
+         return;
+-    }
+
+     TRACE("iface %p, start_slot %u, buffer_count %u, buffers %p.\n",
+             iface, start_slot, buffer_count, buffers);
+@@ -1738,8 +1778,14 @@ static void STDMETHODCALLTYPE d3d11_device_context_UpdateSubresource(ID3D11Devic
+     struct wined3d_resource *wined3d_resource;
+     struct wined3d_box wined3d_box;
+
++    if (context->device->backend_ops->update_subresource)
++    {
++        context->device->backend_ops->update_subresource(context, resource, subresource_idx,
++                box, data, row_pitch, depth_pitch);
++        return;
++    }
+     /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
++    if (context->device->standalone_allocation)
+     {
+         WARN("On12 UpdateSubresource is not supported.\n");
+         return;
+@@ -2221,13 +2267,9 @@ static void STDMETHODCALLTYPE d3d11_device_context_CSSetConstantBuffers(ID3D11De
+ static void STDMETHODCALLTYPE d3d11_device_context_VSGetConstantBuffers(ID3D11DeviceContext4 *iface,
+         UINT start_slot, UINT buffer_count, ID3D11Buffer **buffers)
+ {
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
+-    {
+-        if (buffers) memset(buffers, 0, buffer_count * sizeof(*buffers));
+-        WARN("On12 VSGetConstantBuffers is not supported.\n");
++    if (d3d11_backend_get_constant_buffers(impl_from_ID3D11DeviceContext4(iface),
++            WINED3D_SHADER_TYPE_VERTEX, start_slot, buffer_count, buffers, NULL, NULL))
+         return;
+-    }
+
+     TRACE("iface %p, start_slot %u, buffer_count %u, buffers %p.\n",
+             iface, start_slot, buffer_count, buffers);
+@@ -2393,13 +2435,9 @@ static void STDMETHODCALLTYPE d3d11_device_context_VSGetShader(ID3D11DeviceConte
+ static void STDMETHODCALLTYPE d3d11_device_context_PSGetConstantBuffers(ID3D11DeviceContext4 *iface,
+         UINT start_slot, UINT buffer_count, ID3D11Buffer **buffers)
+ {
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
+-    {
+-        if (buffers) memset(buffers, 0, buffer_count * sizeof(*buffers));
+-        WARN("On12 PSGetConstantBuffers is not supported.\n");
++    if (d3d11_backend_get_constant_buffers(impl_from_ID3D11DeviceContext4(iface),
++            WINED3D_SHADER_TYPE_PIXEL, start_slot, buffer_count, buffers, NULL, NULL))
+         return;
+-    }
+
+     TRACE("iface %p, start_slot %u, buffer_count %u, buffers %p.\n",
+             iface, start_slot, buffer_count, buffers);
+@@ -3689,12 +3727,10 @@ static void STDMETHODCALLTYPE d3d11_device_context_VSSetConstantBuffers1(ID3D11D
+         UINT start_slot, UINT buffer_count, ID3D11Buffer * const *buffers, const UINT *first_constant,
+         const UINT *num_constants)
+ {
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
+-    {
+-        WARN("On12 VSSetConstantBuffers1 is not supported.\n");
++    if (d3d11_backend_set_constant_buffers(impl_from_ID3D11DeviceContext4(iface),
++            WINED3D_SHADER_TYPE_VERTEX, start_slot, buffer_count, buffers,
++            first_constant, num_constants))
+         return;
+-    }
+
+     TRACE("iface %p, start_slot %u, buffer_count %u, buffers %p, first_constant %p, num_constants %p.\n",
+             iface, start_slot, buffer_count, buffers, first_constant, num_constants);
+@@ -3761,12 +3797,10 @@ static void STDMETHODCALLTYPE d3d11_device_context_PSSetConstantBuffers1(ID3D11D
+         UINT start_slot, UINT buffer_count, ID3D11Buffer * const *buffers, const UINT *first_constant,
+         const UINT *num_constants)
+ {
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
+-    {
+-        WARN("On12 PSSetConstantBuffers1 is not supported.\n");
++    if (d3d11_backend_set_constant_buffers(impl_from_ID3D11DeviceContext4(iface),
++            WINED3D_SHADER_TYPE_PIXEL, start_slot, buffer_count, buffers,
++            first_constant, num_constants))
+         return;
+-    }
+
+     TRACE("iface %p, start_slot %u, buffer_count %u, buffers %p, first_constant %p, num_constants %p.\n",
+             iface, start_slot, buffer_count, buffers, first_constant, num_constants);
+@@ -3796,15 +3830,10 @@ static void STDMETHODCALLTYPE d3d11_device_context_CSSetConstantBuffers1(ID3D11D
+ static void STDMETHODCALLTYPE d3d11_device_context_VSGetConstantBuffers1(ID3D11DeviceContext4 *iface,
+         UINT start_slot, UINT buffer_count, ID3D11Buffer **buffers, UINT *first_constant, UINT *num_constants)
+ {
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
+-    {
+-        if (buffers) memset(buffers, 0, buffer_count * sizeof(*buffers));
+-        if (first_constant) *first_constant = 0;
+-        if (num_constants) *num_constants = 0;
+-        WARN("On12 VSGetConstantBuffers1 is not supported.\n");
++    if (d3d11_backend_get_constant_buffers(impl_from_ID3D11DeviceContext4(iface),
++            WINED3D_SHADER_TYPE_VERTEX, start_slot, buffer_count, buffers,
++            first_constant, num_constants))
+         return;
+-    }
+
+     TRACE("iface %p, start_slot %u, buffer_count %u, buffers %p, first_constant %p, num_constants %p.\n",
+             iface, start_slot, buffer_count, buffers, first_constant, num_constants);
+@@ -3876,15 +3905,10 @@ static void STDMETHODCALLTYPE d3d11_device_context_GSGetConstantBuffers1(ID3D11D
+ static void STDMETHODCALLTYPE d3d11_device_context_PSGetConstantBuffers1(ID3D11DeviceContext4 *iface,
+         UINT start_slot, UINT buffer_count, ID3D11Buffer **buffers, UINT *first_constant, UINT *num_constants)
+ {
+-    /* The experimental backend has no WineD3D object for this operation. */
+-    if (impl_from_ID3D11DeviceContext4(iface)->device->standalone_allocation)
+-    {
+-        if (buffers) memset(buffers, 0, buffer_count * sizeof(*buffers));
+-        if (first_constant) *first_constant = 0;
+-        if (num_constants) *num_constants = 0;
+-        WARN("On12 PSGetConstantBuffers1 is not supported.\n");
++    if (d3d11_backend_get_constant_buffers(impl_from_ID3D11DeviceContext4(iface),
++            WINED3D_SHADER_TYPE_PIXEL, start_slot, buffer_count, buffers,
++            first_constant, num_constants))
+         return;
+-    }
+
+     TRACE("iface %p, start_slot %u, buffer_count %u, buffers %p, first_constant %p, num_constants %p.\n",
+             iface, start_slot, buffer_count, buffers, first_constant, num_constants);

@@ -190,6 +190,9 @@ contract.
 | 42-44 | `WineD3D11On12{Create,Destroy}ShaderResourceViewV1`, `WineD3D11On12SetPixelShaderResourcesV1` | Pixel Texture2D SRV lifecycle and binding |
 | 45 | `WineD3D11On12ValidateDeviceV1` | Allocation-free creation preflight |
 | 46 | `WineD3D11On12GetDeviceRemovedReasonV1` | Latched device error, else D3D12's removal reason |
+| 47 | `WineD3D11On12SetConstantBuffersV1` | Vertex/pixel constant-buffer binding |
+| 48, 49 | `WineD3D11On12{Map,Unmap}BufferV1` | Dynamic and staging buffer maps |
+| 50, 51 | `WineD3D11On12Update{Buffer,Texture2D}V1` | UpdateSubresource on default-usage resources |
 
 ### 4.3 Diagnostic Logging
 Diagnostic logging is handled via [`relay12-d3d11/wine_d3d11_diag.h`](relay12-d3d11/wine_d3d11_diag.h):

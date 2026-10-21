@@ -239,6 +239,61 @@ int main(void)
         CHECK(underlying.refcount == 1 && queue.refcount == 1);
     }
     {
+        /* Patch 0029: constant buffers bind, are retained while bound, read
+         * back through the getters, and map and update through the core. */
+        ID3D11Device *device = NULL;
+        ID3D11DeviceContext *context = NULL;
+        ID3D11Buffer *dynamic = NULL, *fixed = NULL, *got[2] = {NULL, NULL};
+        D3D11_BUFFER_DESC bd = {0};
+        D3D11_MAPPED_SUBRESOURCE mapped = {0};
+        D3D_FEATURE_LEVEL selected = 0;
+        UINT first[2] = {7, 7}, count[2] = {7, 7};
+        const BYTE constants[64] = {1, 2, 3, 4};
+        ID3D11DeviceContext1 *context1 = NULL;
+
+        REQUIRE(create((IUnknown *)&underlying.ID3D12Device_iface, 0, &requested, 1,
+                queues, 1, 0, &device, &context, &selected) == S_OK);
+        bd.ByteWidth = 64; bd.Usage = D3D11_USAGE_DYNAMIC;
+        bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER; bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        REQUIRE(ID3D11Device_CreateBuffer(device, &bd, NULL, &dynamic) == S_OK);
+        bd.Usage = D3D11_USAGE_DEFAULT; bd.CPUAccessFlags = 0;
+        REQUIRE(ID3D11Device_CreateBuffer(device, &bd, NULL, &fixed) == S_OK);
+        CHECK(ID3D11DeviceContext_Map(context, (ID3D11Resource *)dynamic, 0,
+                D3D11_MAP_WRITE_DISCARD, 0, &mapped) == S_OK);
+        CHECK(mapped.pData != NULL);
+        if (mapped.pData) memcpy(mapped.pData, constants, sizeof(constants));
+        ID3D11DeviceContext_Unmap(context, (ID3D11Resource *)dynamic, 0);
+        CHECK(ID3D11DeviceContext_Map(context, (ID3D11Resource *)fixed, 0,
+                D3D11_MAP_WRITE_DISCARD, 0, &mapped) == DXGI_ERROR_INVALID_CALL);
+        ID3D11DeviceContext_UpdateSubresource(context, (ID3D11Resource *)fixed, 0, NULL,
+                constants, 0, 0);
+        ID3D11DeviceContext_VSSetConstantBuffers(context, 0, 1, &dynamic);
+        ID3D11DeviceContext_PSSetConstantBuffers(context, 13, 1, &fixed);
+        /* Bound buffers outlive their last public reference. */
+        CHECK(ID3D11Buffer_Release(dynamic) == 0);
+        CHECK(ID3D11Buffer_Release(fixed) == 0);
+        ID3D11DeviceContext_VSGetConstantBuffers(context, 0, 2, got);
+        CHECK(got[0] == dynamic && !got[1]);
+        if (got[0]) ID3D11Buffer_Release(got[0]);
+        if (SUCCEEDED(ID3D11DeviceContext_QueryInterface(context, &IID_ID3D11DeviceContext1,
+                (void **)&context1)))
+        {
+            got[0] = NULL;
+            ID3D11DeviceContext1_PSGetConstantBuffers1(context1, 13, 1, got, first, count);
+            CHECK(got[0] == fixed && first[0] == 0 && count[0] == 4);
+            if (got[0]) ID3D11Buffer_Release(got[0]);
+            ID3D11DeviceContext1_Release(context1);
+        }
+        ID3D11DeviceContext_ClearState(context);
+        ID3D11DeviceContext_VSGetConstantBuffers(context, 0, 1, got);
+        CHECK(!got[0]);
+        resources(&created, &destroyed, NULL);
+        CHECK(created == destroyed);
+        CHECK(ID3D11Device_Release(device) == 1);
+        CHECK(ID3D11DeviceContext_Release(context) == 0);
+        CHECK(underlying.refcount == 1 && queue.refcount == 1);
+    }
+    {
         /* Patch 0028: removal reaches GetDeviceRemovedReason from all three
          * sources -- D3D12 before the adapter opens, then a worker-thread
          * error the core latched, which outlives D3D12 recovering. */

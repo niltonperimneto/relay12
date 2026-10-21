@@ -40,6 +40,10 @@ REQUIRED_HEADER = (
     "void (*release_wrapped_resources)(struct d3d_device *device,",
     "void (*acquire_wrapped_resources)(struct d3d_device *device,",
     "HRESULT (*get_d3d12_device)(struct d3d_device *device, REFIID iid,",
+    # Patch 0029: constant buffers and updates, retained per stage.
+    "void (*set_constant_buffers)(struct d3d11_device_context *, enum wined3d_shader_type,",
+    "void (*update_subresource)(struct d3d11_device_context *, ID3D11Resource *, UINT,",
+    "struct d3d11_backend_child *bound_cbs[2][D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];",
 )
 
 REQUIRED_DEVICE = (
@@ -47,6 +51,11 @@ REQUIRED_DEVICE = (
     "context->device->backend_ops->set_viewports(context,",
     "context->device->backend_ops->clear_render_target(context,",
     "context->device->backend_ops->copy_resource(context,",
+    # Patch 0029: VS/PS constant buffers, their *1 forms and getters, and
+    # UpdateSubresource reach the backend instead of a standalone rejection.
+    "context->device->backend_ops->set_constant_buffers(context, type, start_slot, buffer_count, buffers);",
+    "context->device->backend_ops->update_subresource(context, resource, subresource_idx,",
+    "if (d3d11_backend_get_constant_buffers(impl_from_ID3D11DeviceContext4(iface),",
     "context->device->backend_ops->map_resource(context,",
     "context->device->backend_ops->unmap_resource(context,",
     "|| !backend_ops->create_rtv",
@@ -147,6 +156,17 @@ REQUIRED_MAIN = (
     # driver's device-status escape -- reaches GetDeviceRemovedReason.
     '"WineD3D11On12GetDeviceRemovedReasonV1"',
     "backend->get_removed_reason(&backend->adapter)",
+    # Patch 0029.
+    '"WineD3D11On12SetConstantBuffersV1"',
+    '"WineD3D11On12MapBufferV1"',
+    '"WineD3D11On12UnmapBufferV1"',
+    '"WineD3D11On12UpdateBufferV1"',
+    '"WineD3D11On12UpdateTexture2DV1"',
+    ".set_constant_buffers = d3d11_on12_backend_set_constant_buffers,",
+    ".update_subresource = d3d11_on12_backend_update_subresource,",
+    "d3d11_backend_child_bind(&context->bound_cbs[stage][start + i],",
+    "backend->map_buffer(&backend->adapter,",
+    "backend->unmap_buffer(&backend->adapter,",
 
     "static const struct d3d11_backend_ops d3d11_on12_backend_ops",
     ".create_texture2d = d3d11_on12_backend_create_texture2d,",

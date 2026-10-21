@@ -444,3 +444,25 @@ WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12SetPixelShaderResourcesV1(
  * without dispatching, and destroy exports keep working. */
 WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12GetDeviceRemovedReasonV1(
         WineD3D11On12AdapterDevice *) WINE_D3D11ON12_NOEXCEPT;
+
+/* Constant buffers and updates, appended exports; ABI v3 unchanged.  stage is
+ * WINE_D3D11ON12_SHADER_VERTEX or _PIXEL; whole buffers are bound, up to
+ * D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT.  Destroying a bound
+ * buffer unbinds it first.  Dynamic buffers map WRITE_DISCARD or
+ * WRITE_NO_OVERWRITE, staging buffers READ, WRITE or READ_WRITE; misuse and
+ * double maps return DXGI_ERROR_INVALID_CALL.  Updates take default-usage
+ * resources only; a constant-buffer update takes no box. */
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12SetConstantBuffersV1(
+        WineD3D11On12AdapterDevice *, UINT, UINT, UINT,
+        WineD3D11On12Buffer *const *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12MapBufferV1(
+        WineD3D11On12AdapterDevice *, WineD3D11On12Buffer *, D3D11_MAP, UINT,
+        D3D11_MAPPED_SUBRESOURCE *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12UnmapBufferV1(
+        WineD3D11On12AdapterDevice *, WineD3D11On12Buffer *) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12UpdateBufferV1(
+        WineD3D11On12AdapterDevice *, WineD3D11On12Buffer *, const D3D11_BOX *,
+        const void *, UINT, UINT) WINE_D3D11ON12_NOEXCEPT;
+WINE_D3D11ON12_LINKAGE HRESULT WINAPI WineD3D11On12UpdateTexture2DV1(
+        WineD3D11On12AdapterDevice *, WineD3D11On12Texture2D *, UINT,
+        const D3D11_BOX *, const void *, UINT, UINT) WINE_D3D11ON12_NOEXCEPT;

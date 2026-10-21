@@ -45,3 +45,8 @@ WineD3D11On12SetRasterizerStateV1 @41
     WineD3D11On12SetPixelShaderResourcesV1 @44
     WineD3D11On12ValidateDeviceV1 @45
     WineD3D11On12GetDeviceRemovedReasonV1 @46
+    WineD3D11On12SetConstantBuffersV1 @47
+    WineD3D11On12MapBufferV1 @48
+    WineD3D11On12UnmapBufferV1 @49
+    WineD3D11On12UpdateBufferV1 @50
+    WineD3D11On12UpdateTexture2DV1 @51
