@@ -552,6 +552,9 @@ jobs:
           x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
             -fno-exceptions -fno-rtti -o d3d11_e2e_wrapped.exe \
             tests/e2e_d3d11_wrapped.cpp -ld3d12 -ldxgi -luuid
+          x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
+            -fno-exceptions -fno-rtti -o d3d11_e2e_tier1.exe \
+            tests/e2e_d3d11_tier1.cpp -ld3d12 -ld3dcompiler -luuid
           # Compiled only: it needs a real D3D12 under the full D3D11On12
           # stack, which this lane does not have.
           x86_64-w64-mingw32-clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
@@ -829,7 +832,7 @@ jobs:
         run: |
           mkdir -p artifacts/first-frame
           cp d3d11shim.dll artifacts/first-frame/d3d11.dll
-          cp d3d11on12core.dll d3d11on12host.dll d3d11_e2e_triangle.exe d3d11_e2e_wrapped.exe d3d11_e2e_uma.exe peak_on12_probe.exe artifacts/first-frame/
+          cp d3d11on12core.dll d3d11on12host.dll d3d11_e2e_triangle.exe d3d11_e2e_wrapped.exe d3d11_e2e_tier1.exe d3d11_e2e_uma.exe peak_on12_probe.exe artifacts/first-frame/
           cp "$RUNNER_TEMP/d3d11on12-build/src/d3d11on12.dll" artifacts/first-frame/
 
       - name: Upload first-frame runtime
